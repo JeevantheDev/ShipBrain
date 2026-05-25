@@ -5,6 +5,7 @@ import { listPullRequestCommits } from "@/lib/github/commits";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function splitRepo(repoFullName?: string | null) {
   if (!repoFullName?.includes("/")) return null;

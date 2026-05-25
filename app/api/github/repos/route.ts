@@ -103,5 +103,24 @@ export async function DELETE(request: Request) {
     .eq("user_id", user.id)
     .eq("repo_full_name", fullName);
 
+  // Delete any CI runs associated with this repo
+  await supabase
+    .from("ci_runs")
+    .delete()
+    .eq("repo_full_name", fullName);
+
+  // Delete any incidents associated with this repo
+  await supabase
+    .from("incidents")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("repo_full_name", fullName);
+
+  // Delete any approval events associated with this repo
+  await supabase
+    .from("approval_events")
+    .delete()
+    .eq("metadata->>repo", fullName);
+
   return NextResponse.json({ ok: true, disconnected: fullName });
 }

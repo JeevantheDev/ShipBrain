@@ -67,10 +67,19 @@ export async function POST(request: Request) {
   const { owner, repo } = splitRepo(spec.repo_full_name);
 
   try {
+    const { data: repoRow } = await supabase
+      .from("repos")
+      .select("default_branch")
+      .eq("full_name", spec.repo_full_name)
+      .single();
+
+    const defaultBranch = repoRow?.default_branch || "main";
+
     const deployment = await dispatchDevelopPreviewDeploy({
       owner,
       repo,
       ref: "develop",
+      defaultBranch,
       sourcePrNumber: spec.pr_number
     });
 

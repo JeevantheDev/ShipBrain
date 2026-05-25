@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Copy, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, SearchCode, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Copy, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, SearchCode, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
@@ -150,6 +150,10 @@ export default function CiPage() {
   const [queueActionLoading, setQueueActionLoading] = useState<string | null>(null);
   const [queueActionErrors, setQueueActionErrors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRuns, setTotalRuns] = useState(0);
+  const pageSize = 10;
   const selectedHasRejectionAudit = selected ? audits.some((audit) => audit.action === "deploy_rejected") : false;
   const previewRepo = repos.find((repo) => !repo.vercel_preview_env_confirmed && !repo.setup_metadata?.skipVercel);
 
@@ -164,22 +168,31 @@ export default function CiPage() {
     return () => window.clearInterval(interval);
   }, []);
 
-  async function loadRuns() {
+  async function loadRuns(page = currentPage) {
     try {
-      const response = await fetch("/api/ci-runs", { cache: "no-store" });
+      const response = await fetch(`/api/ci-runs?page=${page}&limit=${pageSize}`, { cache: "no-store" });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to load CI runs");
-      setRuns(json);
+      setRuns(json.runs ?? []);
+      setTotalPages(json.pagination?.totalPages ?? 1);
+      setTotalRuns(json.pagination?.total ?? 0);
+      setCurrentPage(json.pagination?.page ?? 1);
       setError("");
       setSelected((current) => {
         if (!current) return current;
-        return json.find((run: CiRun) => run.id === current.id) ?? current;
+        return (json.runs ?? []).find((run: CiRun) => run.id === current.id) ?? current;
       });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to load CI runs");
     } finally {
       setLoading(false);
     }
+  }
+
+  function goToPage(page: number) {
+    if (page < 1 || page > totalPages) return;
+    setCurrentPage(page);
+    void loadRuns(page);
   }
 
   async function loadRepos() {
@@ -321,6 +334,20 @@ export default function CiPage() {
     if (run.conclusion === "success") return "green";
     if (run.conclusion || run.status === "completed") return "red";
     return "amber";
+  }
+
+  function getEnvironment(run: CiRun): "PROD" | "DEV" | "CI" | null {
+    const name = (run.workflowName ?? run.title).toLowerCase();
+    if (name.includes("production") || name.includes("prod deploy") || run.branch === "main") return "PROD";
+    if (name.includes("preview") || run.branch === "develop") return "DEV";
+    if (name.includes("ci") || name.includes("test") || name.includes("lint")) return "CI";
+    return null;
+  }
+
+  function envClass(env: "PROD" | "DEV" | "CI" | null) {
+    if (env === "PROD") return "red";
+    if (env === "DEV") return "amber";
+    return "";
   }
 
   function statusIcon(run: CiRun) {
@@ -795,16 +822,32 @@ export default function CiPage() {
               <p>Checking Supabase for GitHub Actions events received from the webhook.</p>
             </div>
           ) : runs.length ? (
+            <>
             <div className="split-list">
-              {runs.map((run) => (
+              {runs.map((run) => {
+                const env = getEnvironment(run);
+                const hasFailed = run.conclusion && run.conclusion !== "success";
+                return (
               <button
-                className="card"
+                className={`card ${hasFailed ? "error-highlight" : ""} ${selected?.id === run.id ? "selected" : ""}`}
                 key={run.id}
-                style={{ textAlign: "left", cursor: "pointer" }}
+                style={{
+                  textAlign: "left",
+                  cursor: "pointer",
+                  borderColor: selected?.id === run.id ? "var(--accent)" : hasFailed ? "var(--error)" : undefined,
+                  borderWidth: selected?.id === run.id ? 2 : undefined,
+                  background: selected?.id === run.id ? "var(--surface-elevated)" : undefined,
+                  boxShadow: selected?.id === run.id ? "0 0 0 3px rgba(59, 130, 246, 0.15)" : undefined,
+                  transform: selected?.id === run.id ? "scale(1.01)" : undefined,
+                  transition: "all 0.15s ease"
+                }}
                 onClick={() => selectRun(run)}
               >
                 <div className="toolbar" style={{ justifyContent: "space-between" }}>
-                  <strong>{run.title}</strong>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <strong>{run.title}</strong>
+                    {env && <span className={`status ${envClass(env)}`} style={{ fontSize: 10, padding: "2px 6px" }}>{env}</span>}
+                  </div>
                   <span className={`status ${statusClass(run)}`}>
                     {statusIcon(run)}
                     {run.conclusion ?? run.status}
@@ -815,9 +858,65 @@ export default function CiPage() {
                   {run.prNumber ? ` · PR #${run.prNumber}` : ""}
                   {run.updatedAt ? ` · ${new Date(run.updatedAt).toLocaleString()}` : ""}
                 </p>
+                {hasFailed && (
+                  <div style={{ marginTop: 8, padding: 8, background: "rgba(239, 68, 68, 0.1)", borderRadius: 4, fontSize: 12 }}>
+                    <XCircle size={12} style={{ display: "inline", marginRight: 4, color: "var(--error)" }} />
+                    Failed - click to analyze
+                  </div>
+                )}
               </button>
-              ))}
+                );
+              })}
             </div>
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "12px 0", borderTop: "1px solid var(--border)" }}>
+                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  Showing {((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, totalRuns)} of {totalRuns}
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    className="button secondary compact"
+                    onClick={() => goToPage(currentPage - 1)}
+                    disabled={currentPage <= 1}
+                    style={{ padding: "6px 10px" }}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum: number;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                    return (
+                      <button
+                        key={pageNum}
+                        className={`button ${currentPage === pageNum ? "primary" : "secondary"} compact`}
+                        onClick={() => goToPage(pageNum)}
+                        style={{ padding: "6px 12px", minWidth: 36 }}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                  <button
+                    className="button secondary compact"
+                    onClick={() => goToPage(currentPage + 1)}
+                    disabled={currentPage >= totalPages}
+                    style={{ padding: "6px 10px" }}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
+            </>
           ) : (
             <div className="empty-state">
               <strong>No CI runs received</strong>
@@ -875,7 +974,27 @@ export default function CiPage() {
                   </p>
                 </div>
               ) : null}
-              <pre className="code-view" style={{ maxHeight: 160 }}>{selected.logs}</pre>
+              {selected.conclusion && selected.conclusion !== "success" ? (
+                <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <XCircle size={18} style={{ color: "var(--error)" }} />
+                    <strong style={{ color: "var(--error)" }}>Workflow Failed</strong>
+                    {getEnvironment(selected) && (
+                      <span className={`status ${envClass(getEnvironment(selected))}`} style={{ marginLeft: "auto" }}>
+                        {getEnvironment(selected)}
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ marginBottom: 8 }}>
+                    This workflow completed with conclusion: <code>{selected.conclusion}</code>
+                    {selected.workflowName ? ` (${selected.workflowName})` : ""}
+                  </p>
+                  <p style={{ fontSize: 12, marginBottom: 0 }}>
+                    Click &ldquo;Explain run&rdquo; for AI-powered analysis of the failure, or check the logs below for error details.
+                  </p>
+                </div>
+              ) : null}
+              <pre className="code-view" style={{ maxHeight: 160, borderColor: selected.conclusion && selected.conclusion !== "success" ? "var(--error)" : undefined }}>{selected.logs}</pre>
               <label className="field-label" htmlFor="release-tag">Release tag</label>
               <input
                 id="release-tag"

@@ -58,10 +58,8 @@ export function RepoOnboarding() {
   const [vercelOrgId, setVercelOrgId] = useState("");
   const [vercelProjectId, setVercelProjectId] = useState("");
   const [vercelSettingsUrl, setVercelSettingsUrl] = useState("");
-  const [pagerDutyRoutingKey, setPagerDutyRoutingKey] = useState("");
   const [vercelTokenState, setVercelTokenState] = useState<VerifyState>("idle");
   const [vercelProjectState, setVercelProjectState] = useState<VerifyState>("idle");
-  const [pagerDutyState, setPagerDutyState] = useState<VerifyState>("idle");
   const [secretError, setSecretError] = useState("");
   const [showSecrets, setShowSecrets] = useState(false);
   const [setupBusy, setSetupBusy] = useState(false);
@@ -82,7 +80,7 @@ export function RepoOnboarding() {
   const activeRepo = repos.find((repo) => repo.full_name === selectedRepo) ?? null;
   const filteredRepos = repos.filter((repo) => repo.full_name.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
   const vercelVerified = skipVercel || (vercelTokenState === "verified" && vercelProjectState === "verified");
-  const incidentsVerified = skipIncidents || pagerDutyState === "verified";
+  const incidentsVerified = true;
   const needsCustomBranches = scan?.branches.scenario === "custom_required";
   const customBranchesReady = !needsCustomBranches || Boolean(customProdBranch.trim());
   const canSubmit = Boolean(activeRepo && scan && customBranchesReady && vercelVerified && incidentsVerified && !setupBusy);
@@ -261,15 +259,15 @@ export function RepoOnboarding() {
     }
   }
 
-  async function verify(type: "vercel_token" | "vercel_project" | "pagerduty") {
+  async function verify(type: "vercel_token" | "vercel_project") {
     setSecretError("");
-    const setState = type === "vercel_token" ? setVercelTokenState : type === "vercel_project" ? setVercelProjectState : setPagerDutyState;
+    const setState = type === "vercel_token" ? setVercelTokenState : setVercelProjectState;
     setState("verifying");
     try {
       const response = await fetch("/api/integrations/verify", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ type, vercelToken, vercelOrgId, vercelProjectId, pagerDutyRoutingKey })
+        body: JSON.stringify({ type, vercelToken, vercelOrgId, vercelProjectId })
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Verification failed");
@@ -300,7 +298,6 @@ export function RepoOnboarding() {
           vercelOrgId,
           vercelProjectId,
           vercelSettingsUrl,
-          pagerDutyRoutingKey,
           productionBranch: customProdBranch.trim(),
           developmentBranch: customDevBranch.trim()
         })
@@ -570,13 +567,14 @@ export function RepoOnboarding() {
 
                 <div className="repo-connect-group">
                   <div className="eyebrow">Incident alerting</div>
-                  <h3>PagerDuty alerting</h3>
+                  <h3>ShipBrain Incident Alerting</h3>
                   {skipIncidents ? (
-                    <CollapsedSetup label="Incident alerting" onRestore={() => setSkipIncidents(false)} />
+                    <CollapsedSetup label="ShipBrain incident alerting" onRestore={() => setSkipIncidents(false)} />
                   ) : (
                     <>
-                      <SecretField label="PAGERDUTY_ROUTING_KEY" value={pagerDutyRoutingKey} setValue={setPagerDutyRoutingKey} state={pagerDutyState} visible={showSecrets} onVerify={() => verify("pagerduty")} helper="PagerDuty -> Services -> service -> Integrations -> Events API V2 key" link="https://app.pagerduty.com/services" />
-                      <p className="secret-helper">Verify sends and immediately resolves a low-severity PagerDuty test event so the routing key is checked against the real Events API.</p>
+                      <p className="secret-helper" style={{ marginTop: 0 }}>
+                        Monitor workflow failures and automatically create incidents in ShipBrain. No external API keys are required.
+                      </p>
                       <button className="text-link" onClick={() => setSkipIncidents(true)}>Skip incident alerting -&gt;</button>
                     </>
                   )}
@@ -775,7 +773,7 @@ function SetupSuccess({ setup, copied, hidden, onShow, onCopy }: { setup: any; c
       </div>
       <div className="info-callout">
         <strong>One more step before preview deploys work</strong>
-        <p>Set dev environment variables in Vercel's Preview environment. Production variables are separate and are not used by preview builds.</p>
+        <p>Set dev environment variables in Vercel&apos;s Preview environment. Production variables are separate and are not used by preview builds.</p>
         <a className="button secondary compact" href={vercelSettingsUrl} target="_blank" rel="noreferrer">Open Vercel settings <ExternalLink size={14} /></a>
       </div>
     </div>

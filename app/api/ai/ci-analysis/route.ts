@@ -3,6 +3,8 @@ import { analyzeCiFailure } from "@/lib/ai/chains/ci-analyzer";
 import { fetchWorkflowLogs } from "@/lib/github/workflow-logs";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 
 function splitRepo(repoFullName: string) {
   const [owner, repo] = repoFullName.split("/");

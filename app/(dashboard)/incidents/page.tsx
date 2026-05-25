@@ -1,13 +1,13 @@
 "use client";
 
-import { ArrowLeftRight, CheckCircle2, ClipboardPlus, Download, ExternalLink, GitPullRequest, ShieldCheck, Wand2 } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, CheckCircle2, ClipboardPlus, Download, ExternalLink, GitPullRequest, Search, ShieldCheck, Wand2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
 
 type Incident = {
   id: string;
   source: string;
-  status: "open" | "investigating" | "resolved";
+  status: "open" | "investigating" | "resolved" | "rejected";
   title: string;
   logs: string;
   repo?: string;
@@ -21,9 +21,13 @@ type Incident = {
   fixProposal?: string | null;
   postmortem?: string | null;
   aiAnalysis?: IncidentAnalysis | null;
-  alertProviderLinked?: boolean;
-  alertProviderStatus?: string | null;
-  alertProviderSyncError?: string | null;
+  externalId?: string | null;
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
+  resolvedAt?: string | null;
+  resolutionNote?: string | null;
+  rejectedAt?: string | null;
+  rejectionReason?: string | null;
   hotfixBranch?: string | null;
   hotfixBaseBranch?: string | null;
   hotfixPrNumber?: number | null;
@@ -39,6 +43,7 @@ type Incident = {
   reverseSyncCreatedAt?: string | null;
   reverseSyncMergedAt?: string | null;
   reverseSyncError?: string | null;
+  createdAt?: string;
   updatedAt?: string;
 };
 
@@ -144,6 +149,13 @@ export default function IncidentsPage() {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [hotfixBusy, setHotfixBusy] = useState(false);
   const [hotfixBaseBranch, setHotfixBaseBranch] = useState("develop");
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [resolveNote, setResolveNote] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
+  const [resolveModalOpen, setResolveModalOpen] = useState(false);
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [postmortemModalOpen, setPostmortemModalOpen] = useState(false);
+  const [postmortemLoading, setPostmortemLoading] = useState(false);
 
   useEffect(() => {
     void loadIncidents();
@@ -213,21 +225,30 @@ export default function IncidentsPage() {
 
   async function generatePostmortem() {
     if (!selected) return;
-    const response = await fetch("/api/ai/incident", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "postmortem", incident: selected, analysis, releaseContext: analysis?.releaseContext })
-    });
-    const json = await response.json();
-    setPostmortem(json.postmortem);
-    if (json.postmortem) {
-      await persistIncident({
-        id: selected.id,
-        rootCause: analysis?.rootCause,
-        fixProposal: analysis?.fixProposal,
-        postmortem: json.postmortem
+    setPostmortemLoading(true);
+    setPostmortemModalOpen(true);
+    setPostmortem("");
+    try {
+      const response = await fetch("/api/ai/incident", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "postmortem", incident: selected, analysis, releaseContext: analysis?.releaseContext })
       });
-      setActionMessage("Post-mortem draft saved to ShipBrain. It will be included when the fix is approved.");
+      const json = await response.json();
+      setPostmortem(json.postmortem ?? "");
+      if (json.postmortem) {
+        await persistIncident({
+          id: selected.id,
+          rootCause: analysis?.rootCause,
+          fixProposal: analysis?.fixProposal,
+          postmortem: json.postmortem
+        });
+        setActionMessage("Post-mortem draft saved to ShipBrain. It will be included when the fix is approved.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate post-mortem");
+    } finally {
+      setPostmortemLoading(false);
     }
   }
 
@@ -261,6 +282,76 @@ export default function IncidentsPage() {
     setSelected(incident);
     setManualOpen(false);
     setManualLogs("");
+  }
+
+  async function acknowledgeIncident() {
+    if (!selected) return;
+    setStatusBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/incidents", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: selected.id, action: "acknowledge" })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to acknowledge incident");
+      setSelected(json);
+      setIncidents((items) => items.map((item) => (item.id === json.id ? json : item)));
+      setActionMessage("Incident acknowledged. You are now investigating this issue.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to acknowledge incident");
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
+  async function resolveIncident() {
+    if (!selected) return;
+    setStatusBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/incidents", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: selected.id, action: "resolve", note: resolveNote || "Resolved" })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to resolve incident");
+      setSelected(json);
+      setIncidents((items) => items.map((item) => (item.id === json.id ? json : item)));
+      setResolveModalOpen(false);
+      setResolveNote("");
+      setActionMessage("Incident resolved successfully.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to resolve incident");
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
+  async function rejectIncident() {
+    if (!selected) return;
+    setStatusBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/incidents", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: selected.id, action: "reject", note: rejectReason || "Not actionable" })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to reject incident");
+      setSelected(json);
+      setIncidents((items) => items.map((item) => (item.id === json.id ? json : item)));
+      setRejectModalOpen(false);
+      setRejectReason("");
+      setActionMessage("Incident rejected as not actionable.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to reject incident");
+    } finally {
+      setStatusBusy(false);
+    }
   }
 
   async function createHotfixDraftPr() {
@@ -317,10 +408,7 @@ export default function IncidentsPage() {
           ? `Hotfix PR #${json.incident.hotfixPrNumber} merged, release ${json.releaseTag} tagged, and production deployment was dispatched.${reverseSyncMsg}`
           : `Hotfix PR #${json.incident.hotfixPrNumber} merged, but production deployment dispatch needs attention: ${json.deploymentError ?? "unknown deployment error"}${reverseSyncMsg}`
       );
-      if (json.incident.alertProviderStatus === "action_required") {
-        setError(json.incident.alertProviderSyncError ?? "Alert provider sync needs attention.");
-      }
-    } catch (nextError) {
+          } catch (nextError) {
       setGateOpen(false);
       setError(nextError instanceof Error ? nextError.message : "Unable to approve and merge incident hotfix");
     } finally {
@@ -367,23 +455,31 @@ export default function IncidentsPage() {
       <section className="grid two">
         <div className="panel">
           <div className="card" style={{ marginBottom: 14 }}>
-            <div className="eyebrow">Incident intake setup</div>
-            <h3>Real incident intake path</h3>
+            <div className="eyebrow">ShipBrain Incident Management</div>
+            <h3>Automatic incident detection</h3>
             <p>
-              Configure your production alert provider in ShipBrain environment settings, run the cart sandbox with the release version, then point the provider webhook to ShipBrain incident intake.
+              ShipBrain automatically creates incidents when GitHub Actions workflows fail. The workflow files include the ShipBrain webhook for incident alerting.
             </p>
-            <pre className="code-view" style={{ maxHeight: 148 }}>{`ShipBrain webhook:
-https://YOUR-NGROK-URL/api/webhooks/incidents
+            <pre className="code-view" style={{ maxHeight: 180 }}>{`Incident webhook (for custom integrations):
+POST /api/webhooks/incidents
+Authorization: Bearer <SHIPBRAIN_API_KEY>
 
-Sandbox app:
-cd /Users/jeevanjyotidash/Developer/shipbrain_sandbox
-RELEASE_VERSION=cart-v2026.05.22
-npm run dev
+Payload:
+{
+  "source": "custom",
+  "repo": "owner/repo",
+  "title": "Incident title",
+  "severity": "high",
+  "service": "checkout",
+  "environment": "production",
+  "logs": "Error details..."
+}
 
-Production flow:
-Cart checkout -> alert provider -> ShipBrain Incident Commander
+Incident lifecycle:
+open -> investigating -> resolved/rejected
 
-ShipBrain stores repo, service, severity, and release version so the post-mortem can connect the alert to the PR and deployment history.`}</pre>
+GitHub workflow incidents are auto-created on failure
+and auto-resolved when the workflow succeeds.`}</pre>
           </div>
           <h2>Incident Feed</h2>
           {error ? (
@@ -418,7 +514,12 @@ ShipBrain stores repo, service, severity, and release version so the post-mortem
               >
                 <div className="incident-card-header">
                   <strong className="incident-card-title">{incident.title}</strong>
-                  <span className={`status ${incident.status === "resolved" ? "green" : incident.status === "open" ? "red" : "amber"}`}>
+                  <span className={`status ${
+                    incident.status === "resolved" ? "green" :
+                    incident.status === "rejected" ? "" :
+                    incident.status === "investigating" ? "amber" :
+                    "red"
+                  }`}>
                     {incident.status}
                   </span>
                 </div>
@@ -431,7 +532,10 @@ ShipBrain stores repo, service, severity, and release version so the post-mortem
                 <div className="incident-card-footer">
                   <div className="toolbar">
                     {incident.releaseVersion ? <span className="status green">release {incident.releaseVersion}</span> : null}
-                    {incident.alertProviderLinked ? <span className="status amber">Alert linked</span> : null}
+                    {incident.source === "github-workflow" ? <span className="status amber">GitHub</span> : null}
+                    {incident.acknowledgedAt && incident.status === "investigating" ? (
+                      <span className="status amber">Investigating</span>
+                    ) : null}
                     {incident.reverseSyncPrStatus === "merged" ? (
                       <span className="status green">Synced</span>
                     ) : incident.reverseSyncPrNumber ? (
@@ -455,30 +559,89 @@ ShipBrain stores repo, service, severity, and release version so the post-mortem
           {selected ? (
             <>
               <h2>{selected.title}</h2>
-              <div className="toolbar" style={{ marginBottom: 12 }}>
+              <div className="toolbar" style={{ marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
                 <span className="status amber">{selected.source}</span>
                 {selected.severity ? <span className={`status ${selected.severity === "critical" || selected.severity === "high" ? "red" : "amber"}`}>{selected.severity}</span> : null}
                 {selected.repo ? <span className="status green">{selected.repo}</span> : null}
                 {selected.releaseVersion ? <span className="status green">release {selected.releaseVersion}</span> : null}
-                {selected.alertProviderLinked ? (
-                  <span className={`status ${selected.alertProviderStatus === "resolved" ? "green" : "amber"}`}>
-                    Alert {selected.alertProviderStatus ?? "linked"}
-                  </span>
-                ) : null}
+                {selected.externalId ? <code style={{ fontSize: 11, padding: "2px 6px", background: "var(--surface-elevated)", borderRadius: 4 }}>{selected.externalId}</code> : null}
               </div>
+
+              {/* Incident Status Actions */}
+              {selected.status === "open" ? (
+                <div className="card" style={{ marginBottom: 14, background: "var(--surface-warning)", border: "1px solid var(--border-warning)" }}>
+                  <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <strong style={{ color: "var(--text-warning)" }}>Incident Open</strong>
+                      <p style={{ marginBottom: 0, fontSize: 13 }}>Acknowledge to start investigating, or reject if not actionable.</p>
+                    </div>
+                    <div className="toolbar" style={{ gap: 8 }}>
+                      <button className="button primary compact" onClick={acknowledgeIncident} disabled={statusBusy}>
+                        <Search size={14} />
+                        {statusBusy ? "..." : "Acknowledge"}
+                      </button>
+                      <button className="button secondary compact" onClick={() => setRejectModalOpen(true)} disabled={statusBusy}>
+                        <XCircle size={14} />
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : selected.status === "investigating" ? (
+                <div className="card" style={{ marginBottom: 14, background: "var(--surface-elevated)", border: "1px solid var(--accent)" }}>
+                  <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <strong style={{ color: "var(--accent)" }}>Investigating</strong>
+                      <p style={{ marginBottom: 0, fontSize: 13 }}>
+                        Acknowledged by {selected.acknowledgedBy ?? "user"} at {selected.acknowledgedAt ? new Date(selected.acknowledgedAt).toLocaleString() : "unknown"}
+                      </p>
+                    </div>
+                    <div className="toolbar" style={{ gap: 8 }}>
+                      <button className="button primary compact" onClick={() => setResolveModalOpen(true)} disabled={statusBusy}>
+                        <CheckCircle2 size={14} />
+                        Resolve
+                      </button>
+                      <button className="button secondary compact" onClick={() => setRejectModalOpen(true)} disabled={statusBusy}>
+                        <XCircle size={14} />
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : selected.status === "resolved" ? (
+                <div className="card" style={{ marginBottom: 14, background: "var(--surface-success)", border: "1px solid var(--border-success)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <CheckCircle2 size={18} style={{ color: "var(--text-success)" }} />
+                    <div>
+                      <strong style={{ color: "var(--text-success)" }}>Resolved</strong>
+                      <p style={{ marginBottom: 0, fontSize: 13 }}>
+                        {selected.resolutionNote ?? "No resolution note"}
+                        {selected.resolvedAt ? ` - ${new Date(selected.resolvedAt).toLocaleString()}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : selected.status === "rejected" ? (
+                <div className="card" style={{ marginBottom: 14, background: "var(--surface)", border: "1px solid var(--border)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <XCircle size={18} style={{ color: "var(--text-muted)" }} />
+                    <div>
+                      <strong style={{ color: "var(--text-muted)" }}>Rejected</strong>
+                      <p style={{ marginBottom: 0, fontSize: 13 }}>
+                        {selected.rejectionReason ?? "Not actionable"}
+                        {selected.rejectedAt ? ` - ${new Date(selected.rejectedAt).toLocaleString()}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               {actionMessage ? (
                 <div className="success-panel" role="status" style={{ marginBottom: 12 }}>
                   <strong>Incident updated</strong>
                   <p>{actionMessage}</p>
                 </div>
               ) : null}
-              {selected.alertProviderSyncError ? (
-                <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
-                  <strong>Alert provider sync skipped</strong>
-                  <p>{selected.alertProviderSyncError}</p>
-                </div>
-              ) : null}
-              <pre className="code-view" style={{ maxHeight: 160 }}>{selected.logs}</pre>
+                            <pre className="code-view" style={{ maxHeight: 160 }}>{selected.logs}</pre>
               <div className="toolbar" style={{ marginTop: 14 }}>
                 <button className="button primary" disabled={analyzing} onClick={analyze}>
                   <Wand2 size={16} />
@@ -715,7 +878,7 @@ ShipBrain stores repo, service, severity, and release version so the post-mortem
               <p>{analysis.rollbackSteps.join(" → ")}</p>
             </div>
           ) : null}
-          {postmortem ? <pre className="code-view" style={{ marginTop: 16, maxHeight: 340 }}>{postmortem}</pre> : null}
+          {postmortem && !postmortemModalOpen ? <pre className="code-view" style={{ marginTop: 16, maxHeight: 340 }}>{postmortem}</pre> : null}
         </aside>
       </section>
 
@@ -732,6 +895,133 @@ ShipBrain stores repo, service, severity, and release version so the post-mortem
             <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14 }}>
               <button className="button secondary" onClick={() => setManualOpen(false)}>Cancel</button>
               <button className="button primary" disabled={!manualLogs.trim()} onClick={createManualIncident}>Submit</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {resolveModalOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setResolveModalOpen(false)}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <h2>Resolve Incident</h2>
+            <p>Add a resolution note to close this incident.</p>
+            <textarea
+              className="textarea"
+              placeholder="Describe how the incident was resolved..."
+              value={resolveNote}
+              onChange={(event) => setResolveNote(event.target.value)}
+              rows={4}
+            />
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14 }}>
+              <button className="button secondary" onClick={() => setResolveModalOpen(false)}>Cancel</button>
+              <button className="button primary" onClick={resolveIncident} disabled={statusBusy}>
+                <CheckCircle2 size={14} />
+                {statusBusy ? "Resolving..." : "Resolve"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {rejectModalOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setRejectModalOpen(false)}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <h2>Reject Incident</h2>
+            <p>Explain why this incident is not actionable.</p>
+            <textarea
+              className="textarea"
+              placeholder="Reason for rejection (e.g., false positive, duplicate, not an incident)..."
+              value={rejectReason}
+              onChange={(event) => setRejectReason(event.target.value)}
+              rows={4}
+            />
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14 }}>
+              <button className="button secondary" onClick={() => setRejectModalOpen(false)}>Cancel</button>
+              <button className="button primary" onClick={rejectIncident} disabled={statusBusy}>
+                <XCircle size={14} />
+                {statusBusy ? "Rejecting..." : "Reject"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {postmortemModalOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setPostmortemModalOpen(false)}>
+          <div className="modal" style={{ maxWidth: 700, maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column" }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ margin: 0 }}>Post-Mortem Report</h2>
+              <button className="button secondary compact" onClick={() => setPostmortemModalOpen(false)}>
+                <XCircle size={14} />
+              </button>
+            </div>
+
+            {/* Commit History Section */}
+            {(analysis?.releaseContext?.commits?.featurePr?.length || selected?.hotfixCommits?.length || analysis?.implicatedCommits?.length) ? (
+              <div style={{ marginBottom: 16, padding: 12, background: "var(--surface-elevated)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>Commit History</div>
+                <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
+                  {analysis?.releaseContext?.featureBranch && (
+                    <div>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Source branch</span>
+                      <strong style={{ display: "block" }}>{analysis.releaseContext.featureBranch}</strong>
+                    </div>
+                  )}
+                  {analysis?.releaseContext?.baseBranch && (
+                    <div>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Target branch</span>
+                      <strong style={{ display: "block" }}>{analysis.releaseContext.baseBranch}</strong>
+                    </div>
+                  )}
+                  {(analysis?.releaseContext?.release?.tag || selected?.releaseVersion) && (
+                    <div>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Release tag</span>
+                      <strong style={{ display: "block" }}>{analysis?.releaseContext?.release?.tag ?? selected?.releaseVersion}</strong>
+                    </div>
+                  )}
+                </div>
+                <div className="split-list compact-list" style={{ maxHeight: 150, overflow: "auto" }}>
+                  {(selected?.hotfixCommits ?? analysis?.releaseContext?.commits?.featurePr ?? analysis?.implicatedCommits ?? []).slice(0, 10).map((commit: any) => (
+                    <div className="commit-row" key={commit.sha} style={{ padding: "6px 0" }}>
+                      <code style={{ fontSize: 11 }}>{commit.shortSha ?? commit.sha?.slice(0, 7)}</code>
+                      <div>
+                        <strong style={{ fontSize: 13 }}>{commit.message}</strong>
+                        {commit.author && <p style={{ fontSize: 11, margin: 0 }}>{commit.author}</p>}
+                        {commit.reason && <p style={{ fontSize: 11, margin: 0, color: "var(--text-muted)" }}>{commit.reason}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Post-mortem Content */}
+            <div style={{ flex: 1, overflow: "auto" }}>
+              {postmortemLoading ? (
+                <div className="loading-state" role="status" style={{ padding: 32 }}>
+                  <span className="loading-spinner" aria-hidden="true" />
+                  <strong>Generating post-mortem...</strong>
+                  <p>AI is analyzing the incident context, commits, and creating a structured report.</p>
+                </div>
+              ) : postmortem ? (
+                <pre className="code-view" style={{ maxHeight: "none", margin: 0 }}>{postmortem}</pre>
+              ) : (
+                <div className="empty-state">
+                  <strong>No post-mortem generated</strong>
+                  <p>There was an issue generating the post-mortem report.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+              <button className="button secondary" onClick={() => setPostmortemModalOpen(false)}>Close</button>
+              {postmortem && (
+                <button className="button primary" onClick={() => navigator.clipboard.writeText(postmortem)}>
+                  <Download size={14} />
+                  Copy to clipboard
+                </button>
+              )}
             </div>
           </div>
         </div>

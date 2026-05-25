@@ -246,10 +246,19 @@ export async function POST(request: Request) {
       // No release tag is created here. Production remains the develop->main release PR path.
       releasePrMode = null;
       try {
+        const { data: repoRow } = await supabase
+          .from("repos")
+          .select("default_branch")
+          .eq("full_name", ciRun.repo_full_name)
+          .single();
+
+        const defaultBranch = repoRow?.default_branch || "main";
+
         previewDeployment = await dispatchDevelopPreviewDeploy({
           owner,
           repo,
           ref: "develop",
+          defaultBranch,
           sourcePrNumber: spec.pr_number
         });
       } catch (error) {

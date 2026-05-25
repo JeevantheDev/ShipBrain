@@ -16,8 +16,8 @@ type RepoSecretState = {
   vercel_preview_env_confirmed?: boolean;
 };
 
-const allSecrets = ["PAGERDUTY_ROUTING_KEY", "VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_KEY", "SHIPBRAIN_API_URL"];
-const editableSecrets = ["PAGERDUTY_ROUTING_KEY", "VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_URL"];
+const allSecrets = ["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_KEY", "SHIPBRAIN_API_URL"];
+const editableSecrets = ["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_URL"];
 const vercelDashboardUrl = "https://vercel.com/dashboard";
 
 function safeVercelSettingsUrl(value?: string | null) {
@@ -116,7 +116,6 @@ export default function SecretsPage() {
     setSecretDrafts((drafts) => ({
       ...drafts,
       [repo.id]: {
-        PAGERDUTY_ROUTING_KEY: "",
         VERCEL_TOKEN: "",
         VERCEL_ORG_ID: "",
         VERCEL_PROJECT_ID: "",

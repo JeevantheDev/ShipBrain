@@ -80,6 +80,7 @@ export type DispatchDevelopPreviewInput = {
   owner: string;
   repo: string;
   ref?: string;
+  defaultBranch?: string;
   sourcePrNumber?: number | null;
   workflowId?: string;
   token?: string;
@@ -92,11 +93,14 @@ export async function dispatchDevelopPreviewDeploy(input: DispatchDevelopPreview
     : ["shipbrain-preview.yml", "shipbrain-ci.yml"];
 
   const ref = input.ref ?? "develop";
+  const defaultBranch = input.defaultBranch || "main";
   const octokit = getOctokit(input.token);
   let usedWorkflowId = workflowCandidates[0];
 
   for (const workflowId of workflowCandidates) {
     try {
+      const dispatchRef = ref;
+
       // Different inputs for new vs old workflow
       const inputs = workflowId === "shipbrain-preview.yml"
         ? {
@@ -113,15 +117,16 @@ export async function dispatchDevelopPreviewDeploy(input: DispatchDevelopPreview
         owner: input.owner,
         repo: input.repo,
         workflow_id: workflowId,
-        ref,
+        ref: dispatchRef,
         inputs
       });
       usedWorkflowId = workflowId;
       break;
     } catch (error) {
       const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
-      // If workflow not found and we have more candidates, try next
-      if (status === 404 && workflowCandidates.indexOf(workflowId) < workflowCandidates.length - 1) {
+      const message = typeof error === "object" && error && "message" in error ? (error as { message?: string }).message : "";
+      // If workflow not found (404) or doesn't have dispatch trigger (422), try next candidate
+      if ((status === 404 || status === 422 || message?.includes("does not have")) && workflowCandidates.indexOf(workflowId) < workflowCandidates.length - 1) {
         continue;
       }
       throw error;

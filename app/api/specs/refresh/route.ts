@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { getLatestPreviewUrl, getLatestProductionUrl } from "@/lib/vercel/client";
+import { getLatestPreviewUrl, getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/vercel/client";
 
 export const runtime = "nodejs";
 
@@ -119,6 +119,8 @@ export async function POST(request: Request) {
       const workflowNames = ["shipbrain-production.yml", "shipbrain-deploy.yml", "shipbrain-vercel-prod.yml"];
       let deployRun: any = null;
 
+      const deployTriggerTime = new Date(spec.updated_at).getTime();
+
       for (const workflowName of workflowNames) {
         try {
           const { data: workflows } = await octokit.actions.listWorkflowRuns({
@@ -128,10 +130,10 @@ export async function POST(request: Request) {
             per_page: 15
           });
 
-          // Find a run matching this release tag or SHA
+          // Workflow dispatched with ref=releaseTag so head_branch === releaseTag
           deployRun = workflows.workflow_runs.find((run: any) =>
-            (spec.release_tag && run.head_branch === spec.release_tag) ||
             (spec.release_sha && run.head_sha === spec.release_sha) ||
+            (spec.release_tag && run.head_branch === spec.release_tag) ||
             (spec.release_tag && (run.display_title ?? "").includes(spec.release_tag))
           );
 
@@ -164,38 +166,43 @@ export async function POST(request: Request) {
           owner,
           repo,
           workflow_id: "shipbrain-preview.yml",
-          per_page: 10
+          per_page: 15
         });
 
-        // Find the most recent preview run for develop branch
+        // Find the preview run matching the merge commit SHA
+        const mergeSha = spec.merge_sha || updates.merge_sha;
         const previewRun = workflows.workflow_runs.find((run: any) =>
-          run.head_branch === "develop" || run.head_branch === spec.branch_name
+          mergeSha ? run.head_sha === mergeSha : (run.head_branch === "develop" || run.head_branch === spec.branch_name)
         );
 
         if (previewRun) {
           if (previewRun.status === "completed") {
             if (previewRun.conclusion === "success") {
-              updates.preview_status = "deployed";
-              // Get actual preview URL from Vercel API
-              if (!spec.preview_url && vercelToken && vercelProjectId) {
+              // Get actual preview URL from Vercel API matching this specific SHA
+              let previewUrl: string | null = null;
+              if (vercelToken && vercelProjectId && mergeSha) {
                 try {
-                  const previewUrl = await getLatestPreviewUrl({
+                  previewUrl = await getPreviewUrlForSha({
                     vercelToken,
                     projectId: vercelProjectId,
-                    branch: "develop"
+                    sha: mergeSha
                   });
-                  if (previewUrl) {
-                    updates.preview_url = previewUrl;
-                  }
-                } catch {
-                  // Fallback to constructed URL if Vercel API fails
-                  const vercelProjectName = repo.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-                  updates.preview_url = `https://${vercelProjectName}-git-develop-${owner.toLowerCase()}.vercel.app`;
+                } catch (err) {
+                  console.error("Error fetching preview URL for SHA:", err);
                 }
-              } else if (!spec.preview_url) {
-                // Fallback if no Vercel credentials
+              }
+
+              if (previewUrl) {
+                updates.preview_status = "deployed";
+                updates.preview_url = previewUrl;
+              } else if (!vercelToken || !vercelProjectId) {
+                // Fallback to constructed URL if no Vercel credentials
                 const vercelProjectName = repo.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+                updates.preview_status = "deployed";
                 updates.preview_url = `https://${vercelProjectName}-git-develop-${owner.toLowerCase()}.vercel.app`;
+              } else {
+                // Vercel deployment not ready yet, keep in deploying status
+                updates.preview_status = "deploying";
               }
             } else {
               updates.preview_status = "failed";

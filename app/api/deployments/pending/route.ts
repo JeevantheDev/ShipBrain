@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { getLatestProductionUrl } from "@/lib/vercel/client";
+import { getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/vercel/client";
 
 export const runtime = "nodejs";
 
@@ -68,14 +68,83 @@ export async function GET() {
         stage = spec.release_status === "deploying" ? "deploying" : "pending_production_deploy";
       } else if (spec.release_pr_number) {
         // Release PR exists but not merged - remove from develop queue
-        // Once release PR is created, the item should no longer appear in develop queue
-        // It will only appear in production queue when release PR is merged
         continue;
       } else if (spec.preview_url || spec.preview_status === "deployed") {
         // Preview is ready - can create release PR
         stage = "preview_ready";
       } else if (spec.preview_status === "deploying") {
-        stage = "preview_deploying";
+        // Actively verify the preview run hasn't already completed — prevents stale badge
+        let resolvedPreviewStage = "preview_deploying";
+        try {
+          const { owner: pOwner, repo: pRepo } = splitRepo(spec.repo_full_name);
+          const { data: previewRuns } = await octokit.actions.listWorkflowRuns({
+            owner: pOwner,
+            repo: pRepo,
+            workflow_id: "shipbrain-preview.yml",
+            per_page: 10
+          });
+          const mergeSha = spec.merge_sha;
+          const matchRun = previewRuns.workflow_runs.find((r: any) =>
+            mergeSha ? r.head_sha === mergeSha : r.head_branch === "develop"
+          );
+
+          if (!matchRun) {
+            // No matching run found — workflow was never dispatched or already cleared.
+            // Reset to awaiting_preview so the user can retry.
+            await supabase.from("specs").update({
+              preview_status: null,
+              updated_at: new Date().toISOString()
+            }).eq("id", spec.id);
+            resolvedPreviewStage = "awaiting_preview";
+          } else if (matchRun.status === "completed") {
+            if (matchRun.conclusion === "success") {
+              // Run succeeded — mark deployed and attempt to get preview URL from Vercel
+              const updateData: Record<string, any> = {
+                preview_status: "deployed",
+                updated_at: new Date().toISOString()
+              };
+
+              try {
+                // Get Vercel project ID from repo record
+                const { data: repoRecord } = await supabase
+                  .from("repos")
+                  .select("setup_metadata")
+                  .eq("full_name", spec.repo_full_name)
+                  .single();
+
+                const vercelProjectId = (repoRecord?.setup_metadata as any)?.vercelProjectId;
+                const vercelToken = process.env.VERCEL_TOKEN;
+
+                if (vercelToken && vercelProjectId && spec.merge_sha) {
+                  const previewUrl = await getPreviewUrlForSha({
+                    vercelToken,
+                    projectId: vercelProjectId,
+                    sha: spec.merge_sha
+                  });
+                  if (previewUrl) {
+                    updateData.preview_url = previewUrl;
+                  }
+                }
+              } catch (err) {
+                console.error("Error fetching preview URL during active sync:", err);
+              }
+
+              await supabase.from("specs").update(updateData).eq("id", spec.id);
+              resolvedPreviewStage = "preview_ready";
+            } else {
+              // Run failed — reset so user can retry
+              await supabase.from("specs").update({
+                preview_status: "failed",
+                updated_at: new Date().toISOString()
+              }).eq("id", spec.id);
+              resolvedPreviewStage = "awaiting_preview";
+            }
+          }
+          // If still in_progress / queued, keep preview_deploying
+        } catch {
+          // If GitHub check fails, keep showing deploying — don't break the queue
+        }
+        stage = resolvedPreviewStage;
       } else if (spec.status === "merged") {
         // Merged to develop but no preview yet
         stage = "awaiting_preview";
@@ -118,25 +187,25 @@ export async function GET() {
         const workflowNames = ["shipbrain-production.yml", "shipbrain-deploy.yml", "shipbrain-vercel-prod.yml"];
         let deployRun: any = null;
 
+        // The production workflow is dispatched with ref=releaseTag, so head_branch === releaseTag.
+        // Match priority: (1) exact SHA, (2) head_branch === release tag, (3) display title.
         for (const workflowName of workflowNames) {
           try {
             const { data: workflows } = await octokit.actions.listWorkflowRuns({
               owner,
               repo,
               workflow_id: workflowName,
-              per_page: 10
+              per_page: 15
             });
 
-            // Find a run matching this release tag or SHA
             deployRun = workflows.workflow_runs.find((run: any) =>
-              run.head_branch === spec.release_tag ||
               (spec.release_sha && run.head_sha === spec.release_sha) ||
-              (run.display_title ?? "").includes(spec.release_tag)
+              (spec.release_tag && run.head_branch === spec.release_tag) ||
+              (spec.release_tag && (run.display_title ?? "").includes(spec.release_tag))
             );
 
             if (deployRun) break;
           } catch {
-            // Workflow not found, try next
             continue;
           }
         }

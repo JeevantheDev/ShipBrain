@@ -128,3 +128,22 @@ export async function getLatestPreviewUrl(options: {
   const ready = findDeploymentByBranch(deployments, options.branch, "preview");
   return ready ? getDeploymentUrl(ready) : null;
 }
+
+/**
+ * Get the preview deployment URL for a specific commit SHA
+ */
+export async function getPreviewUrlForSha(options: {
+  vercelToken: string;
+  projectId: string;
+  sha: string;
+}): Promise<string | null> {
+  const deployments = await getVercelDeployments({
+    vercelToken: options.vercelToken,
+    projectId: options.projectId,
+    target: "preview",
+    limit: 20,
+  });
+
+  const ready = findDeploymentBySha(deployments, options.sha, "preview");
+  return ready ? getDeploymentUrl(ready) : null;
+}

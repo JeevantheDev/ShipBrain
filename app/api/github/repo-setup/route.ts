@@ -64,31 +64,7 @@ async function verifyVercelProject(vercelToken: string, vercelOrgId: string, ver
   }
 }
 
-async function verifyPagerDutyRoutingKey(routingKey: string) {
-  const dedupKey = `shipbrain-setup-verify-${Date.now()}`;
-  const trigger = await fetch("https://events.pagerduty.com/v2/enqueue", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      routing_key: routingKey,
-      event_action: "trigger",
-      dedup_key: dedupKey,
-      payload: {
-        summary: "ShipBrain setup verification",
-        severity: "info",
-        source: "shipbrain"
-      }
-    })
-  });
-  if (!trigger.ok) {
-    throw new Error("PagerDuty rejected the routing key. Use the Events API v2 integration key for the service.");
-  }
-  await fetch("https://events.pagerduty.com/v2/enqueue", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ routing_key: routingKey, event_action: "resolve", dedup_key: dedupKey })
-  }).catch(() => undefined);
-}
+// verifyPagerDutyRoutingKey removed since we use ShipBrain incidents directly
 
 export async function POST(request: Request) {
   const { supabase, user, token } = await getContext();
@@ -161,7 +137,6 @@ async function runSetup({
   const vercelToken = String(body.vercelToken ?? "").trim();
   const vercelOrgId = String(body.vercelOrgId ?? "").trim();
   const vercelProjectId = String(body.vercelProjectId ?? "").trim();
-  const pagerDutyRoutingKey = String(body.pagerDutyRoutingKey ?? "").trim();
   const customProdBranch = String(body.productionBranch ?? "").trim();
   const customDevBranch = String(body.developmentBranch ?? "").trim();
   const providedVercelSettingsUrl = safeVercelSettingsUrl(String(body.vercelSettingsUrl ?? "").trim());
@@ -169,19 +144,11 @@ async function runSetup({
   if (!skipVercel && (!vercelToken || !vercelOrgId || !vercelProjectId)) {
     throw new Error("Vercel setup needs VERCEL_TOKEN, VERCEL_ORG_ID, and VERCEL_PROJECT_ID or use Skip Vercel setup.");
   }
-  if (!skipIncidents && !pagerDutyRoutingKey) {
-    throw new Error("Incident alerting needs PAGERDUTY_ROUTING_KEY or use Skip incident alerting.");
-  }
 
   if (!skipVercel) {
     await emit?.({ type: "step", label: "Verifying Vercel project", status: "running" });
     await verifyVercelProject(vercelToken, vercelOrgId, vercelProjectId);
     await emit?.({ type: "step", label: "Verifying Vercel project", status: "done" });
-  }
-  if (!skipIncidents) {
-    await emit?.({ type: "step", label: "Verifying PagerDuty routing key", status: "running" });
-    await verifyPagerDutyRoutingKey(pagerDutyRoutingKey);
-    await emit?.({ type: "step", label: "Verifying PagerDuty routing key", status: "done" });
   }
 
   await emit?.({ type: "step", label: "Scanning repository", status: "running" });
@@ -198,7 +165,6 @@ async function runSetup({
   const secretSteps: string[] = [];
 
   const secrets: Array<[string, string, boolean]> = [
-    ["PAGERDUTY_ROUTING_KEY", pagerDutyRoutingKey, !skipIncidents],
     ["VERCEL_TOKEN", vercelToken, !skipVercel],
     ["VERCEL_ORG_ID", vercelOrgId, !skipVercel],
     ["VERCEL_PROJECT_ID", vercelProjectId, !skipVercel],

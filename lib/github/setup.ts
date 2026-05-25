@@ -300,7 +300,7 @@ jobs:
       - name: Deploy to Preview
         id: deploy
         run: |
-          OUTPUT=$(npx vercel@latest deploy --prebuilt --token="\${{ secrets.VERCEL_TOKEN }}" 2>&1)
+          OUTPUT=$(npx vercel@latest deploy --prebuilt --token="\${{ secrets.VERCEL_TOKEN }}" --env SHIPBRAIN_API_KEY="\${{ secrets.SHIPBRAIN_API_KEY }}" --env SHIPBRAIN_API_URL="\${{ secrets.SHIPBRAIN_API_URL }}" --env SHIPBRAIN_INCIDENT_WEBHOOK_URL="\${{ secrets.SHIPBRAIN_API_URL }}/api/webhooks/incidents" 2>&1)
           echo "Vercel output:"
           echo "$OUTPUT"
           DEPLOY_URL=$(echo "$OUTPUT" | grep -oE 'https://[a-zA-Z0-9._-]+\\.vercel\\.app' | tail -1)
@@ -503,15 +503,74 @@ jobs:
 
 /**
  * Unified notification workflow - handles both CI notifications and incident alerting
- * Watches ShipBrain workflows only (not all workflows)
+ * Uses ShipBrain's built-in incident management (no PagerDuty required)
  */
 function shipbrainNotifyWorkflow(input: WorkflowInput) {
+  const incidentJobs = input.includeIncidents ? `
+  incident:
+    name: ShipBrain Incident Alert (on failure)
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'failure'
+    steps:
+      - name: Create ShipBrain incident
+        env:
+          SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
+          SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
+        run: |
+          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
+            echo "ShipBrain secrets missing; incident creation skipped."
+            exit 0
+          fi
+          # Use workflow name + branch as incidentId so auto-resolve can match it
+          WORKFLOW_KEY=$(echo "\${{ github.event.workflow_run.name }}-\${{ github.event.workflow_run.head_branch }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/webhooks/incidents" \\
+            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
+            -H "Content-Type: application/json" \\
+            -d "{
+              \\"source\\": \\"github-workflow\\",
+              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
+              \\"title\\": \\"[\${{ github.repository }}] \${{ github.event.workflow_run.name }} failed\\",
+              \\"severity\\": \\"high\\",
+              \\"service\\": \\"\${{ github.event.workflow_run.name }}\\",
+              \\"environment\\": \\"production\\",
+              \\"logs\\": \\"Workflow: \${{ github.event.workflow_run.name }}\\\\nBranch: \${{ github.event.workflow_run.head_branch }}\\\\nCommit: \${{ github.event.workflow_run.head_sha }}\\\\nRun URL: \${{ github.event.workflow_run.html_url }}\\\\nActor: \${{ github.event.workflow_run.triggering_actor.login }}\\",
+              \\"branch\\": \\"\${{ github.event.workflow_run.head_branch }}\\",
+              \\"commit\\": \\"\${{ github.event.workflow_run.head_sha }}\\",
+              \\"incidentId\\": \\"github-workflow-$WORKFLOW_KEY\\"
+            }"
+
+  auto-resolve:
+    name: Auto-resolve on success
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Notify ShipBrain of success (for auto-resolve)
+        env:
+          SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
+          SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
+        run: |
+          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
+            exit 0
+          fi
+          # Use same workflow name + branch pattern to match incident
+          WORKFLOW_KEY=$(echo "\${{ github.event.workflow_run.name }}-\${{ github.event.workflow_run.head_branch }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/webhooks/incidents/resolve" \\
+            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
+            -H "Content-Type: application/json" \\
+            -d "{
+              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
+              \\"incidentId\\": \\"github-workflow-$WORKFLOW_KEY\\",
+              \\"resolution\\": \\"Workflow succeeded on retry\\"
+            }"
+` : "";
+
   return `name: ShipBrain Notify
 
 on:
   workflow_run:
     workflows: ["ShipBrain CI", "ShipBrain Preview Deploy", "ShipBrain Production Deploy"]
     types: [completed]
+    branches: [develop, main]
 
 jobs:
   notify:
@@ -540,56 +599,7 @@ jobs:
               \\"workflow_name\\": \\"\${{ github.event.workflow_run.name }}\\",
               \\"run_url\\": \\"\${{ github.event.workflow_run.html_url }}\\"
             }"
-
-  alert:
-    name: PagerDuty Alert (on failure)
-    runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'failure'
-    steps:
-      - name: Send PagerDuty alert
-        run: |
-          if [ -z "\${{ secrets.PAGERDUTY_ROUTING_KEY }}" ]; then
-            echo "PagerDuty routing key not configured; alert skipped."
-            exit 0
-          fi
-          curl -s -X POST https://events.pagerduty.com/v2/enqueue \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"routing_key\\": \\"\${{ secrets.PAGERDUTY_ROUTING_KEY }}\\",
-              \\"event_action\\": \\"trigger\\",
-              \\"dedup_key\\": \\"\${{ github.event.workflow_run.id }}\\",
-              \\"payload\\": {
-                \\"summary\\": \\"[\${{ github.repository }}] \${{ github.event.workflow_run.name }} failed\\",
-                \\"severity\\": \\"error\\",
-                \\"source\\": \\"\${{ github.repository }}\\",
-                \\"custom_details\\": {
-                  \\"repo\\": \\"\${{ github.repository }}\\",
-                  \\"commit_sha\\": \\"\${{ github.event.workflow_run.head_sha }}\\",
-                  \\"branch\\": \\"\${{ github.event.workflow_run.head_branch }}\\",
-                  \\"run_url\\": \\"\${{ github.event.workflow_run.html_url }}\\",
-                  \\"actor\\": \\"\${{ github.event.workflow_run.triggering_actor.login }}\\"
-                }
-              }
-            }"
-
-  resolve:
-    name: PagerDuty Resolve (on success)
-    runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
-    steps:
-      - name: Resolve PagerDuty incident
-        run: |
-          if [ -z "\${{ secrets.PAGERDUTY_ROUTING_KEY }}" ]; then
-            exit 0
-          fi
-          curl -s -X POST https://events.pagerduty.com/v2/enqueue \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"routing_key\\": \\"\${{ secrets.PAGERDUTY_ROUTING_KEY }}\\",
-              \\"event_action\\": \\"resolve\\",
-              \\"dedup_key\\": \\"\${{ github.event.workflow_run.id }}\\"
-            }"
-`;
+${incidentJobs}`;
 }
 
 function shipbrainCiWorkflow(input: WorkflowInput) {
@@ -622,7 +632,7 @@ function shipbrainCiWorkflow(input: WorkflowInput) {
       - name: Deploy to Vercel Preview
         id: deploy
         run: |
-          OUTPUT=$(npx vercel@latest deploy --prebuilt --token="\${{ secrets.VERCEL_TOKEN }}" 2>&1)
+          OUTPUT=$(npx vercel@latest deploy --prebuilt --token="\${{ secrets.VERCEL_TOKEN }}" --env SHIPBRAIN_API_KEY="\${{ secrets.SHIPBRAIN_API_KEY }}" --env SHIPBRAIN_API_URL="\${{ secrets.SHIPBRAIN_API_URL }}" --env SHIPBRAIN_INCIDENT_WEBHOOK_URL="\${{ secrets.SHIPBRAIN_API_URL }}/api/webhooks/incidents" 2>&1)
           echo "Vercel output:"
           echo "$OUTPUT"
           DEPLOY_URL=$(echo "$OUTPUT" | grep -oE 'https://[a-zA-Z0-9._-]+\\.vercel\\.app' | tail -1)
@@ -852,7 +862,9 @@ jobs:
           npx vercel@latest deploy --prebuilt --prod \\
             --token="\${{ secrets.VERCEL_TOKEN }}" \\
             --env SHIPBRAIN_RELEASE_TAG="$SHIPBRAIN_RELEASE_TAG" \\
-            --env PAGERDUTY_ROUTING_KEY="\${{ secrets.PAGERDUTY_ROUTING_KEY }}"
+            --env SHIPBRAIN_API_KEY="\${{ secrets.SHIPBRAIN_API_KEY }}" \\
+            --env SHIPBRAIN_API_URL="\${{ secrets.SHIPBRAIN_API_URL }}" \\
+            --env SHIPBRAIN_INCIDENT_WEBHOOK_URL="\${{ secrets.SHIPBRAIN_API_URL }}/api/webhooks/incidents"
       - name: Notify ShipBrain - deploy result
         if: always()
         continue-on-error: true
@@ -893,40 +905,51 @@ jobs:
       (github.event.workflow_run.conclusion == 'failure' &&
        github.event.workflow_run.name != 'ShipBrain incident alerting') ||
       github.event_name == 'workflow_dispatch'
+    env:
+      SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
+      SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
     steps:
-      - name: Send PagerDuty alert
+      - name: Send ShipBrain incident alert
         run: |
-          curl -s -X POST https://events.pagerduty.com/v2/enqueue \\
+          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
+            echo "ShipBrain callback secrets are missing; incident alerting skipped."
+            exit 0
+          fi
+          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/webhooks/incidents" \\
+            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
             -H "Content-Type: application/json" \\
             -d "{
-              \\"routing_key\\": \\"\${{ secrets.PAGERDUTY_ROUTING_KEY }}\\",
-              \\"event_action\\": \\"trigger\\",
-              \\"dedup_key\\": \\"\${{ github.event.workflow_run.id || github.run_id }}\\",
-              \\"payload\\": {
-                \\"summary\\": \\"[\${{ github.repository }}] \${{ github.event.workflow_run.name || github.workflow }} failed\\",
-                \\"severity\\": \\"error\\",
-                \\"source\\": \\"\${{ github.repository }}\\",
-                \\"custom_details\\": {
-                  \\"repo\\": \\"\${{ github.repository }}\\",
-                  \\"commit_sha\\": \\"\${{ github.event.workflow_run.head_sha || github.sha }}\\",
-                  \\"branch\\": \\"\${{ github.event.workflow_run.head_branch || github.ref_name }}\\",
-                  \\"run_url\\": \\"\${{ github.event.workflow_run.html_url || github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}\\",
-                  \\"actor\\": \\"\${{ github.event.workflow_run.triggering_actor.login || github.actor }}\\"
-                }
-              }
+              \\"source\\": \\"github-workflow\\",
+              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
+              \\"title\\": \\"Workflow \${{ github.event.workflow_run.name || github.workflow }} failed\\",
+              \\"severity\\": \\"critical\\",
+              \\"service\\": \\"ci-deploy\\",
+              \\"environment\\": \\"production\\",
+              \\"incidentId\\": \\"\${{ github.event.workflow_run.id || github.run_id }}\\",
+              \\"branch\\": \\"\${{ github.event.workflow_run.head_branch || github.ref_name }}\\",
+              \\"commit\\": \\"\${{ github.event.workflow_run.head_sha || github.sha }}\\",
+              \\"logs\\": \\"Run URL: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/\${{ github.event.workflow_run.id || github.run_id }}\\\\nTriggered by: \${{ github.event.workflow_run.triggering_actor.login || github.actor }}\\"
             }"
   resolve:
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
+    env:
+      SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
+      SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
     steps:
-      - name: Resolve PagerDuty incident
+      - name: Resolve ShipBrain incident
         run: |
-          curl -s -X POST https://events.pagerduty.com/v2/enqueue \\
+          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
+            echo "ShipBrain callback secrets are missing; incident resolution skipped."
+            exit 0
+          fi
+          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/webhooks/incidents/resolve" \\
+            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
             -H "Content-Type: application/json" \\
             -d "{
-              \\"routing_key\\": \\"\${{ secrets.PAGERDUTY_ROUTING_KEY }}\\",
-              \\"event_action\\": \\"resolve\\",
-              \\"dedup_key\\": \\"\${{ github.event.workflow_run.id }}\\"
+              \\"incidentId\\": \\"\${{ github.event.workflow_run.id }}\\",
+              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
+              \\"resolution\\": \\"Auto-resolved by successful workflow run \${{ github.event.workflow_run.name }}\\"
             }"
 `;
 }

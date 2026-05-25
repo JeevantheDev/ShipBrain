@@ -829,7 +829,7 @@ export default function SpecToPrPage() {
     setSuccessOpen(true);
   }
 
-  function useQuickTemplate(templateId: string) {
+  function applyQuickTemplate(templateId: string) {
     const template = quickPrTemplates.find((item) => item.id === templateId);
     if (!template) return;
     setQuickTemplateId(templateId);
@@ -928,7 +928,7 @@ export default function SpecToPrPage() {
               <FileText size={16} />
               <select
                 value={quickTemplateId}
-                onChange={(event) => useQuickTemplate(event.target.value)}
+                onChange={(event) => applyQuickTemplate(event.target.value)}
               >
                 <option value="">Quick PR templates</option>
                 {quickPrTemplates.map((template) => (

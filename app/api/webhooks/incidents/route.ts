@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { verifyShipBrainApiKey } from "@/lib/shipbrain/api-keys";
 
 export const runtime = "nodejs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "content-type, x-shipbrain-incident-secret"
+  "Access-Control-Allow-Headers": "content-type, x-shipbrain-incident-secret, authorization"
 };
 
 type IncidentPayload = {
@@ -113,21 +114,63 @@ export function OPTIONS() {
 }
 
 export async function POST(request: Request) {
+  const supabase = getSupabaseAdminClient();
+
+  // Support both legacy secret header and Bearer token authentication
   const configuredSecret = process.env.INCIDENT_WEBHOOK_SECRET;
-  if (configuredSecret) {
-    const providedSecret = request.headers.get("x-shipbrain-incident-secret");
-    if (providedSecret !== configuredSecret) {
-      return json({ error: "Invalid incident webhook secret." }, { status: 401 });
+  const authHeader = request.headers.get("authorization");
+  const apiKey = authHeader?.replace(/^Bearer\s+/i, "");
+  const legacySecret = request.headers.get("x-shipbrain-incident-secret");
+
+  let authenticated = false;
+  let authenticatedUserId: string | null = null;
+
+  // Try Bearer token first (preferred for GitHub Actions)
+  if (apiKey) {
+    const keyVerification = await verifyShipBrainApiKey(apiKey, supabase);
+    if (keyVerification.valid && keyVerification.userId) {
+      authenticated = true;
+      authenticatedUserId = keyVerification.userId;
     }
+  }
+
+  // Fall back to legacy secret header
+  if (!authenticated && configuredSecret && legacySecret === configuredSecret) {
+    authenticated = true;
+  }
+
+  // If neither authentication method works, reject
+  if (!authenticated && (configuredSecret || apiKey)) {
+    return json({ error: "Invalid authentication" }, { status: 401 });
   }
 
   const rawBody = await request.json();
   const body = normalizePagerDutyPayload(rawBody) ?? (rawBody as IncidentPayload);
-  const supabase = getSupabaseAdminClient();
   let repo = String(body.repo ?? "").trim();
   let repoConnection: { user_id: string; full_name?: string } | null = null;
 
-  if (repo) {
+  // If authenticated via API key, use that user
+  if (authenticatedUserId) {
+    if (repo) {
+      const { data } = await supabase
+        .from("repos")
+        .select("user_id, full_name")
+        .eq("full_name", repo)
+        .eq("user_id", authenticatedUserId)
+        .maybeSingle();
+      repoConnection = data ?? { user_id: authenticatedUserId, full_name: repo };
+    } else {
+      const { data } = await supabase
+        .from("repos")
+        .select("user_id, full_name")
+        .eq("user_id", authenticatedUserId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      repoConnection = data ?? { user_id: authenticatedUserId };
+      repo = data?.full_name ?? repo;
+    }
+  } else if (repo) {
     const { data } = await supabase
       .from("repos")
       .select("user_id, full_name")

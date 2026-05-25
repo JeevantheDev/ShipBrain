@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const supabase = getSupabaseServerClient();
@@ -13,42 +14,60 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Get preview environments from specs
+  // Latest preview per repo (most recently updated spec with a deployed preview URL)
   const { data: previews } = await supabase
     .from("specs")
-    .select("id, repo_full_name, branch_name, preview_url, preview_status, updated_at")
+    .select("id, repo_full_name, branch_name, preview_url, preview_status, merge_sha, updated_at")
     .eq("user_id", user.id)
     .not("preview_url", "is", null)
     .eq("preview_status", "deployed")
     .order("updated_at", { ascending: false })
-    .limit(5);
+    .limit(20);
 
-  // Get production environments from deployed specs
+  // Latest production per repo (deployed or deploying to main)
   const { data: productions } = await supabase
     .from("specs")
-    .select("id, repo_full_name, branch_name, deployment_url, release_status, deployed_at, updated_at")
+    .select("id, repo_full_name, branch_name, base_branch, production_url, deployment_url, release_status, release_tag, release_sha, deployed_at, updated_at")
     .eq("user_id", user.id)
-    .eq("release_status", "deployed")
-    .not("deployment_url", "is", null)
-    .order("deployed_at", { ascending: false })
-    .limit(5);
+    .in("release_status", ["deployed", "deploying", "pending_deploy"])
+    .order("updated_at", { ascending: false })
+    .limit(20);
+
+  // Deduplicate: keep only the latest preview per repo
+  const seenPreviewRepos = new Set<string>();
+  const latestPreviews = (previews ?? []).filter((spec) => {
+    if (seenPreviewRepos.has(spec.repo_full_name)) return false;
+    seenPreviewRepos.add(spec.repo_full_name);
+    return true;
+  });
+
+  // Deduplicate: keep only the latest production per repo
+  const seenProdRepos = new Set<string>();
+  const latestProductions = (productions ?? []).filter((spec) => {
+    if (seenProdRepos.has(spec.repo_full_name)) return false;
+    seenProdRepos.add(spec.repo_full_name);
+    return true;
+  });
 
   const environments = [
-    ...(previews ?? []).map((spec) => ({
-      id: `preview-${spec.id}`,
+    ...latestPreviews.map((spec) => ({
+      id: `preview-${spec.repo_full_name}`,
       repo: spec.repo_full_name,
       type: "preview" as const,
       url: spec.preview_url,
-      branch: spec.branch_name ?? "develop",
+      branch: "develop",
+      commitSha: spec.merge_sha ? (spec.merge_sha as string).slice(0, 7) : null,
       status: spec.preview_status,
       updatedAt: spec.updated_at
     })),
-    ...(productions ?? []).map((spec) => ({
-      id: `prod-${spec.id}`,
+    ...latestProductions.filter((spec) => spec.production_url || spec.deployment_url || spec.release_status).map((spec) => ({
+      id: `prod-${spec.repo_full_name}`,
       repo: spec.repo_full_name,
       type: "production" as const,
-      url: spec.deployment_url,
-      branch: "main",
+      url: spec.production_url ?? spec.deployment_url ?? "#",
+      branch: spec.base_branch === "main" ? "main" : "main",
+      releaseTag: spec.release_tag ?? null,
+      commitSha: spec.release_sha ? (spec.release_sha as string).slice(0, 7) : null,
       status: spec.release_status,
       updatedAt: spec.deployed_at ?? spec.updated_at
     }))

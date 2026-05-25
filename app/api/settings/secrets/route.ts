@@ -74,7 +74,7 @@ async function syncSetupPrStatuses(supabase: ReturnType<typeof getSupabaseServer
 }
 
 function normalizeSecretUpdates(input: unknown) {
-  const allowed = new Set(["PAGERDUTY_ROUTING_KEY", "VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_URL"]);
+  const allowed = new Set(["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_URL"]);
   if (!input || typeof input !== "object") return [];
   return Object.entries(input as Record<string, unknown>)
     .map(([name, value]) => [name, String(value ?? "").trim()] as const)
@@ -187,6 +187,33 @@ export async function POST(request: Request) {
     }
     const { error } = await supabase.from("repos").delete().eq("id", repo.id).eq("user_id", user.id);
     if (error) return NextResponse.json({ error: "GitHub secrets removed, but ShipBrain could not delete the repo record.", detail: error.message }, { status: 500 });
+
+    // Also delete any specs associated with this repo
+    await supabase
+      .from("specs")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("repo_full_name", repo.full_name);
+
+    // Delete any CI runs associated with this repo
+    await supabase
+      .from("ci_runs")
+      .delete()
+      .eq("repo_full_name", repo.full_name);
+
+    // Delete any incidents associated with this repo
+    await supabase
+      .from("incidents")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("repo_full_name", repo.full_name);
+
+    // Delete any approval events associated with this repo
+    await supabase
+      .from("approval_events")
+      .delete()
+      .eq("metadata->>repo", repo.full_name);
+
     return NextResponse.json({ ok: true, removedSecrets: secrets });
   }
 

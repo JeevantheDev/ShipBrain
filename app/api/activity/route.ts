@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type ActivityItem = {
   id: string;
@@ -21,17 +22,29 @@ export async function GET() {
 
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: repos } = await supabase
+    .from("repos")
+    .select("full_name")
+    .eq("user_id", user.id);
+
+  const connectedRepos = (repos ?? []).map((r) => r.full_name);
+
+  if (connectedRepos.length === 0) {
+    return NextResponse.json([]);
+  }
+
   const [specsResult, ciResult, approvalsResult, incidentsResult] = await Promise.all([
     supabase
       .from("specs")
       .select("id, decomposed_tasks, repo_full_name, branch_name, status, pr_number, ci_status, ci_conclusion, deployment_status, release_tag, release_status, updated_at, created_at")
       .eq("user_id", user.id)
+      .in("repo_full_name", connectedRepos)
       .order("updated_at", { ascending: false })
       .limit(8),
     supabase
       .from("ci_runs")
-      .select("id, github_run_id, repo_full_name, branch, title, status, conclusion, pr_number, updated_at, created_at, specs!left(user_id)")
-      .or(`specs.user_id.eq.${user.id},spec_id.is.null`)
+      .select("id, github_run_id, repo_full_name, branch, title, status, conclusion, pr_number, updated_at, created_at")
+      .in("repo_full_name", connectedRepos)
       .order("updated_at", { ascending: false })
       .limit(8),
     supabase
@@ -44,6 +57,7 @@ export async function GET() {
       .from("incidents")
       .select("id, alert_source, status, title, repo_full_name, service, severity, release_version, raw_logs, updated_at, created_at")
       .eq("user_id", user.id)
+      .in("repo_full_name", connectedRepos)
       .order("updated_at", { ascending: false })
       .limit(8)
   ]);
@@ -75,7 +89,11 @@ export async function GET() {
     });
   }
 
-  for (const approval of approvalsResult.data ?? []) {
+  const approvals = (approvalsResult.data ?? []).filter((approval) =>
+    connectedRepos.includes(approval.metadata?.repo)
+  );
+
+  for (const approval of approvals) {
     items.push({
       id: `approval-${approval.id}`,
       type: "deploy",

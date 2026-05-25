@@ -41,9 +41,17 @@ export function PendingDeployQueue() {
 
   useEffect(() => {
     void loadPending();
-    const interval = window.setInterval(() => void loadPending(), 30000);
+    
+    // Determine if any item is actively deploying
+    const hasActiveDeployments = pending.some(
+      item => item.stage === "preview_deploying" || item.stage === "deploying"
+    );
+    const intervalTime = hasActiveDeployments ? 5000 : 20000;
+
+    const interval = window.setInterval(() => void loadPending(), intervalTime);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [pending]);
+
 
   async function loadPending() {
     try {

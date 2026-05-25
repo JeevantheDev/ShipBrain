@@ -238,7 +238,7 @@ async function reconcileOpenPrWorkflowRuns(supabase: ReturnType<typeof getSupaba
   }));
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
   const {
     data: { user }
@@ -246,19 +246,38 @@ export async function GET() {
 
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Parse pagination params
+  const url = new URL(request.url);
+  const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
+  const limit = Math.min(50, Math.max(5, parseInt(url.searchParams.get("limit") ?? "10", 10)));
+  const offset = (page - 1) * limit;
+
   const admin = getSupabaseAdminClient();
   await reconcileProductionDeployments(admin, user.id);
   await reconcileOpenPrWorkflowRuns(admin, user.id);
+
+  // Get total count
+  const { count } = await supabase
+    .from("ci_runs")
+    .select("id", { count: "exact", head: true });
 
   const { data, error } = await supabase
     .from("ci_runs")
     .select("id, github_run_id, spec_id, pr_number, repo_full_name, workflow_name, title, html_url, head_sha, event, branch, status, conclusion, environment, preview_url, branch_alias, created_at, updated_at, specs(status, incident_id, decomposed_tasks, branch_name, base_branch, pr_number, pr_url, deployment_status, release_tag, release_status, deployment_url, preview_url, preview_status, preview_branch_alias, release_pr_number, release_pr_url, release_pr_status, incidents(id, title, status, hotfix_pr_number, hotfix_pr_url))")
     .order("updated_at", { ascending: false })
-    .limit(20);
+    .range(offset, offset + limit - 1);
 
   if (error) {
     return NextResponse.json({ error: "Unable to load CI runs.", detail: error.message }, { status: 500 });
   }
 
-  return NextResponse.json((data ?? []).map(toCiRun));
+  return NextResponse.json({
+    runs: (data ?? []).map(toCiRun),
+    pagination: {
+      page,
+      limit,
+      total: count ?? 0,
+      totalPages: Math.ceil((count ?? 0) / limit)
+    }
+  });
 }

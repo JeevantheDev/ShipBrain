@@ -9,6 +9,8 @@ type Environment = {
   type: "preview" | "production";
   url: string;
   branch: string;
+  commitSha?: string | null;
+  releaseTag?: string | null;
   status: string;
   updatedAt: string;
 };
@@ -49,7 +51,7 @@ export function EnvironmentsWidget() {
   }
 
   if (environments.length === 0) {
-    return null; // Don't show widget if no environments
+    return null;
   }
 
   return (
@@ -60,15 +62,42 @@ export function EnvironmentsWidget() {
       </div>
       <div className="split-list">
         {environments.map((env) => (
-          <div key={env.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+          <div
+            key={env.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "10px 0",
+              borderBottom: "1px solid var(--border)"
+            }}
+          >
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Globe size={16} style={{ color: env.type === "production" ? "var(--green)" : "var(--blue)" }} />
+              <Globe size={16} style={{ color: env.type === "production" ? "var(--green)" : "var(--blue)", flexShrink: 0 }} />
               <div>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>
                   {env.type === "production" ? "Production" : "Preview"}
-                  <span style={{ fontWeight: 400, color: "var(--text-muted)", marginLeft: 6 }}>({env.branch})</span>
+                  <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>
+                    ({env.branch})
+                  </span>
+                  {env.type === "production" && (
+                    <span
+                      className={`status ${env.status === "deployed" ? "green" : env.status === "deploying" ? "amber" : ""}`}
+                      style={{ fontSize: 10, padding: "2px 6px" }}
+                    >
+                      {env.status === "deployed" ? "LIVE" : env.status === "deploying" ? "DEPLOYING" : "PENDING"}
+                    </span>
+                  )}
                 </div>
-                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{env.repo}</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                  {env.repo}
+                  {env.releaseTag && (
+                    <span style={{ marginLeft: 6, color: "var(--green)" }}>· {env.releaseTag}</span>
+                  )}
+                  {env.commitSha && (
+                    <span style={{ marginLeft: 6, fontFamily: "monospace" }}>@ {env.commitSha}</span>
+                  )}
+                </div>
               </div>
             </div>
             <a className="button secondary compact" href={env.url} target="_blank" rel="noreferrer">

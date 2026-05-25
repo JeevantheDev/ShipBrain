@@ -32,6 +32,40 @@ export async function createDraftPR(input: DraftPrInput) {
   const baseSha = ref.object.sha;
 
   if (input.useExistingHead) {
+    // Guard: if head and base point to the same commit, GitHub rejects the PR
+    // with "No commits between <base> and <head>". Create a stamp commit on head.
+    try {
+      const [{ data: headRefData }, { data: baseRefData }] = await Promise.all([
+        octokit.git.getRef({ owner: input.owner, repo: input.repo, ref: `heads/${input.branch}` }),
+        octokit.git.getRef({ owner: input.owner, repo: input.repo, ref: `heads/${input.base}` })
+      ]);
+
+      if (headRefData.object.sha === baseRefData.object.sha) {
+        const { data: headCommit } = await octokit.git.getCommit({
+          owner: input.owner,
+          repo: input.repo,
+          commit_sha: headRefData.object.sha
+        });
+        const stampMessage = `chore: release stamp for ${input.base} promotion`;
+        const { data: stampCommit } = await octokit.git.createCommit({
+          owner: input.owner,
+          repo: input.repo,
+          message: stampMessage,
+          tree: headCommit.tree.sha,
+          parents: [headRefData.object.sha]
+        });
+        await octokit.git.updateRef({
+          owner: input.owner,
+          repo: input.repo,
+          ref: `heads/${input.branch}`,
+          sha: stampCommit.sha,
+          force: false
+        });
+      }
+    } catch {
+      // If stamp fails, proceed — GitHub will surface the error with context
+    }
+
     const { data: pr } = await octokit.pulls.create({
       owner: input.owner,
       repo: input.repo,
@@ -48,6 +82,7 @@ export async function createDraftPR(input: DraftPrInput) {
       draft: pr.draft ?? true
     };
   }
+
 
   const { data: baseCommit } = await octokit.git.getCommit({
     owner: input.owner,
@@ -410,6 +445,9 @@ export async function createReleasePullRequest(input: ReleasePrInput) {
     )
   ).filter((item): item is { path: string; mode: "100644"; type: "blob"; sha: string } => Boolean(item));
 
+  // Track the latest HEAD sha after any commits we make
+  let currentHeadSha = headShaBeforePatch;
+
   if (tree.length) {
     const { data: newTree } = await octokit.git.createTree({
       owner: input.owner,
@@ -431,6 +469,42 @@ export async function createReleasePullRequest(input: ReleasePrInput) {
       sha: releaseCommit.sha,
       force: false
     });
+    currentHeadSha = releaseCommit.sha;
+  }
+
+  // Guard: if head and base are still at the same SHA, GitHub will reject the PR
+  // with "No commits between <base> and <head>". Create a lightweight release-stamp
+  // commit on head so there is always at least one diff.
+  try {
+    const { data: baseRef } = await octokit.git.getRef({
+      owner: input.owner,
+      repo: input.repo,
+      ref: `heads/${input.base}`
+    });
+
+    if (baseRef.object.sha === currentHeadSha) {
+      const { data: headCommitForStamp } = await octokit.git.getCommit({
+        owner: input.owner,
+        repo: input.repo,
+        commit_sha: currentHeadSha
+      });
+      const { data: stampCommit } = await octokit.git.createCommit({
+        owner: input.owner,
+        repo: input.repo,
+        message: `chore: release stamp ${input.releaseTag}`,
+        tree: headCommitForStamp.tree.sha,
+        parents: [currentHeadSha]
+      });
+      await octokit.git.updateRef({
+        owner: input.owner,
+        repo: input.repo,
+        ref: `heads/${input.head}`,
+        sha: stampCommit.sha,
+        force: false
+      });
+    }
+  } catch {
+    // If stamp fails, proceed and let GitHub surface the error naturally
   }
 
   const head = `${input.owner}:${input.head}`;
