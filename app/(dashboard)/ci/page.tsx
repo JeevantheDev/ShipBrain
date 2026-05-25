@@ -1,0 +1,1019 @@
+"use client";
+
+import { CheckCircle2, Copy, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, SearchCode, XCircle } from "lucide-react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
+
+type CiRun = {
+  id: string;
+  specId?: string;
+  specStatus?: string;
+  prNumber?: number;
+  prUrl?: string;
+  sourceBranch?: string;
+  destinationBranch?: string;
+  specTitle?: string;
+  deploymentStatus?: string;
+  releaseTag?: string;
+  releaseStatus?: string;
+  deploymentUrl?: string;
+  previewUrl?: string;
+  previewStatus?: string;
+  previewBranchAlias?: string;
+  productionUrl?: string;
+  releasePrNumber?: number;
+  releasePrUrl?: string;
+  releasePrStatus?: string;
+  releasePromotionPrNumber?: number;
+  releasePromotionPrUrl?: string;
+  isReleasePromotionPr?: boolean;
+  incidentId?: string;
+  incidentTitle?: string;
+  incidentStatus?: string;
+  incidentHotfixPrUrl?: string;
+  incidentHotfixPrNumber?: number;
+  isIncidentHotfix?: boolean;
+  deploymentEligible?: boolean;
+  repo?: string;
+  branch: string;
+  status: string;
+  conclusion: string | null;
+  title: string;
+  workflowName?: string;
+  htmlUrl?: string;
+  updatedAt?: string;
+  logs: string;
+};
+
+type RepoSecretState = {
+  id: string;
+  full_name: string;
+  setup_metadata?: { skipVercel?: boolean; vercelSettingsUrl?: string };
+  vercel_preview_env_confirmed?: boolean;
+};
+
+type Analysis = {
+  summary: string;
+  rootCause: string;
+  fixSuggestion: string;
+  severity: "low" | "medium" | "high";
+  isFlaky: boolean;
+  affectedFiles?: string[];
+  errorType?: string;
+};
+
+type DeploymentAudit = {
+  id: string;
+  action: "deploy_approved" | "deploy_rejected";
+  note?: string | null;
+  createdAt: string;
+  metadata: {
+    repo?: string;
+    branch?: string;
+    conclusion?: string;
+    simulation?: boolean;
+    releaseTag?: string;
+    releaseUrl?: string;
+    deploymentWorkflowUrl?: string;
+    deploymentState?: string;
+    releasePrNumber?: number;
+    releasePrUrl?: string;
+    releasePrMode?: "create_pr" | "merge_existing_pr";
+    releaseSha?: string;
+    previewWorkflowUrl?: string;
+    previewUrl?: string | null;
+    previewStatus?: string | null;
+    previewBranchAlias?: string | null;
+  };
+};
+
+type ReleaseStep = {
+  label: string;
+  detail: string;
+  state: "done" | "active" | "pending" | "blocked";
+  href?: string;
+};
+
+type PendingDeploy = {
+  id: string;
+  queueType: "develop" | "production";
+  stage: string;
+  prNumber?: number;
+  prUrl?: string;
+  title: string;
+  repo: string;
+  branchName: string;
+  baseBranch: string;
+  previewUrl?: string;
+  previewStatus?: string;
+  previewBranchAlias?: string;
+  releaseTag?: string;
+  releaseSha?: string;
+  releasePrNumber?: number;
+  releasePrUrl?: string;
+  releasePrStatus?: string;
+  updatedAt: string;
+};
+
+const vercelDashboardUrl = "https://vercel.com/dashboard";
+
+function safeVercelSettingsUrl(value?: string | null) {
+  if (!value || value.includes("/dashboard/project/")) return vercelDashboardUrl;
+  return value;
+}
+
+function defaultReleaseTag() {
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+  const time = now.toISOString().slice(11, 19).replace(/:/g, "");
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `cart-v${date}-${time}-${suffix}`;
+}
+
+export default function CiPage() {
+  const [runs, setRuns] = useState<CiRun[]>([]);
+  const [selected, setSelected] = useState<CiRun | null>(null);
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [gateOpen, setGateOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [deploymentBusy, setDeploymentBusy] = useState(false);
+  const [deploymentMessage, setDeploymentMessage] = useState("");
+  const [deploymentError, setDeploymentError] = useState("");
+  const [audits, setAudits] = useState<DeploymentAudit[]>([]);
+  const [releaseTag, setReleaseTag] = useState("");
+  const [repos, setRepos] = useState<RepoSecretState[]>([]);
+  const [pendingDeploys, setPendingDeploys] = useState<PendingDeploy[]>([]);
+  const [previewDismissed, setPreviewDismissed] = useState(false);
+  const [queueActionLoading, setQueueActionLoading] = useState<string | null>(null);
+  const [queueActionErrors, setQueueActionErrors] = useState<Record<string, string>>({});
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+  const selectedHasRejectionAudit = selected ? audits.some((audit) => audit.action === "deploy_rejected") : false;
+  const previewRepo = repos.find((repo) => !repo.vercel_preview_env_confirmed && !repo.setup_metadata?.skipVercel);
+
+  useEffect(() => {
+    void loadRuns();
+    void loadRepos();
+    void loadPendingDeploys();
+    const interval = window.setInterval(() => {
+      void loadRuns();
+      void loadPendingDeploys();
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  async function loadRuns() {
+    try {
+      const response = await fetch("/api/ci-runs", { cache: "no-store" });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to load CI runs");
+      setRuns(json);
+      setError("");
+      setSelected((current) => {
+        if (!current) return current;
+        return json.find((run: CiRun) => run.id === current.id) ?? current;
+      });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to load CI runs");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadRepos() {
+    const response = await fetch("/api/settings/secrets", { cache: "no-store" }).catch(() => null);
+    if (!response?.ok) return;
+    setRepos(await response.json());
+  }
+
+  async function loadPendingDeploys() {
+    const response = await fetch("/api/deployments/pending", { cache: "no-store" }).catch(() => null);
+    if (!response?.ok) return;
+    setPendingDeploys(await response.json());
+  }
+
+  async function refreshSpec(specId: string) {
+    setRefreshing(specId);
+    try {
+      const response = await fetch("/api/specs/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specId })
+      });
+      if (!response.ok) {
+        const json = await response.json();
+        throw new Error(json.detail ?? json.error ?? "Unable to refresh");
+      }
+      await loadPendingDeploys();
+      await loadRuns();
+    } catch (nextError) {
+      setQueueActionErrors((prev) => ({
+        ...prev,
+        [specId]: nextError instanceof Error ? nextError.message : "Unable to refresh"
+      }));
+    } finally {
+      setRefreshing(null);
+    }
+  }
+
+  function stageLabel(item: PendingDeploy) {
+    switch (item.stage) {
+      case "awaiting_preview": return "Awaiting Preview";
+      case "awaiting_validation": return "Awaiting Preview";
+      case "preview_deploying": return "Preview Deploying";
+      case "preview_ready": return "Preview Ready";
+      case "release_pr_open": return "Release PR Open";
+      case "pending_production_deploy": return "Ready for Production";
+      case "deploying": return "Deploying...";
+      case "deploy_failed": return "Deploy Failed";
+      default: return item.stage;
+    }
+  }
+
+  function stageClass(item: PendingDeploy) {
+    if (item.stage === "preview_ready") return "green";
+    if (item.stage === "deploy_failed") return "red";
+    if (item.stage === "pending_production_deploy") return "amber";
+    return "amber";
+  }
+
+  function stageCopy(item: PendingDeploy) {
+    switch (item.stage) {
+      case "awaiting_preview":
+      case "awaiting_validation":
+        return "Feature merged to develop. Click Start Preview to deploy to Vercel Preview environment.";
+      case "preview_deploying":
+        return "Preview deployment is in progress. The URL will appear when ready.";
+      case "preview_ready":
+        return "Preview is live! Test it, then create a Release PR to promote to production.";
+      case "release_pr_open":
+        return `Release PR #${item.releasePrNumber} is open. Merge it to proceed with production deployment.`;
+      case "pending_production_deploy":
+        return "Release PR is merged. Click Deploy to Production to create the release tag and deploy.";
+      case "deploying":
+        return "Production deployment is in progress...";
+      case "deploy_failed":
+        return "Production deployment failed. Check the workflow logs and retry.";
+      default:
+        return "";
+    }
+  }
+
+  async function startProductionDeploy(item: PendingDeploy) {
+    setQueueActionLoading(item.id);
+    setQueueActionErrors((prev) => ({ ...prev, [item.id]: "" }));
+    try {
+      const response = await fetch("/api/deployments/start-production", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specId: item.id })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to start production deployment");
+      await loadPendingDeploys();
+      await loadRuns();
+    } catch (nextError) {
+      setQueueActionErrors((prev) => ({
+        ...prev,
+        [item.id]: nextError instanceof Error ? nextError.message : "Unable to start production deployment"
+      }));
+    } finally {
+      setQueueActionLoading(null);
+    }
+  }
+
+  async function startPreviewDeploy(item: PendingDeploy) {
+    setQueueActionLoading(item.id);
+    setQueueActionErrors((prev) => ({ ...prev, [item.id]: "" }));
+    try {
+      const response = await fetch("/api/deployments/start-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specId: item.id })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to start preview deployment");
+      await loadPendingDeploys();
+      await loadRuns();
+    } catch (nextError) {
+      setQueueActionErrors((prev) => ({
+        ...prev,
+        [item.id]: nextError instanceof Error ? nextError.message : "Unable to start preview deployment"
+      }));
+    } finally {
+      setQueueActionLoading(null);
+    }
+  }
+
+  async function confirmPreviewEnv(repoId: string) {
+    await fetch("/api/settings/secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoId, action: "confirm_preview_env" })
+    }).catch(() => undefined);
+    setPreviewDismissed(true);
+    await loadRepos();
+  }
+
+  function statusClass(run: CiRun) {
+    if (run.conclusion === "success") return "green";
+    if (run.conclusion || run.status === "completed") return "red";
+    return "amber";
+  }
+
+  function statusIcon(run: CiRun) {
+    if (run.conclusion === "success") return <CheckCircle2 size={14} />;
+    if (run.conclusion || run.status === "completed") return <XCircle size={14} />;
+    return null;
+  }
+
+  function selectRun(run: CiRun) {
+    setSelected(run);
+    setAnalysis(null);
+    setReleaseTag(run.releaseTag ?? defaultReleaseTag());
+    setDeploymentMessage("");
+    setDeploymentError("");
+    if (shouldShowDeploymentAudit(run)) {
+      void loadAudits(run);
+    } else {
+      setAudits([]);
+    }
+  }
+
+  function runSummary(run: CiRun) {
+    if (run.isIncidentHotfix) return "This workflow is attached to an incident hotfix. Production deployment is controlled from Incident Commander, not the CI Approve Deploy gate.";
+    if (run.releaseStatus === "deploying") return "Production release is in progress. ShipBrain is tracking the Vercel workflow and will mark this deployed when GitHub reports a successful production run.";
+    if (run.releaseStatus === "deployed") return "Production release completed successfully.";
+    if (run.releaseStatus === "failed") return "Production release failed. Open the deployment workflow to inspect the failure before retrying.";
+    if (run.releaseStatus === "pending_deploy") return "This release PR is merged and waiting for production deployment. Click 'Tag & Deploy' to create the release tag and dispatch the Vercel production workflow.";
+    if (run.isReleasePromotionPr && run.deploymentEligible) return "This green release PR is ready for manager approval. Click 'Merge, tag, deploy' to merge, create the release tag, and dispatch the Vercel production workflow.";
+    if (run.releasePrNumber) return `Release PR #${run.releasePrNumber} is already tracking production promotion.`;
+    if (run.branch !== "develop") return "This run is not a production approval gate. Main/release/deployment workflow runs are tracked for visibility only.";
+    if (run.conclusion === "success" && run.specStatus !== "merged") return "CI is green, but production approval waits until the development team reviews and merges the PR into develop.";
+    if (run.deploymentEligible) return "This develop validation run is eligible for validation and audit.";
+    if (run.conclusion === "success") return "This workflow completed successfully, but it is not the active production approval gate.";
+    if (run.conclusion) return "This workflow completed with a non-success conclusion. Review details or ask ShipBrain to explain it.";
+    return "This workflow is still running or queued. ShipBrain will update it as GitHub sends more webhook events.";
+  }
+
+  async function analyze(run: CiRun) {
+    setSelected(run);
+    setBusy(true);
+    setAnalysis(null);
+    const response = await fetch("/api/ai/ci-analysis", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(run)
+    });
+    const json = await response.json();
+    setAnalysis(json);
+    setBusy(false);
+  }
+
+  async function loadAudits(run: CiRun) {
+    try {
+      const params = new URLSearchParams(run.specId ? { specId: run.specId } : { entityId: run.id });
+      const response = await fetch(`/api/deployments/approval?${params.toString()}`, { cache: "no-store" });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to load deployment audit trail");
+      setAudits(json);
+    } catch (nextError) {
+      setDeploymentError(nextError instanceof Error ? nextError.message : "Unable to load deployment audit trail");
+    }
+  }
+
+  function auditLabel(audit: DeploymentAudit) {
+    if (audit.action === "deploy_rejected") return "Rejected";
+    if (audit.metadata.deploymentState === "develop_validated") return "Develop preview started";
+    if (audit.metadata.deploymentState === "dispatch_started") return "Production approved";
+    if (audit.metadata.deploymentState === "release_pr_open") return "Release PR opened";
+    return "Approved";
+  }
+
+  function shouldShowDeploymentAudit(run: CiRun) {
+    return (
+      run.deploymentStatus === "develop_validated" ||
+      run.releaseStatus === "ready_for_prod" ||
+      run.workflowName === "ShipBrain Production Deploy" ||
+      run.workflowName === "ShipBrain Vercel Production Deploy" ||
+      run.releaseStatus === "deploying" ||
+      run.releaseStatus === "deployed" ||
+      run.releaseStatus === "failed"
+    );
+  }
+
+  function releaseSteps(run: CiRun): ReleaseStep[] {
+    const source = run.sourceBranch ?? run.branch;
+    const destination = run.destinationBranch ?? (run.isReleasePromotionPr ? "main" : "develop");
+    const draftDone = Boolean(run.prNumber);
+    const developDone = run.specStatus === "merged" || run.releaseStatus === "ready_for_prod" || run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying" || run.releaseStatus === "deployed";
+    const releaseReady = run.isReleasePromotionPr || run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying" || run.releaseStatus === "deployed";
+    const prodDone = run.releaseStatus === "deployed";
+    const prodActive = run.releaseStatus === "deploying" || run.releaseStatus === "pending_deploy" || run.isReleasePromotionPr;
+
+    return [
+      {
+        label: "Draft PR",
+        detail: run.prNumber ? `PR #${run.prNumber} · ${source} → ${destination}` : "Waiting for ShipBrain Draft PR",
+        state: draftDone ? "done" : "pending",
+        href: run.prUrl
+      },
+      {
+        label: "Develop preview",
+        detail: run.previewUrl
+          ? "Vercel Preview is available for develop"
+          : run.previewStatus === "deploying"
+            ? "Vercel Preview deploy is running for develop"
+            : developDone
+              ? "Feature history is merged or validated on develop"
+              : "Developer review and develop CI are still in progress",
+        state: run.previewUrl || run.previewStatus === "deployed" ? "done" : run.previewStatus === "deploying" || run.branch === "develop" ? "active" : "pending",
+        href: run.previewUrl ?? run.htmlUrl
+      },
+      {
+        label: "Production promotion",
+        detail: run.releasePrNumber
+          ? `Release PR #${run.releasePrNumber} · develop → main`
+          : releaseReady
+            ? "Release gate is ready in CI Monitor"
+            : "Create a develop-to-main release PR when develop is ready",
+        state: run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying" || run.releaseStatus === "deployed"
+          ? "done"
+          : releaseReady
+            ? "active"
+            : "pending",
+        href: run.releasePrUrl
+      },
+      {
+        label: "Production deploy",
+        detail: run.productionUrl
+          ? `Live at production`
+          : run.releaseTag
+            ? `${run.releaseTag}${run.releaseStatus ? ` · ${run.releaseStatus}` : ""}`
+            : "Manager approval creates the unique release tag and dispatches production",
+        state: prodDone ? "done" : prodActive ? "active" : run.releaseStatus === "failed" ? "blocked" : "pending",
+        href: run.productionUrl ?? run.deploymentUrl
+      }
+    ];
+  }
+
+  async function recordDeploymentDecision(action: DeploymentAudit["action"], note: string) {
+    if (!selected) return;
+    setDeploymentBusy(true);
+    setDeploymentError("");
+    setDeploymentMessage("");
+    try {
+      const response = await fetch("/api/deployments/approval", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId: selected.id, action, note, releaseTag })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error([json.error, json.detail].filter(Boolean).join(" "));
+
+      const isAuditOnly = json.metadata?.auditOnly === true;
+      const approvedState = isAuditOnly
+        ? "ready_for_prod"
+        : json.metadata?.deploymentState === "dispatch_started"
+          ? "deploying"
+          : "release_pr_open";
+      const approvedUrl = json.metadata?.deploymentWorkflowUrl ?? json.metadata?.releasePrUrl;
+
+      setAudits((items) => [json, ...items].slice(0, 10));
+      setSelected((current) => current ? {
+        ...current,
+        deploymentStatus: action === "deploy_approved" ? (isAuditOnly ? "develop_validated" : "approved") : "rejected",
+        deploymentEligible: false,
+        releaseTag: json.metadata?.releaseTag ?? (isAuditOnly ? undefined : releaseTag),
+        releaseStatus: action === "deploy_approved" ? approvedState : "rejected",
+        releasePrNumber: json.metadata?.releasePrNumber,
+        releasePrUrl: json.metadata?.releasePrUrl,
+        releasePrStatus: action === "deploy_approved" ? (approvedState === "deploying" ? "merged" : isAuditOnly ? undefined : "open") : "rejected",
+        deploymentUrl: approvedUrl,
+        previewStatus: isAuditOnly ? "deploying" : current.previewStatus,
+        previewUrl: json.metadata?.previewUrl ?? current.previewUrl,
+        previewBranchAlias: json.metadata?.previewBranchAlias ?? current.previewBranchAlias
+      } : current);
+      setRuns((items) => items.map((run) => run.id === selected.id ? {
+        ...run,
+        deploymentStatus: action === "deploy_approved" ? (isAuditOnly ? "develop_validated" : "approved") : "rejected",
+        deploymentEligible: false,
+        releaseTag: json.metadata?.releaseTag ?? (isAuditOnly ? undefined : releaseTag),
+        releaseStatus: action === "deploy_approved" ? approvedState : "rejected",
+        releasePrNumber: json.metadata?.releasePrNumber,
+        releasePrUrl: json.metadata?.releasePrUrl,
+        releasePrStatus: action === "deploy_approved" ? (approvedState === "deploying" ? "merged" : isAuditOnly ? undefined : "open") : "rejected",
+        deploymentUrl: approvedUrl,
+        previewStatus: isAuditOnly ? "deploying" : run.previewStatus,
+        previewUrl: json.metadata?.previewUrl ?? run.previewUrl,
+        previewBranchAlias: json.metadata?.previewBranchAlias ?? run.previewBranchAlias
+      } : run));
+
+      if (action !== "deploy_approved") {
+        setDeploymentMessage("Deployment rejection recorded.");
+      } else if (isAuditOnly) {
+        setDeploymentMessage("Develop branch CI validated and audited. ShipBrain started the Vercel Preview deployment for develop. No release tag was created.");
+      } else if (json.metadata?.deploymentState === "dispatch_started") {
+        setDeploymentMessage(`Release PR #${json.metadata?.releasePrNumber ?? ""} merged. Tag ${json.metadata?.releaseTag ?? releaseTag} was created and Vercel production deploy was dispatched.`);
+      } else {
+        setDeploymentMessage(`Release PR #${json.metadata?.releasePrNumber ?? ""} created from develop to main. Merge it to create the release tag and start Vercel production deploy.`);
+      }
+      setGateOpen(false);
+    } catch (nextError) {
+      setDeploymentError(nextError instanceof Error ? nextError.message : "Unable to record deployment decision");
+    } finally {
+      setDeploymentBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <div className="eyebrow">Pillar 2</div>
+          <h1>CI Intelligence</h1>
+          <p>Realtime CI run cards, plain-English failure analysis, fix suggestions, and gated deploys.</p>
+        </div>
+      </div>
+
+      {previewRepo && !previewDismissed ? (
+        <div className="info-callout" style={{ marginBottom: 18 }}>
+          <strong>Preview deploys may fail until Vercel Preview environment variables are set.</strong>
+          <p>Set dev variables in Vercel under Settings -&gt; Environment Variables -&gt; Preview. Production variables are not used for preview builds.</p>
+          <div className="toolbar">
+            <a className="button secondary compact" href={safeVercelSettingsUrl(previewRepo.setup_metadata?.vercelSettingsUrl)} target="_blank" rel="noreferrer">
+              Set up now
+              <ExternalLink size={14} />
+            </a>
+            <button className="button secondary compact" onClick={() => confirmPreviewEnv(previewRepo.id)}>I&apos;ve done this</button>
+            <button className="text-link" onClick={() => setPreviewDismissed(true)}>Dismiss</button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 2-Column Layout: Deployment Queue + Release Trace */}
+      <section className="grid two" style={{ marginBottom: 18 }}>
+        {/* Deployment Queue - Left Column */}
+        <div className="panel">
+          <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+            <h2 style={{ marginBottom: 0 }}>Deployment Queue</h2>
+            <div className="toolbar" style={{ gap: 8 }}>
+              <button className="button secondary compact" onClick={() => void loadPendingDeploys()} disabled={loading}>
+                <RefreshCw size={14} />
+                Refresh
+              </button>
+              <span className={`status ${pendingDeploys.length > 0 ? "amber" : "green"}`}>
+                {pendingDeploys.length > 0 ? `${pendingDeploys.length} pending` : "Queue empty"}
+              </span>
+            </div>
+          </div>
+
+          {pendingDeploys.length === 0 ? (
+            <div className="empty-state">
+              <Rocket size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
+              <strong>No pending deployments</strong>
+              <p>Merge a feature PR to develop to start the deployment flow.</p>
+            </div>
+          ) : (
+            <div className="split-list">
+              {/* Production Queue First */}
+              {pendingDeploys.filter(p => p.queueType === "production").length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div className="eyebrow" style={{ marginBottom: 8 }}>Production</div>
+                  {pendingDeploys.filter(p => p.queueType === "production").map((item) => (
+                    <div className="card" key={item.id} style={{ marginBottom: 8 }}>
+                      <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <div>
+                          <strong>{item.title}</strong>
+                          <p style={{ marginBottom: 0, fontSize: 13 }}>
+                            {item.repo} · PR #{item.prNumber}
+                            {item.releaseTag && <> · <code>{item.releaseTag}</code></>}
+                          </p>
+                        </div>
+                        <span className={`status ${stageClass(item)}`}>{stageLabel(item)}</span>
+                      </div>
+                      <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, marginBottom: 0 }}>
+                        {stageCopy(item)}
+                      </p>
+                      <div className="toolbar" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+                        {item.stage === "pending_production_deploy" && (
+                          <button
+                            className="button primary compact"
+                            onClick={() => startProductionDeploy(item)}
+                            disabled={queueActionLoading === item.id}
+                          >
+                            {queueActionLoading === item.id ? <Loader2 size={14} className="spin" /> : <Rocket size={14} />}
+                            {queueActionLoading === item.id ? "Deploying..." : "Deploy to Production"}
+                          </button>
+                        )}
+                        <button
+                          className="button secondary compact"
+                          onClick={() => refreshSpec(item.id)}
+                          disabled={refreshing === item.id}
+                        >
+                          {refreshing === item.id ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                          Sync
+                        </button>
+                        {item.prUrl && (
+                          <a className="button secondary compact" href={item.prUrl} target="_blank" rel="noreferrer">
+                            <GitPullRequest size={14} />
+                            PR #{item.prNumber}
+                          </a>
+                        )}
+                      </div>
+                      {queueActionErrors[item.id] && (
+                        <div className="error-panel" role="alert" style={{ marginTop: 8, padding: 8, fontSize: 12 }}>
+                          {queueActionErrors[item.id]}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Develop Queue */}
+              {pendingDeploys.filter(p => p.queueType === "develop").length > 0 && (
+                <div>
+                  <div className="eyebrow" style={{ marginBottom: 8 }}>Develop Preview</div>
+                  {pendingDeploys.filter(p => p.queueType === "develop").map((item) => (
+                    <div className="card" key={item.id} style={{ marginBottom: 8 }}>
+                      <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <div>
+                          <strong>{item.title}</strong>
+                          <p style={{ marginBottom: 0, fontSize: 13 }}>
+                            {item.repo} · PR #{item.prNumber} · {item.branchName} → {item.baseBranch}
+                          </p>
+                        </div>
+                        <span className={`status ${stageClass(item)}`}>{stageLabel(item)}</span>
+                      </div>
+                      <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, marginBottom: 0 }}>
+                        {stageCopy(item)}
+                      </p>
+                      {item.previewUrl && (
+                        <div style={{ marginTop: 10, padding: 10, background: "var(--surface-elevated)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                            <span className="status green" style={{ fontSize: 11 }}>Preview Live</span>
+                          </div>
+                          <a href={item.previewUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, wordBreak: "break-all" }}>
+                            {item.previewUrl} <ExternalLink size={12} />
+                          </a>
+                        </div>
+                      )}
+                      <div className="toolbar" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+                        {(item.stage === "awaiting_preview" || item.stage === "awaiting_validation") && (
+                          <button
+                            className="button primary compact"
+                            onClick={() => startPreviewDeploy(item)}
+                            disabled={queueActionLoading === item.id}
+                          >
+                            {queueActionLoading === item.id ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
+                            {queueActionLoading === item.id ? "Starting..." : "Start Preview Deploy"}
+                          </button>
+                        )}
+                        {item.stage === "preview_ready" && (
+                          <>
+                            <a className="button primary compact" href={item.previewUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink size={14} />
+                              Open Preview
+                            </a>
+                            <Link className="button secondary compact" href="/spec-to-pr?template=develop-to-prod">
+                              <Rocket size={14} />
+                              Create Release PR
+                            </Link>
+                          </>
+                        )}
+                        {item.stage === "release_pr_open" && item.releasePrUrl && (
+                          <a className="button primary compact" href={item.releasePrUrl} target="_blank" rel="noreferrer">
+                            <GitPullRequest size={14} />
+                            Review Release PR #{item.releasePrNumber}
+                          </a>
+                        )}
+                        <button
+                          className="button secondary compact"
+                          onClick={() => refreshSpec(item.id)}
+                          disabled={refreshing === item.id}
+                        >
+                          {refreshing === item.id ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                          Sync
+                        </button>
+                        {item.prUrl && (
+                          <a className="button secondary compact" href={item.prUrl} target="_blank" rel="noreferrer">
+                            <GitPullRequest size={14} />
+                            View PR
+                          </a>
+                        )}
+                      </div>
+                      {queueActionErrors[item.id] && (
+                        <div className="error-panel" role="alert" style={{ marginTop: 8, padding: 8, fontSize: 12 }}>
+                          {queueActionErrors[item.id]}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Release Trace - Right Column */}
+        <div className="panel">
+          <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+            <h2 style={{ marginBottom: 0 }}>Release Trace</h2>
+            {selected && <span className="status amber">{selected.releaseStatus ?? "tracking"}</span>}
+          </div>
+          {selected ? (
+            <>
+              <div style={{ marginBottom: 12 }}>
+                <strong>{selected.specTitle ?? selected.title}</strong>
+                <p style={{ fontSize: 13, marginBottom: 0 }}>Feature branch → develop → main → production</p>
+              </div>
+              <div className="release-path">
+                {releaseSteps(selected).map((step) => (
+                  <div className={`release-step ${step.state}`} key={step.label}>
+                    <span className="release-step-marker" />
+                    <div>
+                      <strong>{step.label}</strong>
+                      <p>{step.detail}</p>
+                      {step.href ? (
+                        <a href={step.href} target="_blank" rel="noreferrer">
+                          Open reference <ExternalLink size={12} />
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {shouldShowDeploymentAudit(selected) ? (
+                <div className="release-audit-strip" style={{ marginTop: 16 }}>
+                  <strong>{selected.deploymentStatus === "develop_validated" || selected.releaseStatus === "ready_for_prod" ? "Develop audit" : "Production audit"}</strong>
+                  {audits.length ? (
+                    <div className="release-audit-list">
+                      {audits.slice(0, 3).map((audit) => (
+                        <div className="release-audit-pill" key={audit.id}>
+                          <span className={`dot ${audit.action === "deploy_approved" ? "green" : "red"}`} />
+                          <span>{auditLabel(audit)}</span>
+                          <small>{new Date(audit.createdAt).toLocaleString()}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ fontSize: 12 }}>No deployment decisions recorded yet.</p>
+                  )}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="empty-state">
+              <strong>Select a workflow run</strong>
+              <p>Click a workflow run below to view its release trace and deployment path.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="grid two">
+        <div className="panel">
+          <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+            <h2 style={{ marginBottom: 0 }}>Workflow Runs</h2>
+            <button className="button secondary compact" onClick={() => void loadRuns()} disabled={loading}>
+              Refresh
+            </button>
+          </div>
+          {error ? (
+            <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
+              <strong>CI sync needs attention</strong>
+              <p>{error}</p>
+            </div>
+          ) : null}
+          {loading ? (
+            <div className="loading-state" role="status" aria-live="polite">
+              <span className="loading-spinner" aria-hidden="true" />
+              <strong>Loading workflow runs</strong>
+              <p>Checking Supabase for GitHub Actions events received from the webhook.</p>
+            </div>
+          ) : runs.length ? (
+            <div className="split-list">
+              {runs.map((run) => (
+              <button
+                className="card"
+                key={run.id}
+                style={{ textAlign: "left", cursor: "pointer" }}
+                onClick={() => selectRun(run)}
+              >
+                <div className="toolbar" style={{ justifyContent: "space-between" }}>
+                  <strong>{run.title}</strong>
+                  <span className={`status ${statusClass(run)}`}>
+                    {statusIcon(run)}
+                    {run.conclusion ?? run.status}
+                  </span>
+                </div>
+                <p style={{ marginBottom: 0 }}>
+                  {run.repo ?? "GitHub"} · {run.branch}
+                  {run.prNumber ? ` · PR #${run.prNumber}` : ""}
+                  {run.updatedAt ? ` · ${new Date(run.updatedAt).toLocaleString()}` : ""}
+                </p>
+              </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <strong>No CI runs received</strong>
+              <p>Configure the GitHub webhook for the connected repo. ShipBrain will show workflow runs here as soon as GitHub sends events.</p>
+            </div>
+          )}
+        </div>
+
+        <aside className="panel">
+          <h2>Workflow Details</h2>
+          {selected ? (
+            <>
+              <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <strong>{selected.title}</strong>
+                  <p style={{ marginBottom: 0 }}>{selected.repo ?? "GitHub"} · {selected.branch} · run #{selected.id}</p>
+                  {selected.prNumber ? (
+                    <p style={{ marginBottom: 0 }}>
+                      {selected.isReleasePromotionPr ? "Release PR" : "Generated from Draft PR"} #{selected.prNumber}{selected.specTitle ? ` · ${selected.specTitle}` : ""}{selected.specStatus ? ` · ${selected.specStatus}` : ""}
+                    </p>
+                  ) : (
+                    <p style={{ marginBottom: 0 }}>Not linked to a ShipBrain-generated Draft PR yet.</p>
+                  )}
+                </div>
+                <span className={`status ${statusClass(selected)}`}>
+                  {statusIcon(selected)}
+                  {selected.conclusion ?? selected.status}
+                </span>
+              </div>
+              <p style={{ marginTop: 12 }}>{runSummary(selected)}</p>
+              {selected.deploymentStatus === "develop_validated" ? <span className="status green">Develop CI validated</span> : null}
+              {selected.deploymentStatus === "approved" ? <span className="status green">Production approval recorded</span> : null}
+              {selected.deploymentStatus === "rejected" && selectedHasRejectionAudit ? <span className="status red">Deployment rejected</span> : null}
+              {selected.releaseTag ? <span className="status green" style={{ marginLeft: 8 }}>Release {selected.releaseTag}</span> : null}
+              {selected.releaseStatus ? (
+                <span className={`status ${selected.releaseStatus === "failed" ? "red" : selected.releaseStatus === "deployed" ? "green" : "amber"}`} style={{ marginLeft: 8 }}>
+                  {selected.releaseStatus === "release_pr_open"
+                    ? "Release PR open"
+                    : selected.releaseStatus === "deploying"
+                      ? "Release in progress"
+                      : selected.releaseStatus === "deployed"
+                        ? "Production deployed"
+                        : selected.releaseStatus === "failed"
+                          ? "Release failed"
+                          : selected.releaseStatus}
+                </span>
+              ) : null}
+              {selected.isReleasePromotionPr ? <span className="status amber" style={{ marginLeft: 8 }}>Release gate</span> : null}
+              {selected.isIncidentHotfix ? (
+                <div className="success-panel" role="status">
+                  <strong>Linked incident hotfix</strong>
+                  <p>
+                    {selected.incidentTitle ?? "Incident fix"} · {selected.incidentStatus ?? "tracking"}
+                    {selected.incidentHotfixPrNumber ? ` · Hotfix PR #${selected.incidentHotfixPrNumber}` : ""}
+                  </p>
+                </div>
+              ) : null}
+              <pre className="code-view" style={{ maxHeight: 160 }}>{selected.logs}</pre>
+              <label className="field-label" htmlFor="release-tag">Release tag</label>
+              <input
+                id="release-tag"
+                className="input"
+                value={releaseTag}
+                onChange={(event) => setReleaseTag(event.target.value)}
+                placeholder="cart-v2026.05.23-143015-a1b2"
+              />
+              <div className="toolbar" style={{ marginTop: 14 }}>
+                <button className="button primary" onClick={() => analyze(selected)} disabled={busy}>
+                  <SearchCode size={16} />
+                  {busy ? "Analyzing..." : selected.conclusion === "success" ? "Review run with AI" : "Explain run"}
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={(!selected.deploymentEligible && selected.releaseStatus !== "pending_deploy") || selected.isIncidentHotfix || deploymentBusy}
+                  onClick={() => setGateOpen(true)}
+                >
+                  <Rocket size={16} />
+                  {selected.isIncidentHotfix
+                    ? "Incident-linked"
+                    : deploymentBusy
+                      ? "Recording..."
+                      : selected.releaseStatus === "pending_deploy"
+                        ? "Tag & deploy"
+                        : selected.isReleasePromotionPr
+                          ? "Merge, tag, deploy"
+                          : "Validate & audit"}
+                </button>
+                {selected.htmlUrl ? (
+                  <a className="button secondary" href={selected.htmlUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={16} />
+                    Open in GitHub
+                  </a>
+                ) : null}
+                {selected.deploymentUrl ? (
+                  <a className="button secondary" href={selected.deploymentUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={16} />
+                    {selected.releasePrNumber ? `Release PR #${selected.releasePrNumber}` : "Deploy workflow"}
+                  </a>
+                ) : null}
+                {selected.releasePromotionPrUrl ? (
+                  <a className="button secondary" href={selected.releasePromotionPrUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={16} />
+                    Release PR #{selected.releasePromotionPrNumber}
+                  </a>
+                ) : null}
+                {selected.incidentHotfixPrUrl ? (
+                  <a className="button secondary" href={selected.incidentHotfixPrUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={16} />
+                    Incident hotfix PR
+                  </a>
+                ) : null}
+              </div>
+              {selected.previewUrl || selected.previewStatus ? (
+                <div className="info-callout" style={{ marginTop: 14 }}>
+                  <strong>Vercel Preview {selected.previewStatus === "deploying" ? "deploying" : selected.previewUrl ? "ready" : "pending"}</strong>
+                  <p>
+                    {selected.previewUrl ? <>URL <a href={selected.previewUrl} target="_blank" rel="noreferrer">{selected.previewUrl}</a></> : "ShipBrain started the develop preview deploy. The URL will appear here after GitHub Actions reports it."}
+                    {selected.previewBranchAlias ? <> · Branch alias <a href={selected.previewBranchAlias.startsWith("http") ? selected.previewBranchAlias : `https://${selected.previewBranchAlias}`} target="_blank" rel="noreferrer">{selected.previewBranchAlias}</a></> : null}
+                  </p>
+                  <p>Uses Vercel Preview environment variables. Production variables are not used here.</p>
+                </div>
+              ) : null}
+              {deploymentMessage ? (
+                <div className="success-panel" role="status">
+                  <strong>Deployment gate updated</strong>
+                  <p>{deploymentMessage}</p>
+                </div>
+              ) : null}
+              {deploymentError ? (
+                <div className="error-panel" role="alert">
+                  <strong>Deployment gate needs attention</strong>
+                  <p>{deploymentError}</p>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="empty-state">
+              <strong>Select a workflow run</strong>
+              <p>Click any run to inspect its GitHub status, branch, event details, and AI analysis options.</p>
+            </div>
+          )}
+          {analysis ? (
+            <div className="split-list" style={{ marginTop: 16 }}>
+              <div className="card">
+                <div className="toolbar" style={{ gap: 8, marginBottom: 10 }}>
+                  <span className={`status ${analysis.severity === "high" ? "red" : analysis.severity === "medium" ? "amber" : "green"}`}>{analysis.severity}</span>
+                  {analysis.errorType ? <span className="status amber">{analysis.errorType}</span> : null}
+                  {analysis.isFlaky ? <span className="status amber">flaky</span> : null}
+                </div>
+                <h3>Summary</h3>
+                <p>{analysis.summary}</p>
+                <h3>Root cause</h3>
+                <p style={{ whiteSpace: "pre-wrap" }}>{analysis.rootCause}</p>
+                {analysis.affectedFiles?.length ? (
+                  <>
+                    <h3>Affected files</h3>
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>
+                      {analysis.affectedFiles.map((file, i) => (
+                        <li key={i}><code style={{ fontSize: 12 }}>{file}</code></li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </div>
+              <div className="card">
+                <h3>Fix suggestion</h3>
+                <p style={{ whiteSpace: "pre-wrap" }}>{analysis.fixSuggestion}</p>
+                <button className="button secondary" onClick={() => navigator.clipboard.writeText(analysis.fixSuggestion)}>
+                  <Copy size={16} />
+                  Copy fix
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </aside>
+      </section>
+
+      <ApprovalGate
+        open={gateOpen}
+        title={selected?.releaseStatus === "pending_deploy"
+          ? "Tag and deploy production"
+          : selected?.isReleasePromotionPr
+            ? "Merge, tag, and deploy"
+            : "Validate develop CI"}
+        description={selected?.releaseStatus === "pending_deploy"
+          ? "This release PR is already merged on GitHub. ShipBrain will create the unique release tag you entered and dispatch the Vercel production workflow."
+          : selected?.isReleasePromotionPr
+            ? "This approves the green develop-to-main release PR. ShipBrain will merge it into main, create the release tag you entered, and dispatch the Vercel production workflow."
+            : "This validates develop CI and starts a Vercel Preview deployment for the develop environment. No release tag is created. Production still goes through a develop-to-main release PR and the tag-and-deploy gate."
+        }
+        entityType="ci_run"
+        entityId={selected?.id ?? "none"}
+        onApprove={(note) => recordDeploymentDecision("deploy_approved", note)}
+        onReject={(note) => recordDeploymentDecision("deploy_rejected", note)}
+        onClose={() => setGateOpen(false)}
+      />
+    </>
+  );
+}
