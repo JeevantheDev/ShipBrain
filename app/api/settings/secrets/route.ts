@@ -81,6 +81,27 @@ function normalizeSecretUpdates(input: unknown) {
     .filter(([name, value]) => allowed.has(name) && value.length > 0);
 }
 
+function getPublicShipBrainApiUrl(request: Request) {
+  const configured =
+    process.env.SHIPBRAIN_API_URL ??
+    process.env.NEXT_PUBLIC_SHIPBRAIN_API_URL ??
+    process.env.VERCEL_URL ??
+    process.env.NGROK_PUBLIC_URL ??
+    process.env.NGROK_URL;
+
+  if (configured?.trim()) {
+    let url = configured.trim();
+    // Add https:// if it's a Vercel URL without protocol
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      url = `https://${url}`;
+    }
+    return url.replace(/\/$/, "");
+  }
+
+  const origin = new URL(request.url).origin;
+  return origin.replace(/\/$/, "");
+}
+
 export async function GET() {
   const { supabase, user, token } = await getContext();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -167,6 +188,59 @@ export async function POST(request: Request) {
     const { error } = await supabase.from("repos").update({ vercel_preview_env_confirmed: true }).eq("id", repo.id);
     if (error) return NextResponse.json({ error: "Unable to save preview environment confirmation.", detail: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
+  }
+
+  if (action === "sync_to_github") {
+    // Get or generate API key
+    const currentMetadata = (repo.setup_metadata && typeof repo.setup_metadata === "object") ? repo.setup_metadata : {};
+    let apiKey = generateShipBrainApiKey();
+
+    // Get the public API URL
+    const apiUrl = getPublicShipBrainApiUrl(request);
+
+    // Push both secrets to GitHub
+    const syncedSecrets: string[] = [];
+
+    await putActionsSecret(repo.full_name, "SHIPBRAIN_API_URL", apiUrl, token);
+    syncedSecrets.push("SHIPBRAIN_API_URL");
+
+    await putActionsSecret(repo.full_name, "SHIPBRAIN_API_KEY", apiKey, token);
+    syncedSecrets.push("SHIPBRAIN_API_KEY");
+
+    // Update the repo record
+    const injectedSecrets = Array.from(new Set([
+      ...(Array.isArray((currentMetadata as any).injectedSecrets) ? (currentMetadata as any).injectedSecrets : []),
+      ...syncedSecrets
+    ]));
+
+    const { error } = await supabase
+      .from("repos")
+      .update({
+        shipbrain_api_key_hash: hashShipBrainApiKey(apiKey),
+        shipbrain_api_key_last4: lastFour(apiKey),
+        setup_metadata: {
+          ...currentMetadata,
+          injectedSecrets,
+          apiUrl,
+          syncedAt: new Date().toISOString()
+        }
+      })
+      .eq("id", repo.id);
+
+    if (error) {
+      return NextResponse.json({
+        error: "Secrets synced to GitHub, but ShipBrain could not update the repo record.",
+        detail: error.message
+      }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      syncedSecrets,
+      apiUrl,
+      shipbrainApiKey: apiKey,
+      message: `Synced SHIPBRAIN_API_URL (${apiUrl}) and SHIPBRAIN_API_KEY to GitHub`
+    });
   }
 
   if (action === "disconnect") {

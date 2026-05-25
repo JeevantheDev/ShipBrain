@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Edit3, ExternalLink, RefreshCw, Save, ShieldCheck, Trash2, X } from "lucide-react";
+import { Copy, Edit3, ExternalLink, RefreshCw, Save, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 
 type RepoSecretState = {
@@ -37,6 +37,8 @@ export default function SecretsPage() {
   const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
   const [secretDrafts, setSecretDrafts] = useState<Record<string, Record<string, string>>>({});
   const [savingRepoId, setSavingRepoId] = useState<string | null>(null);
+  const [syncingRepoId, setSyncingRepoId] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState("");
   const disconnectModalRef = useRef<HTMLDivElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,6 +97,30 @@ export default function SecretsPage() {
     }
     setRevealedKey(json.shipbrainApiKey);
     await loadSecrets();
+  }
+
+  async function syncToGitHub(repoId: string) {
+    setSyncingRepoId(repoId);
+    setError("");
+    setSyncMessage("");
+    try {
+      const response = await fetch("/api/settings/secrets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ repoId, action: "sync_to_github" })
+      });
+      const json = await response.json();
+      if (!response.ok) {
+        throw new Error(json.detail ?? json.error ?? "Unable to sync secrets to GitHub");
+      }
+      setRevealedKey(json.shipbrainApiKey);
+      setSyncMessage(`Synced to GitHub: ${json.apiUrl}`);
+      await loadSecrets();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to sync secrets to GitHub");
+    } finally {
+      setSyncingRepoId(null);
+    }
   }
 
   function setupStatusLabel(repo: RepoSecretState) {
@@ -203,6 +229,7 @@ export default function SecretsPage() {
       </div>
 
       {error ? <div className="error-panel" role="alert"><strong>Secrets need attention</strong><p>{error}</p></div> : null}
+      {syncMessage ? <div className="success-panel" role="status"><strong>Secrets synced</strong><p>{syncMessage}</p></div> : null}
       {revealedKey ? (
         <div className="api-key-reveal" aria-live="polite">
           <strong>Your new ShipBrain API key</strong>
@@ -273,6 +300,14 @@ export default function SecretsPage() {
               <button className="button secondary compact" onClick={() => rotate(repo.id)}>
                 <RefreshCw size={14} />
                 Rotate SHIPBRAIN_API_KEY
+              </button>
+              <button
+                className="button primary compact"
+                onClick={() => syncToGitHub(repo.id)}
+                disabled={syncingRepoId === repo.id}
+              >
+                <Upload size={14} />
+                {syncingRepoId === repo.id ? "Syncing..." : "Sync to GitHub"}
               </button>
               {repo.setup_pr_url ? (
                 <a className="button secondary compact" href={repo.setup_pr_url} target="_blank" rel="noreferrer">
