@@ -221,12 +221,45 @@ export async function POST(request: Request) {
   }
 
   const externalId = body.incidentId ?? `sandbox-${Date.now()}`;
-  const { data: existingIncident } = await supabase
-    .from("incidents")
-    .select("id, status, payload")
-    .eq("user_id", repoConnection.user_id)
-    .eq("dedupe_key", dedupeKey)
-    .maybeSingle();
+
+  // First, check for existing incident by external_id (for workflow-based incidents)
+  // This prevents duplicates when the same workflow triggers multiple times
+  let existingIncident: { id: string; status: string; payload: any } | null = null;
+  let foundByExternalId = false;
+
+  if (body.incidentId) {
+    // Check for any incident with this external_id (including resolved ones for reopening)
+    const { data: byExternalId } = await supabase
+      .from("incidents")
+      .select("id, status, payload")
+      .eq("user_id", repoConnection.user_id)
+      .eq("external_id", body.incidentId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (byExternalId) {
+      existingIncident = byExternalId;
+      foundByExternalId = true;
+    }
+  }
+
+  // If not found by external_id, check by dedupe_key (only non-resolved)
+  if (!existingIncident) {
+    const { data: byDedupeKey } = await supabase
+      .from("incidents")
+      .select("id, status, payload")
+      .eq("user_id", repoConnection.user_id)
+      .eq("dedupe_key", dedupeKey)
+      .not("status", "eq", "resolved")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (byDedupeKey) {
+      existingIncident = byDedupeKey;
+    }
+  }
 
   if (existingIncident?.id) {
     const { data, error } = await supabase
