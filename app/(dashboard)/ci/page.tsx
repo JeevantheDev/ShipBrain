@@ -246,10 +246,9 @@ export default function CiPage() {
   }
 
   function stageClass(item: PendingDeploy) {
-    if (item.stage === "preview_ready") return "green";
-    if (item.stage === "deploy_failed") return "red";
-    if (item.stage === "pending_production_deploy") return "amber";
-    return "amber";
+    if (item.stage === "preview_ready") return "passed";
+    if (item.stage === "deploy_failed") return "danger";
+    return "";
   }
 
   function stageCopy(item: PendingDeploy) {
@@ -331,9 +330,9 @@ export default function CiPage() {
   }
 
   function statusClass(run: CiRun) {
-    if (run.conclusion === "success") return "green";
-    if (run.conclusion || run.status === "completed") return "red";
-    return "amber";
+    if (run.conclusion === "success") return "passed";
+    if (run.conclusion || run.status === "completed") return "danger";
+    return "";
   }
 
   function getEnvironment(run: CiRun): "PROD" | "DEV" | "CI" | null {
@@ -345,15 +344,9 @@ export default function CiPage() {
   }
 
   function envClass(env: "PROD" | "DEV" | "CI" | null) {
-    if (env === "PROD") return "red";
-    if (env === "DEV") return "amber";
+    if (env === "PROD") return "danger";
+    if (env === "DEV") return "";
     return "";
-  }
-
-  function statusIcon(run: CiRun) {
-    if (run.conclusion === "success") return <CheckCircle2 size={14} />;
-    if (run.conclusion || run.status === "completed") return <XCircle size={14} />;
-    return null;
   }
 
   function selectRun(run: CiRun) {
@@ -557,25 +550,31 @@ export default function CiPage() {
 
   return (
     <>
-      <div className="page-header">
+      <header className="page-head">
         <div>
-          <div className="eyebrow">Pillar 2</div>
-          <h1>CI Intelligence</h1>
-          <p>Realtime CI run cards, plain-English failure analysis, fix suggestions, and gated deploys.</p>
+          <div className="eyebrow mono">
+            <span className="bar"></span>
+            <span className="pillar-tag">Pillar 02</span>
+            CI Intelligence
+          </div>
+          <h1>Realtime CI run cards and gated release control.</h1>
+          <div className="sub">
+            Plain-English workflow failure diagnosis, automated previews, and production release gating.
+          </div>
         </div>
-      </div>
+      </header>
 
       {previewRepo && !previewDismissed ? (
         <div className="info-callout" style={{ marginBottom: 18 }}>
           <strong>Preview deploys may fail until Vercel Preview environment variables are set.</strong>
-          <p>Set dev variables in Vercel under Settings -&gt; Environment Variables -&gt; Preview. Production variables are not used for preview builds.</p>
-          <div className="toolbar">
-            <a className="button secondary compact" href={safeVercelSettingsUrl(previewRepo.setup_metadata?.vercelSettingsUrl)} target="_blank" rel="noreferrer">
+          <p style={{ margin: "4px 0 10px" }}>Set dev variables in Vercel under Settings &gt; Environment Variables &gt; Preview. Production variables are not used for preview builds.</p>
+          <div className="toolbar" style={{ gap: 8 }}>
+            <a className="btn subtle" href={safeVercelSettingsUrl(previewRepo.setup_metadata?.vercelSettingsUrl)} target="_blank" rel="noreferrer">
               Set up now
-              <ExternalLink size={14} />
+              <ExternalLink size={12} style={{ marginLeft: 4 }} />
             </a>
-            <button className="button secondary compact" onClick={() => confirmPreviewEnv(previewRepo.id)}>I&apos;ve done this</button>
-            <button className="text-link" onClick={() => setPreviewDismissed(true)}>Dismiss</button>
+            <button className="btn subtle" onClick={() => confirmPreviewEnv(previewRepo.id)}>I&apos;ve done this</button>
+            <button className="btn subtle" onClick={() => setPreviewDismissed(true)}>Dismiss</button>
           </div>
         </div>
       ) : null}
@@ -584,68 +583,71 @@ export default function CiPage() {
       <section className="grid two" style={{ marginBottom: 18 }}>
         {/* Deployment Queue - Left Column */}
         <div className="panel">
-          <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <h2 style={{ marginBottom: 0 }}>Deployment Queue</h2>
-            <div className="toolbar" style={{ gap: 8 }}>
-              <button className="button secondary compact" onClick={() => void loadPendingDeploys()} disabled={loading}>
-                <RefreshCw size={14} />
+          <header className="panel-head">
+            <h2>
+              Deployment Queue
+              <span className="badge-count">{pendingDeploys.length} runs</span>
+            </h2>
+            <div className="tools">
+              <button className="btn subtle" onClick={() => void loadPendingDeploys()} disabled={loading}>
+                <RefreshCw size={12} className={loading ? "spin" : ""} style={{ marginRight: 4 }} />
                 Refresh
               </button>
-              <span className={`status ${pendingDeploys.length > 0 ? "amber" : "green"}`}>
-                {pendingDeploys.length > 0 ? `${pendingDeploys.length} pending` : "Queue empty"}
-              </span>
             </div>
-          </div>
+          </header>
 
           {pendingDeploys.length === 0 ? (
-            <div className="empty-state">
-              <Rocket size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
+            <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
+              <Rocket size={32} style={{ opacity: 0.5, marginBottom: 8, marginInline: "auto" }} />
               <strong>No pending deployments</strong>
-              <p>Merge a feature PR to develop to start the deployment flow.</p>
+              <p style={{ fontSize: 13, marginTop: 4 }}>Merge a feature PR to develop to start the deployment flow.</p>
             </div>
           ) : (
-            <div className="split-list">
+            <div style={{ padding: 12 }}>
               {/* Production Queue First */}
               {pendingDeploys.filter(p => p.queueType === "production").length > 0 && (
                 <div style={{ marginBottom: 16 }}>
-                  <div className="eyebrow" style={{ marginBottom: 8 }}>Production</div>
+                  <div className="eyebrow mono" style={{ marginBottom: 8, fontSize: "11px" }}>Production</div>
                   {pendingDeploys.filter(p => p.queueType === "production").map((item) => (
-                    <div className="card" key={item.id} style={{ marginBottom: 8 }}>
-                      <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div className="card" key={item.id} style={{ marginBottom: 8, padding: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                         <div>
-                          <strong>{item.title}</strong>
-                          <p style={{ marginBottom: 0, fontSize: 13 }}>
+                          <strong style={{ fontSize: "13.5px" }}>{item.title}</strong>
+                          <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
                             {item.repo} · PR #{item.prNumber}
                             {item.releaseTag && <> · <code>{item.releaseTag}</code></>}
                           </p>
                         </div>
-                        <span className={`status ${stageClass(item)}`}>{stageLabel(item)}</span>
+                        <span className={`status-pill ${stageClass(item)}`}>
+                          <span className="dot"></span>
+                          {stageLabel(item)}
+                        </span>
                       </div>
                       <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, marginBottom: 0 }}>
                         {stageCopy(item)}
                       </p>
-                      <div className="toolbar" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+                      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                         {item.stage === "pending_production_deploy" && (
                           <button
-                            className="button primary compact"
+                            className="btn-primary"
                             onClick={() => startProductionDeploy(item)}
                             disabled={queueActionLoading === item.id}
                           >
-                            {queueActionLoading === item.id ? <Loader2 size={14} className="spin" /> : <Rocket size={14} />}
+                            {queueActionLoading === item.id ? <Loader2 size={12} className="spin" /> : <Rocket size={12} />}
                             {queueActionLoading === item.id ? "Deploying..." : "Deploy to Production"}
                           </button>
                         )}
                         <button
-                          className="button secondary compact"
+                          className="btn subtle"
                           onClick={() => refreshSpec(item.id)}
                           disabled={refreshing === item.id}
                         >
-                          {refreshing === item.id ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                          {refreshing === item.id ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}
                           Sync
                         </button>
                         {item.prUrl && (
-                          <a className="button secondary compact" href={item.prUrl} target="_blank" rel="noreferrer">
-                            <GitPullRequest size={14} />
+                          <a className="btn subtle" href={item.prUrl} target="_blank" rel="noreferrer">
+                            <GitPullRequest size={12} />
                             PR #{item.prNumber}
                           </a>
                         )}
@@ -663,71 +665,74 @@ export default function CiPage() {
               {/* Develop Queue */}
               {pendingDeploys.filter(p => p.queueType === "develop").length > 0 && (
                 <div>
-                  <div className="eyebrow" style={{ marginBottom: 8 }}>Develop Preview</div>
+                  <div className="eyebrow mono" style={{ marginBottom: 8, fontSize: "11px" }}>Develop Preview</div>
                   {pendingDeploys.filter(p => p.queueType === "develop").map((item) => (
-                    <div className="card" key={item.id} style={{ marginBottom: 8 }}>
-                      <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div className="card" key={item.id} style={{ marginBottom: 8, padding: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                         <div>
-                          <strong>{item.title}</strong>
-                          <p style={{ marginBottom: 0, fontSize: 13 }}>
+                          <strong style={{ fontSize: "13.5px" }}>{item.title}</strong>
+                          <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
                             {item.repo} · PR #{item.prNumber} · {item.branchName} → {item.baseBranch}
                           </p>
                         </div>
-                        <span className={`status ${stageClass(item)}`}>{stageLabel(item)}</span>
+                        <span className={`status-pill ${stageClass(item)}`}>
+                          <span className="dot"></span>
+                          {stageLabel(item)}
+                        </span>
                       </div>
                       <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, marginBottom: 0 }}>
                         {stageCopy(item)}
                       </p>
                       {item.previewUrl && (
-                        <div style={{ marginTop: 10, padding: 10, background: "var(--surface-elevated)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                        <div style={{ marginTop: 10, padding: 10, background: "var(--panel-2)", borderRadius: 6, border: "1px solid var(--line)" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                            <span className="status green" style={{ fontSize: 11 }}>Preview Live</span>
+                            <span className="status-pill passed" style={{ fontSize: 11 }}>Preview Live</span>
                           </div>
-                          <a href={item.previewUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, wordBreak: "break-all" }}>
-                            {item.previewUrl} <ExternalLink size={12} />
+                          <a href={item.previewUrl} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
+                            {item.previewUrl} <ExternalLink size={10} style={{ marginLeft: 4 }} />
                           </a>
                         </div>
                       )}
-                      <div className="toolbar" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+                      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                         {(item.stage === "awaiting_preview" || item.stage === "awaiting_validation") && (
                           <button
-                            className="button primary compact"
+                            className="btn-primary"
                             onClick={() => startPreviewDeploy(item)}
                             disabled={queueActionLoading === item.id}
                           >
-                            {queueActionLoading === item.id ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
+                            {queueActionLoading === item.id ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
                             {queueActionLoading === item.id ? "Starting..." : "Start Preview Deploy"}
                           </button>
                         )}
                         {item.stage === "preview_ready" && (
                           <>
-                            <a className="button primary compact" href={item.previewUrl} target="_blank" rel="noreferrer">
-                              <ExternalLink size={14} />
+                            <a className="btn-primary" href={item.previewUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink size={12} />
                               Open Preview
                             </a>
-                            <Link className="button secondary compact" href="/spec-to-pr?template=develop-to-prod">
-                              <Rocket size={14} />
+                            <Link className="btn subtle" href="/spec-to-pr?template=develop-to-prod">
+                              <Rocket size={12} />
                               Create Release PR
                             </Link>
                           </>
                         )}
                         {item.stage === "release_pr_open" && item.releasePrUrl && (
-                          <a className="button primary compact" href={item.releasePrUrl} target="_blank" rel="noreferrer">
-                            <GitPullRequest size={14} />
+                          <a className="btn-primary" href={item.releasePrUrl} target="_blank" rel="noreferrer">
+                            <GitPullRequest size={12} />
                             Review Release PR #{item.releasePrNumber}
                           </a>
                         )}
                         <button
-                          className="button secondary compact"
+                          className="btn subtle"
                           onClick={() => refreshSpec(item.id)}
                           disabled={refreshing === item.id}
                         >
-                          {refreshing === item.id ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                          {refreshing === item.id ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}
                           Sync
                         </button>
                         {item.prUrl && (
-                          <a className="button secondary compact" href={item.prUrl} target="_blank" rel="noreferrer">
-                            <GitPullRequest size={14} />
+                          <a className="btn subtle" href={item.prUrl} target="_blank" rel="noreferrer">
+                            <GitPullRequest size={12} />
                             View PR
                           </a>
                         )}
@@ -747,370 +752,427 @@ export default function CiPage() {
 
         {/* Release Trace - Right Column */}
         <div className="panel">
-          <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <h2 style={{ marginBottom: 0 }}>Release Trace</h2>
-            {selected && <span className="status amber">{selected.releaseStatus ?? "tracking"}</span>}
-          </div>
-          {selected ? (
-            <>
-              <div style={{ marginBottom: 12 }}>
-                <strong>{selected.specTitle ?? selected.title}</strong>
-                <p style={{ fontSize: 13, marginBottom: 0 }}>Feature branch → develop → main → production</p>
-              </div>
-              <div className="release-path">
-                {releaseSteps(selected).map((step) => (
-                  <div className={`release-step ${step.state}`} key={step.label}>
-                    <span className="release-step-marker" />
-                    <div>
-                      <strong>{step.label}</strong>
-                      <p>{step.detail}</p>
-                      {step.href ? (
-                        <a href={step.href} target="_blank" rel="noreferrer">
-                          Open reference <ExternalLink size={12} />
-                        </a>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {shouldShowDeploymentAudit(selected) ? (
-                <div className="release-audit-strip" style={{ marginTop: 16 }}>
-                  <strong>{selected.deploymentStatus === "develop_validated" || selected.releaseStatus === "ready_for_prod" ? "Develop audit" : "Production audit"}</strong>
-                  {audits.length ? (
-                    <div className="release-audit-list">
-                      {audits.slice(0, 3).map((audit) => (
-                        <div className="release-audit-pill" key={audit.id}>
-                          <span className={`dot ${audit.action === "deploy_approved" ? "green" : "red"}`} />
-                          <span>{auditLabel(audit)}</span>
-                          <small>{new Date(audit.createdAt).toLocaleString()}</small>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p style={{ fontSize: 12 }}>No deployment decisions recorded yet.</p>
-                  )}
+          <header className="panel-head">
+            <h2>Release Trace</h2>
+            {selected && (
+              <span className="status-pill passed">
+                <span className="dot"></span>
+                {selected.releaseStatus ?? "tracking"}
+              </span>
+            )}
+          </header>
+          <div style={{ padding: 16 }}>
+            {selected ? (
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <strong style={{ fontSize: "14px" }}>{selected.specTitle ?? selected.title}</strong>
+                  <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Feature branch → develop → main → production</p>
                 </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="empty-state">
-              <strong>Select a workflow run</strong>
-              <p>Click a workflow run below to view its release trace and deployment path.</p>
-            </div>
-          )}
+                <div className="release-path" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {releaseSteps(selected).map((step) => (
+                    <div className={`release-step ${step.state}`} key={step.label} style={{ display: "flex", gap: 12, position: "relative" }}>
+                      <span className="release-step-marker" style={{
+                        width: 14, height: 14, borderRadius: "50%",
+                        background: step.state === "done" ? "var(--green)" : step.state === "active" ? "var(--brand)" : "var(--line)",
+                        flex: "0 0 14px", marginTop: 2
+                      }} />
+                      <div>
+                        <strong style={{ fontSize: 13, color: step.state === "pending" ? "var(--text-muted)" : "var(--text)" }}>{step.label}</strong>
+                        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "2px 0 4px" }}>{step.detail}</p>
+                        {step.href ? (
+                          <a href={step.href} target="_blank" rel="noreferrer" className="text-link" style={{ fontSize: 11 }}>
+                            Open reference <ExternalLink size={10} style={{ marginLeft: 2 }} />
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {shouldShowDeploymentAudit(selected) ? (
+                  <div className="release-audit-strip" style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--line-muted)" }}>
+                    <strong style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+                      {selected.deploymentStatus === "develop_validated" || selected.releaseStatus === "ready_for_prod" ? "Develop audit" : "Production audit"}
+                    </strong>
+                    {audits.length ? (
+                      <div className="release-audit-list" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {audits.slice(0, 3).map((audit) => (
+                          <div className="release-audit-pill" key={audit.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                            <span className={`dot ${audit.action === "deploy_approved" ? "green" : "red"}`} style={{ width: 6, height: 6, borderRadius: "50%", background: audit.action === "deploy_approved" ? "var(--green)" : "var(--red)" }} />
+                            <span>{auditLabel(audit)}</span>
+                            <small style={{ color: "var(--text-muted)", marginLeft: "auto" }}>{new Date(audit.createdAt).toLocaleString()}</small>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: 12, color: "var(--text-muted)" }}>No deployment decisions recorded yet.</p>
+                    )}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
+                <strong>Select a workflow run</strong>
+                <p style={{ fontSize: 12, marginTop: 4 }}>Click a workflow run below to view its release trace and deployment path.</p>
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
       <section className="grid two">
         <div className="panel">
-          <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <h2 style={{ marginBottom: 0 }}>Workflow Runs</h2>
-            <button className="button secondary compact" onClick={() => void loadRuns()} disabled={loading}>
-              Refresh
-            </button>
-          </div>
-          {error ? (
-            <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
-              <strong>CI sync needs attention</strong>
-              <p>{error}</p>
-            </div>
-          ) : null}
-          {loading ? (
-            <div className="loading-state" role="status" aria-live="polite">
-              <span className="loading-spinner" aria-hidden="true" />
-              <strong>Loading workflow runs</strong>
-              <p>Checking Supabase for GitHub Actions events received from the webhook.</p>
-            </div>
-          ) : runs.length ? (
-            <>
-            <div className="split-list">
-              {runs.map((run) => {
-                const env = getEnvironment(run);
-                const hasFailed = run.conclusion && run.conclusion !== "success";
-                return (
-              <button
-                className={`card ${hasFailed ? "error-highlight" : ""} ${selected?.id === run.id ? "selected" : ""}`}
-                key={run.id}
-                style={{
-                  textAlign: "left",
-                  cursor: "pointer",
-                  borderColor: selected?.id === run.id ? "var(--accent)" : hasFailed ? "var(--error)" : undefined,
-                  borderWidth: selected?.id === run.id ? 2 : undefined,
-                  background: selected?.id === run.id ? "var(--surface-elevated)" : undefined,
-                  boxShadow: selected?.id === run.id ? "0 0 0 3px rgba(59, 130, 246, 0.15)" : undefined,
-                  transform: selected?.id === run.id ? "scale(1.01)" : undefined,
-                  transition: "all 0.15s ease"
-                }}
-                onClick={() => selectRun(run)}
-              >
-                <div className="toolbar" style={{ justifyContent: "space-between" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <strong>{run.title}</strong>
-                    {env && <span className={`status ${envClass(env)}`} style={{ fontSize: 10, padding: "2px 6px" }}>{env}</span>}
-                  </div>
-                  <span className={`status ${statusClass(run)}`}>
-                    {statusIcon(run)}
-                    {run.conclusion ?? run.status}
-                  </span>
-                </div>
-                <p style={{ marginBottom: 0 }}>
-                  {run.repo ?? "GitHub"} · {run.branch}
-                  {run.prNumber ? ` · PR #${run.prNumber}` : ""}
-                  {run.updatedAt ? ` · ${new Date(run.updatedAt).toLocaleString()}` : ""}
-                </p>
-                {hasFailed && (
-                  <div style={{ marginTop: 8, padding: 8, background: "rgba(239, 68, 68, 0.1)", borderRadius: 4, fontSize: 12 }}>
-                    <XCircle size={12} style={{ display: "inline", marginRight: 4, color: "var(--error)" }} />
-                    Failed - click to analyze
-                  </div>
-                )}
+          <header className="panel-head">
+            <h2>
+              Workflow Runs
+              <span className="badge-count">{totalRuns} total</span>
+            </h2>
+            <div className="tools">
+              <button className="btn subtle" onClick={() => void loadRuns()} disabled={loading}>
+                Refresh
               </button>
-                );
-              })}
             </div>
-            {/* Pagination Controls */}
-            {totalPages > 1 && (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "12px 0", borderTop: "1px solid var(--border)" }}>
-                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
-                  Showing {((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, totalRuns)} of {totalRuns}
-                </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button
-                    className="button secondary compact"
-                    onClick={() => goToPage(currentPage - 1)}
-                    disabled={currentPage <= 1}
-                    style={{ padding: "6px 10px" }}
-                  >
-                    <ChevronLeft size={16} />
-                  </button>
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum: number;
-                    if (totalPages <= 5) {
-                      pageNum = i + 1;
-                    } else if (currentPage <= 3) {
-                      pageNum = i + 1;
-                    } else if (currentPage >= totalPages - 2) {
-                      pageNum = totalPages - 4 + i;
-                    } else {
-                      pageNum = currentPage - 2 + i;
-                    }
+          </header>
+
+          <div style={{ padding: 12 }}>
+            {error ? (
+              <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
+                <strong>CI sync needs attention</strong>
+                <p>{error}</p>
+              </div>
+            ) : null}
+
+            {loading ? (
+              <div style={{ padding: 36, textAlign: "center", color: "var(--text-muted)" }}>
+                <span className="loading-spinner" style={{ marginInline: "auto", marginBottom: 8 }} />
+                <strong>Loading workflow runs</strong>
+                <p style={{ fontSize: 12 }}>Checking database for GitHub Actions webhook events.</p>
+              </div>
+            ) : runs.length ? (
+              <>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {runs.map((run) => {
+                    const env = getEnvironment(run);
+                    const hasFailed = run.conclusion && run.conclusion !== "success";
+                    const isSel = selected?.id === run.id;
                     return (
                       <button
-                        key={pageNum}
-                        className={`button ${currentPage === pageNum ? "primary" : "secondary"} compact`}
-                        onClick={() => goToPage(pageNum)}
-                        style={{ padding: "6px 12px", minWidth: 36 }}
+                        className={`card pr-row ${hasFailed ? "error-highlight" : ""}`}
+                        key={run.id}
+                        style={{
+                          textAlign: "left",
+                          cursor: "pointer",
+                          borderColor: isSel ? "var(--brand)" : hasFailed ? "var(--red)" : undefined,
+                          background: isSel ? "var(--panel-2)" : undefined,
+                          width: "100%"
+                        }}
+                        onClick={() => selectRun(run)}
                       >
-                        {pageNum}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <strong style={{ fontSize: 13.5 }}>{run.title}</strong>
+                            {env && (
+                              <span className={`status-pill ${envClass(env)}`} style={{ fontSize: 10, padding: "1px 5px" }}>
+                                {env}
+                              </span>
+                            )}
+                          </div>
+                          <span className={`status-pill ${statusClass(run)}`}>
+                            <span className="dot"></span>
+                            {run.conclusion ?? run.status}
+                          </span>
+                        </div>
+                        <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                          {run.repo ?? "GitHub"} · {run.branch}
+                          {run.prNumber ? ` · PR #${run.prNumber}` : ""}
+                          {run.updatedAt ? ` · ${new Date(run.updatedAt).toLocaleTimeString()}` : ""}
+                        </p>
+                        {hasFailed && (
+                          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, color: "var(--red)", fontSize: 11 }}>
+                            <XCircle size={10} />
+                            Failed — click to analyze logs
+                          </div>
+                        )}
                       </button>
                     );
                   })}
+                </div>
+
+                {/* Pagination Controls */}
+                {totalPages > 1 && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "12px 0", borderTop: "1px solid var(--line-muted)" }}>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      Showing {((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, totalRuns)} of {totalRuns}
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        className="btn subtle"
+                        onClick={() => goToPage(currentPage - 1)}
+                        disabled={currentPage <= 1}
+                        style={{ padding: "6px" }}
+                      >
+                        <ChevronLeft size={14} />
+                      </button>
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number;
+                        if (totalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i;
+                        } else {
+                          pageNum = currentPage - 2 + i;
+                        }
+                        return (
+                          <button
+                            key={pageNum}
+                            className={`btn ${currentPage === pageNum ? "primary" : "subtle"}`}
+                            onClick={() => goToPage(pageNum)}
+                            style={{ padding: "4px 10px", minWidth: 28, fontSize: 11 }}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                      <button
+                        className="btn subtle"
+                        onClick={() => goToPage(currentPage + 1)}
+                        disabled={currentPage >= totalPages}
+                        style={{ padding: "6px" }}
+                      >
+                        <ChevronRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
+                <strong>No CI runs received</strong>
+                <p style={{ fontSize: 12, marginTop: 4 }}>Configure the GitHub webhook for the connected repo.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <aside className="panel">
+          <header className="panel-head">
+            <h2>Workflow Details</h2>
+          </header>
+          <div style={{ padding: 16 }}>
+            {selected ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                  <div>
+                    <strong style={{ fontSize: 14 }}>{selected.title}</strong>
+                    <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                      {selected.repo ?? "GitHub"} · {selected.branch} · run #{selected.id}
+                    </p>
+                    {selected.prNumber ? (
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                        {selected.isReleasePromotionPr ? "Release PR" : "Generated from Draft PR"} #{selected.prNumber}
+                        {selected.specTitle ? ` · ${selected.specTitle}` : ""}
+                        {selected.specStatus ? ` · ${selected.specStatus}` : ""}
+                      </p>
+                    ) : (
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>Not linked to a ShipBrain Draft PR.</p>
+                    )}
+                  </div>
+                  <span className={`status-pill ${statusClass(selected)}`}>
+                    <span className="dot"></span>
+                    {selected.conclusion ?? selected.status}
+                  </span>
+                </div>
+
+                <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>{runSummary(selected)}</p>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+                  {selected.deploymentStatus === "develop_validated" && <span className="status-pill passed"><span className="dot"></span>Develop CI validated</span>}
+                  {selected.deploymentStatus === "approved" && <span className="status-pill passed"><span className="dot"></span>Production approved</span>}
+                  {selected.deploymentStatus === "rejected" && selectedHasRejectionAudit && <span className="status-pill danger"><span className="dot"></span>Deployment rejected</span>}
+                  {selected.releaseTag && <span className="status-pill passed"><span className="dot"></span>Release {selected.releaseTag}</span>}
+                  {selected.releaseStatus && (
+                    <span className={`status-pill ${selected.releaseStatus === "failed" ? "danger" : selected.releaseStatus === "deployed" ? "passed" : ""}`}>
+                      <span className="dot"></span>
+                      {selected.releaseStatus === "release_pr_open"
+                        ? "Release PR open"
+                        : selected.releaseStatus === "deploying"
+                          ? "Release in progress"
+                          : selected.releaseStatus === "deployed"
+                            ? "Production deployed"
+                            : selected.releaseStatus === "failed"
+                              ? "Release failed"
+                              : selected.releaseStatus}
+                    </span>
+                  )}
+                  {selected.isReleasePromotionPr && <span className="status-pill"><span className="dot"></span>Release gate</span>}
+                </div>
+
+                {selected.isIncidentHotfix && (
+                  <div className="success-panel" role="status" style={{ marginBottom: 12 }}>
+                    <strong>Linked incident hotfix</strong>
+                    <p style={{ margin: 0, fontSize: 12 }}>
+                      {selected.incidentTitle ?? "Incident fix"} · {selected.incidentStatus ?? "tracking"}
+                      {selected.incidentHotfixPrNumber ? ` · Hotfix PR #${selected.incidentHotfixPrNumber}` : ""}
+                    </p>
+                  </div>
+                )}
+
+                {selected.conclusion && selected.conclusion !== "success" && (
+                  <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <XCircle size={14} style={{ color: "var(--red)" }} />
+                      <strong style={{ color: "var(--red)", fontSize: 13 }}>Workflow Failed</strong>
+                      {getEnvironment(selected) && (
+                        <span className={`status-pill ${envClass(getEnvironment(selected))}`} style={{ marginLeft: "auto" }}>
+                          <span className="dot"></span>
+                          {getEnvironment(selected)}
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ fontSize: 12, margin: "0 0 6px" }}>
+                      Completed with: <code>{selected.conclusion}</code> {selected.workflowName ? ` (${selected.workflowName})` : ""}
+                    </p>
+                    <p style={{ fontSize: 11, color: "var(--text-muted)", margin: 0 }}>
+                      Click &ldquo;Explain run&rdquo; for AI analysis, or check raw logs below.
+                    </p>
+                  </div>
+                )}
+
+                <div className="code-view-container" style={{ position: "relative", marginBottom: 14 }}>
+                  <pre className="code-view mono" style={{
+                    maxHeight: 180,
+                    fontSize: 11.5,
+                    padding: 10,
+                    background: "var(--panel-2)",
+                    border: "1px solid var(--line)",
+                    borderColor: selected.conclusion && selected.conclusion !== "success" ? "var(--red)" : undefined
+                  }}>{selected.logs}</pre>
+                </div>
+
+                <label className="field-label" htmlFor="release-tag" style={{ fontSize: 11, color: "var(--text-muted)" }}>Release tag</label>
+                <input
+                  id="release-tag"
+                  className="input compact"
+                  value={releaseTag}
+                  onChange={(event) => setReleaseTag(event.target.value)}
+                  placeholder="cart-v2026.05.23-143015-a1b2"
+                  style={{ width: "100%", marginTop: 4, marginBottom: 14, fontSize: 12.5 }}
+                />
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  <button className="btn-primary" onClick={() => analyze(selected)} disabled={busy} style={{ flex: 1, justifyContent: "center" }}>
+                    {busy ? <Loader2 size={12} className="spin" /> : <SearchCode size={12} />}
+                    {busy ? "Analyzing..." : selected.conclusion === "success" ? "Review run with AI" : "Explain run"}
+                  </button>
                   <button
-                    className="button secondary compact"
-                    onClick={() => goToPage(currentPage + 1)}
-                    disabled={currentPage >= totalPages}
-                    style={{ padding: "6px 10px" }}
+                    className="btn subtle"
+                    disabled={(!selected.deploymentEligible && selected.releaseStatus !== "pending_deploy") || selected.isIncidentHotfix || deploymentBusy}
+                    onClick={() => setGateOpen(true)}
+                    style={{ flex: 1, justifyContent: "center" }}
                   >
-                    <ChevronRight size={16} />
+                    <Rocket size={12} />
+                    {selected.isIncidentHotfix
+                      ? "Incident-linked"
+                      : deploymentBusy
+                        ? "Recording..."
+                        : selected.releaseStatus === "pending_deploy"
+                          ? "Tag & deploy"
+                          : selected.isReleasePromotionPr
+                            ? "Merge, tag, deploy"
+                            : "Validate & audit"}
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                  {selected.htmlUrl && (
+                    <a className="btn subtle" href={selected.htmlUrl} target="_blank" rel="noreferrer" style={{ flex: 1, justifyContent: "center" }}>
+                      <ExternalLink size={12} />
+                      GitHub
+                    </a>
+                  )}
+                  {selected.deploymentUrl && (
+                    <a className="btn subtle" href={selected.deploymentUrl} target="_blank" rel="noreferrer" style={{ flex: 1, justifyContent: "center" }}>
+                      <ExternalLink size={12} />
+                      {selected.releasePrNumber ? `Release PR #${selected.releasePrNumber}` : "Deploy"}
+                    </a>
+                  )}
+                  {selected.releasePromotionPrUrl && (
+                    <a className="btn subtle" href={selected.releasePromotionPrUrl} target="_blank" rel="noreferrer" style={{ flex: 1, justifyContent: "center" }}>
+                      <ExternalLink size={12} />
+                      Release PR
+                    </a>
+                  )}
+                </div>
+
+                {selected.previewUrl || selected.previewStatus ? (
+                  <div className="info-callout" style={{ marginTop: 14 }}>
+                    <strong>Vercel Preview {selected.previewStatus === "deploying" ? "deploying" : selected.previewUrl ? "ready" : "pending"}</strong>
+                    <p style={{ margin: "4px 0" }}>
+                      {selected.previewUrl ? <>URL <a href={selected.previewUrl} target="_blank" rel="noreferrer">{selected.previewUrl}</a></> : "ShipBrain started the develop preview deploy. The URL will appear here after GitHub Actions reports it."}
+                      {selected.previewBranchAlias ? <> · Branch alias <a href={selected.previewBranchAlias.startsWith("http") ? selected.previewBranchAlias : `https://${selected.previewBranchAlias}`} target="_blank" rel="noreferrer">{selected.previewBranchAlias}</a></> : null}
+                    </p>
+                    <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 11 }}>Uses Vercel Preview environment variables.</p>
+                  </div>
+                ) : null}
+
+                {deploymentMessage && (
+                  <div className="success-panel" role="status" style={{ marginTop: 14 }}>
+                    <strong>Deployment gate updated</strong>
+                    <p style={{ margin: 0 }}>{deploymentMessage}</p>
+                  </div>
+                )}
+                {deploymentError && (
+                  <div className="error-panel" role="alert" style={{ marginTop: 14 }}>
+                    <strong>Deployment gate needs attention</strong>
+                    <p style={{ margin: 0 }}>{deploymentError}</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
+                <strong>Select a workflow run</strong>
+                <p style={{ fontSize: 12, marginTop: 4 }}>Click any run to inspect details, check GitHub status, and see AI insights.</p>
+              </div>
+            )}
+
+            {analysis && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 16, borderTop: "1px solid var(--line-muted)", paddingTop: 16 }}>
+                <div className="card" style={{ padding: 12 }}>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                    <span className={`status-pill ${analysis.severity === "high" ? "danger" : ""}`}>{analysis.severity}</span>
+                    {analysis.errorType && <span className="status-pill">{analysis.errorType}</span>}
+                    {analysis.isFlaky && <span className="status-pill"><span className="dot"></span>flaky</span>}
+                  </div>
+                  <strong style={{ fontSize: 13, display: "block" }}>AI Summary</strong>
+                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>{analysis.summary}</p>
+
+                  <strong style={{ fontSize: 13, display: "block" }}>Root Cause</strong>
+                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px", whiteSpace: "pre-wrap" }}>{analysis.rootCause}</p>
+
+                  {analysis.affectedFiles?.length ? (
+                    <>
+                      <strong style={{ fontSize: 13, display: "block" }}>Affected Files</strong>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12 }}>
+                        {analysis.affectedFiles.map((file, i) => (
+                          <li key={i}><code className="mono" style={{ fontSize: 11 }}>{file}</code></li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : null}
+                </div>
+
+                <div className="card" style={{ padding: 12 }}>
+                  <strong style={{ fontSize: 13, display: "block" }}>Fix Suggestion</strong>
+                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px", whiteSpace: "pre-wrap" }}>{analysis.fixSuggestion}</p>
+                  <button className="btn subtle" onClick={() => navigator.clipboard.writeText(analysis.fixSuggestion)}>
+                    <Copy size={12} style={{ marginRight: 4 }} />
+                    Copy fix code
                   </button>
                 </div>
               </div>
             )}
-            </>
-          ) : (
-            <div className="empty-state">
-              <strong>No CI runs received</strong>
-              <p>Configure the GitHub webhook for the connected repo. ShipBrain will show workflow runs here as soon as GitHub sends events.</p>
-            </div>
-          )}
-        </div>
-
-        <aside className="panel">
-          <h2>Workflow Details</h2>
-          {selected ? (
-            <>
-              <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                  <strong>{selected.title}</strong>
-                  <p style={{ marginBottom: 0 }}>{selected.repo ?? "GitHub"} · {selected.branch} · run #{selected.id}</p>
-                  {selected.prNumber ? (
-                    <p style={{ marginBottom: 0 }}>
-                      {selected.isReleasePromotionPr ? "Release PR" : "Generated from Draft PR"} #{selected.prNumber}{selected.specTitle ? ` · ${selected.specTitle}` : ""}{selected.specStatus ? ` · ${selected.specStatus}` : ""}
-                    </p>
-                  ) : (
-                    <p style={{ marginBottom: 0 }}>Not linked to a ShipBrain-generated Draft PR yet.</p>
-                  )}
-                </div>
-                <span className={`status ${statusClass(selected)}`}>
-                  {statusIcon(selected)}
-                  {selected.conclusion ?? selected.status}
-                </span>
-              </div>
-              <p style={{ marginTop: 12 }}>{runSummary(selected)}</p>
-              {selected.deploymentStatus === "develop_validated" ? <span className="status green">Develop CI validated</span> : null}
-              {selected.deploymentStatus === "approved" ? <span className="status green">Production approval recorded</span> : null}
-              {selected.deploymentStatus === "rejected" && selectedHasRejectionAudit ? <span className="status red">Deployment rejected</span> : null}
-              {selected.releaseTag ? <span className="status green" style={{ marginLeft: 8 }}>Release {selected.releaseTag}</span> : null}
-              {selected.releaseStatus ? (
-                <span className={`status ${selected.releaseStatus === "failed" ? "red" : selected.releaseStatus === "deployed" ? "green" : "amber"}`} style={{ marginLeft: 8 }}>
-                  {selected.releaseStatus === "release_pr_open"
-                    ? "Release PR open"
-                    : selected.releaseStatus === "deploying"
-                      ? "Release in progress"
-                      : selected.releaseStatus === "deployed"
-                        ? "Production deployed"
-                        : selected.releaseStatus === "failed"
-                          ? "Release failed"
-                          : selected.releaseStatus}
-                </span>
-              ) : null}
-              {selected.isReleasePromotionPr ? <span className="status amber" style={{ marginLeft: 8 }}>Release gate</span> : null}
-              {selected.isIncidentHotfix ? (
-                <div className="success-panel" role="status">
-                  <strong>Linked incident hotfix</strong>
-                  <p>
-                    {selected.incidentTitle ?? "Incident fix"} · {selected.incidentStatus ?? "tracking"}
-                    {selected.incidentHotfixPrNumber ? ` · Hotfix PR #${selected.incidentHotfixPrNumber}` : ""}
-                  </p>
-                </div>
-              ) : null}
-              {selected.conclusion && selected.conclusion !== "success" ? (
-                <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                    <XCircle size={18} style={{ color: "var(--error)" }} />
-                    <strong style={{ color: "var(--error)" }}>Workflow Failed</strong>
-                    {getEnvironment(selected) && (
-                      <span className={`status ${envClass(getEnvironment(selected))}`} style={{ marginLeft: "auto" }}>
-                        {getEnvironment(selected)}
-                      </span>
-                    )}
-                  </div>
-                  <p style={{ marginBottom: 8 }}>
-                    This workflow completed with conclusion: <code>{selected.conclusion}</code>
-                    {selected.workflowName ? ` (${selected.workflowName})` : ""}
-                  </p>
-                  <p style={{ fontSize: 12, marginBottom: 0 }}>
-                    Click &ldquo;Explain run&rdquo; for AI-powered analysis of the failure, or check the logs below for error details.
-                  </p>
-                </div>
-              ) : null}
-              <pre className="code-view" style={{ maxHeight: 160, borderColor: selected.conclusion && selected.conclusion !== "success" ? "var(--error)" : undefined }}>{selected.logs}</pre>
-              <label className="field-label" htmlFor="release-tag">Release tag</label>
-              <input
-                id="release-tag"
-                className="input"
-                value={releaseTag}
-                onChange={(event) => setReleaseTag(event.target.value)}
-                placeholder="cart-v2026.05.23-143015-a1b2"
-              />
-              <div className="toolbar" style={{ marginTop: 14 }}>
-                <button className="button primary" onClick={() => analyze(selected)} disabled={busy}>
-                  <SearchCode size={16} />
-                  {busy ? "Analyzing..." : selected.conclusion === "success" ? "Review run with AI" : "Explain run"}
-                </button>
-                <button
-                  className="button secondary"
-                  disabled={(!selected.deploymentEligible && selected.releaseStatus !== "pending_deploy") || selected.isIncidentHotfix || deploymentBusy}
-                  onClick={() => setGateOpen(true)}
-                >
-                  <Rocket size={16} />
-                  {selected.isIncidentHotfix
-                    ? "Incident-linked"
-                    : deploymentBusy
-                      ? "Recording..."
-                      : selected.releaseStatus === "pending_deploy"
-                        ? "Tag & deploy"
-                        : selected.isReleasePromotionPr
-                          ? "Merge, tag, deploy"
-                          : "Validate & audit"}
-                </button>
-                {selected.htmlUrl ? (
-                  <a className="button secondary" href={selected.htmlUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink size={16} />
-                    Open in GitHub
-                  </a>
-                ) : null}
-                {selected.deploymentUrl ? (
-                  <a className="button secondary" href={selected.deploymentUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink size={16} />
-                    {selected.releasePrNumber ? `Release PR #${selected.releasePrNumber}` : "Deploy workflow"}
-                  </a>
-                ) : null}
-                {selected.releasePromotionPrUrl ? (
-                  <a className="button secondary" href={selected.releasePromotionPrUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink size={16} />
-                    Release PR #{selected.releasePromotionPrNumber}
-                  </a>
-                ) : null}
-                {selected.incidentHotfixPrUrl ? (
-                  <a className="button secondary" href={selected.incidentHotfixPrUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink size={16} />
-                    Incident hotfix PR
-                  </a>
-                ) : null}
-              </div>
-              {selected.previewUrl || selected.previewStatus ? (
-                <div className="info-callout" style={{ marginTop: 14 }}>
-                  <strong>Vercel Preview {selected.previewStatus === "deploying" ? "deploying" : selected.previewUrl ? "ready" : "pending"}</strong>
-                  <p>
-                    {selected.previewUrl ? <>URL <a href={selected.previewUrl} target="_blank" rel="noreferrer">{selected.previewUrl}</a></> : "ShipBrain started the develop preview deploy. The URL will appear here after GitHub Actions reports it."}
-                    {selected.previewBranchAlias ? <> · Branch alias <a href={selected.previewBranchAlias.startsWith("http") ? selected.previewBranchAlias : `https://${selected.previewBranchAlias}`} target="_blank" rel="noreferrer">{selected.previewBranchAlias}</a></> : null}
-                  </p>
-                  <p>Uses Vercel Preview environment variables. Production variables are not used here.</p>
-                </div>
-              ) : null}
-              {deploymentMessage ? (
-                <div className="success-panel" role="status">
-                  <strong>Deployment gate updated</strong>
-                  <p>{deploymentMessage}</p>
-                </div>
-              ) : null}
-              {deploymentError ? (
-                <div className="error-panel" role="alert">
-                  <strong>Deployment gate needs attention</strong>
-                  <p>{deploymentError}</p>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="empty-state">
-              <strong>Select a workflow run</strong>
-              <p>Click any run to inspect its GitHub status, branch, event details, and AI analysis options.</p>
-            </div>
-          )}
-          {analysis ? (
-            <div className="split-list" style={{ marginTop: 16 }}>
-              <div className="card">
-                <div className="toolbar" style={{ gap: 8, marginBottom: 10 }}>
-                  <span className={`status ${analysis.severity === "high" ? "red" : analysis.severity === "medium" ? "amber" : "green"}`}>{analysis.severity}</span>
-                  {analysis.errorType ? <span className="status amber">{analysis.errorType}</span> : null}
-                  {analysis.isFlaky ? <span className="status amber">flaky</span> : null}
-                </div>
-                <h3>Summary</h3>
-                <p>{analysis.summary}</p>
-                <h3>Root cause</h3>
-                <p style={{ whiteSpace: "pre-wrap" }}>{analysis.rootCause}</p>
-                {analysis.affectedFiles?.length ? (
-                  <>
-                    <h3>Affected files</h3>
-                    <ul style={{ margin: 0, paddingLeft: 20 }}>
-                      {analysis.affectedFiles.map((file, i) => (
-                        <li key={i}><code style={{ fontSize: 12 }}>{file}</code></li>
-                      ))}
-                    </ul>
-                  </>
-                ) : null}
-              </div>
-              <div className="card">
-                <h3>Fix suggestion</h3>
-                <p style={{ whiteSpace: "pre-wrap" }}>{analysis.fixSuggestion}</p>
-                <button className="button secondary" onClick={() => navigator.clipboard.writeText(analysis.fixSuggestion)}>
-                  <Copy size={16} />
-                  Copy fix
-                </button>
-              </div>
-            </div>
-          ) : null}
+          </div>
         </aside>
       </section>
 

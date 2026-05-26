@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/vercel/client";
+import { getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/cloudflare/client";
 
 export const runtime = "nodejs";
 
@@ -98,27 +98,29 @@ export async function GET() {
             resolvedPreviewStage = "awaiting_preview";
           } else if (matchRun.status === "completed") {
             if (matchRun.conclusion === "success") {
-              // Run succeeded — mark deployed and attempt to get preview URL from Vercel
+              // Run succeeded — mark deployed and attempt to get preview URL from Cloudflare
               const updateData: Record<string, any> = {
                 preview_status: "deployed",
                 updated_at: new Date().toISOString()
               };
 
               try {
-                // Get Vercel project ID from repo record
+                // Get Cloudflare credentials from repo record
                 const { data: repoRecord } = await supabase
                   .from("repos")
                   .select("setup_metadata")
                   .eq("full_name", spec.repo_full_name)
                   .single();
 
-                const vercelProjectId = (repoRecord?.setup_metadata as any)?.vercelProjectId;
-                const vercelToken = process.env.VERCEL_TOKEN;
+                const cloudflareProjectName = (repoRecord?.setup_metadata as any)?.cloudflareProjectName;
+                const cloudflareAccountId = (repoRecord?.setup_metadata as any)?.cloudflareAccountId;
+                const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN;
 
-                if (vercelToken && vercelProjectId && spec.merge_sha) {
+                if (cloudflareApiToken && cloudflareAccountId && cloudflareProjectName && spec.merge_sha) {
                   const previewUrl = await getPreviewUrlForSha({
-                    vercelToken,
-                    projectId: vercelProjectId,
+                    apiToken: cloudflareApiToken,
+                    accountId: cloudflareAccountId,
+                    projectName: cloudflareProjectName,
                     sha: spec.merge_sha
                   });
                   if (previewUrl) {
@@ -184,7 +186,7 @@ export async function GET() {
         const { owner, repo } = splitRepo(spec.repo_full_name);
 
         // Try multiple workflow names for backwards compatibility
-        const workflowNames = ["shipbrain-production.yml", "shipbrain-deploy.yml", "shipbrain-vercel-prod.yml"];
+        const workflowNames = ["shipbrain-production.yml", "shipbrain-deploy.yml"];
         let deployRun: any = null;
 
         // The production workflow is dispatched with ref=releaseTag, so head_branch === releaseTag.
@@ -220,23 +222,25 @@ export async function GET() {
             updated_at: new Date().toISOString()
           };
 
-          // Fetch actual production URL from Vercel if deployed successfully
+          // Fetch actual production URL from Cloudflare if deployed successfully
           if (newStatus === "deployed") {
             try {
-              // Get Vercel project ID from repo record
+              // Get Cloudflare credentials from repo record
               const { data: repoRecord } = await supabase
                 .from("repos")
                 .select("setup_metadata")
                 .eq("full_name", spec.repo_full_name)
                 .single();
 
-              const vercelProjectId = (repoRecord?.setup_metadata as any)?.vercelProjectId;
-              const vercelToken = process.env.VERCEL_TOKEN;
+              const cloudflareProjectName = (repoRecord?.setup_metadata as any)?.cloudflareProjectName;
+              const cloudflareAccountId = (repoRecord?.setup_metadata as any)?.cloudflareAccountId;
+              const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN;
 
-              if (vercelToken && vercelProjectId) {
+              if (cloudflareApiToken && cloudflareAccountId && cloudflareProjectName) {
                 const productionUrl = await getLatestProductionUrl({
-                  vercelToken,
-                  projectId: vercelProjectId
+                  apiToken: cloudflareApiToken,
+                  accountId: cloudflareAccountId,
+                  projectName: cloudflareProjectName
                 });
                 if (productionUrl) {
                   updateData.production_url = productionUrl;

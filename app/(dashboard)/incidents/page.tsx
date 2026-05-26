@@ -408,7 +408,7 @@ export default function IncidentsPage() {
           ? `Hotfix PR #${json.incident.hotfixPrNumber} merged, release ${json.releaseTag} tagged, and production deployment was dispatched.${reverseSyncMsg}`
           : `Hotfix PR #${json.incident.hotfixPrNumber} merged, but production deployment dispatch needs attention: ${json.deploymentError ?? "unknown deployment error"}${reverseSyncMsg}`
       );
-          } catch (nextError) {
+    } catch (nextError) {
       setGateOpen(false);
       setError(nextError instanceof Error ? nextError.message : "Unable to approve and merge incident hotfix");
     } finally {
@@ -440,554 +440,579 @@ export default function IncidentsPage() {
 
   return (
     <>
-      <div className="page-header">
+      <header className="page-head">
         <div>
-          <div className="eyebrow">Pillar 3</div>
-          <h1>Incident Commander</h1>
-          <p>Capture alerts, analyze logs, approve fixes, and produce post-mortems with standard sections.</p>
+          <div className="eyebrow mono">
+            <span className="bar"></span>
+            <span className="pillar-tag">Pillar 03</span>
+            Incident Commander
+          </div>
+          <h1>Capture alerts, analyze logs, and dispatch automated hotfixes.</h1>
+          <div className="sub">
+            Plain-English diagnostic trace summaries, automated post-mortem document drafting, and main-to-develop reverse sync gating.
+          </div>
         </div>
-        <button className="button primary" onClick={() => setManualOpen(true)}>
-          <ClipboardPlus size={16} />
-          Report incident
-        </button>
-      </div>
+        <div className="toolbar-right">
+          <button className="btn-primary" onClick={() => setManualOpen(true)}>
+            <ClipboardPlus size={14} style={{ marginRight: 4 }} />
+            Report Incident
+          </button>
+        </div>
+      </header>
 
       <section className="grid two">
         <div className="panel">
-          <div className="card" style={{ marginBottom: 14 }}>
-            <div className="eyebrow">ShipBrain Incident Management</div>
-            <h3>Automatic incident detection</h3>
-            <p>
-              ShipBrain automatically creates incidents when GitHub Actions workflows fail. The workflow files include the ShipBrain webhook for incident alerting.
+          <div className="card" style={{ marginBottom: 16, padding: 14 }}>
+            <span className="eyebrow mono" style={{ display: "block", marginBottom: 6, fontSize: 10 }}>Automated Intake webhook</span>
+            <strong style={{ fontSize: 13.5, display: "block" }}>Automatic alert ingestion integration</strong>
+            <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>
+              ShipBrain automatically creates incidents when GitHub Actions workflows fail. You can also integrate custom alerting triggers.
             </p>
-            <pre className="code-view" style={{ maxHeight: 180 }}>{`Incident webhook (for custom integrations):
-POST /api/webhooks/incidents
+            <pre className="code-view mono" style={{ fontSize: 11, padding: 10, background: "var(--panel-2)", border: "1px solid var(--line)" }}>{`POST /api/webhooks/incidents
 Authorization: Bearer <SHIPBRAIN_API_KEY>
 
-Payload:
 {
   "source": "custom",
   "repo": "owner/repo",
   "title": "Incident title",
   "severity": "high",
-  "service": "checkout",
-  "environment": "production",
   "logs": "Error details..."
-}
-
-Incident lifecycle:
-open -> investigating -> resolved/rejected
-
-GitHub workflow incidents are auto-created on failure
-and auto-resolved when the workflow succeeds.`}</pre>
+}`}</pre>
           </div>
-          <h2>Incident Feed</h2>
-          {error ? (
-            <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
-              <strong>Incident simulation needs attention</strong>
-              <p>{error}</p>
-            </div>
-          ) : null}
-          {loading ? (
-            <div className="loading-state" role="status">
-              <span className="loading-spinner" aria-hidden="true" />
-              <strong>Loading incidents</strong>
-              <p>Checking saved simulated incident records.</p>
-            </div>
-          ) : incidents.length ? (
-            <div className="split-list">
-              {incidents.map((incident) => (
-              <button
-                className={`card incident-card ${incident.status}`}
-                key={incident.id}
-                style={{ textAlign: "left", cursor: "pointer" }}
-                onClick={() => {
-                  setSelected(incident);
-                  setAnalysis(restoreIncidentAnalysis(incident));
-                  setPostmortem(incident.postmortem ?? "");
-                  setHotfixBaseBranch(incident.hotfixBaseBranch ?? "develop");
-                  setActionMessage("");
-                  setError("");
-                  setAnalyzing(false);
-                  setAnalysisProgress(0);
-                }}
-              >
-                <div className="incident-card-header">
-                  <strong className="incident-card-title">{incident.title}</strong>
-                  <span className={`status ${
-                    incident.status === "resolved" ? "green" :
-                    incident.status === "rejected" ? "" :
-                    incident.status === "investigating" ? "amber" :
-                    "red"
-                  }`}>
-                    {incident.status}
-                  </span>
-                </div>
-                <div className="incident-card-meta">
-                  <span>{incident.service ?? "service"}</span>
-                  <span>{incident.environment ?? "sandbox"}</span>
-                  <span>{incident.severity ?? "medium"}</span>
-                </div>
-                <p className="incident-card-summary">{summarizeIncidentLogs(incident.logs)}</p>
-                <div className="incident-card-footer">
-                  <div className="toolbar">
-                    {incident.releaseVersion ? <span className="status green">release {incident.releaseVersion}</span> : null}
-                    {incident.source === "github-workflow" ? <span className="status amber">GitHub</span> : null}
-                    {incident.acknowledgedAt && incident.status === "investigating" ? (
-                      <span className="status amber">Investigating</span>
-                    ) : null}
-                    {incident.reverseSyncPrStatus === "merged" ? (
-                      <span className="status green">Synced</span>
-                    ) : incident.reverseSyncPrNumber ? (
-                      <span className="status amber">Sync pending</span>
-                    ) : null}
-                  </div>
-                  <span className="muted-link">View details</span>
-                </div>
-              </button>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state">
-              <strong>No incidents yet</strong>
-              <p>Create a manual incident from logs, or connect a production alert webhook when you are ready to automate intake.</p>
-            </div>
-          )}
+
+          <header className="panel-head">
+            <h2>
+              Incident Feed
+              <span className="badge-count">{incidents.length} logs</span>
+            </h2>
+          </header>
+
+          <div style={{ padding: 12 }}>
+            {error ? (
+              <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
+                <strong>Intake error details</strong>
+                <p>{error}</p>
+              </div>
+            ) : null}
+
+            {loading ? (
+              <div style={{ padding: 36, textAlign: "center", color: "var(--text-muted)" }}>
+                <span className="loading-spinner" style={{ marginInline: "auto", marginBottom: 8 }} />
+                <strong>Loading incidents</strong>
+                <p style={{ fontSize: 12 }}>Checking database records...</p>
+              </div>
+            ) : incidents.length ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {incidents.map((incident) => {
+                  const isSel = selected?.id === incident.id;
+                  const isResol = incident.status === "resolved";
+                  const isRejec = incident.status === "rejected";
+                  const isInvest = incident.status === "investigating";
+                  const isCrit = incident.severity === "critical" || incident.severity === "high";
+
+                  return (
+                    <button
+                      className={`card pr-row ${isSel ? "selected" : ""}`}
+                      key={incident.id}
+                      style={{
+                        textAlign: "left",
+                        cursor: "pointer",
+                        width: "100%",
+                        borderColor: isSel ? "var(--brand)" : undefined,
+                        background: isSel ? "var(--panel-2)" : undefined
+                      }}
+                      onClick={() => {
+                        setSelected(incident);
+                        setAnalysis(restoreIncidentAnalysis(incident));
+                        setPostmortem(incident.postmortem ?? "");
+                        setHotfixBaseBranch(incident.hotfixBaseBranch ?? "develop");
+                        setActionMessage("");
+                        setError("");
+                        setAnalyzing(false);
+                        setAnalysisProgress(0);
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <strong style={{ fontSize: 13.5 }}>{incident.title}</strong>
+                        <span className={`status-pill ${isResol ? "passed" : isRejec ? "" : isInvest ? "" : "danger"}`}>
+                          <span className="dot"></span>
+                          {incident.status}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, margin: "4px 0 6px", fontSize: 11, color: "var(--text-muted)" }}>
+                        <span>service: {incident.service ?? "unknown"}</span>
+                        <span>·</span>
+                        <span>env: {incident.environment ?? "production"}</span>
+                        <span>·</span>
+                        <span style={{ color: isCrit ? "var(--red)" : undefined }}>severity: {incident.severity ?? "medium"}</span>
+                      </div>
+                      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {summarizeIncidentLogs(incident.logs)}
+                      </p>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {incident.releaseVersion && <span className="status-pill passed" style={{ fontSize: 10 }}>release {incident.releaseVersion}</span>}
+                          {incident.source === "github-workflow" && <span className="status-pill" style={{ fontSize: 10 }}>GitHub</span>}
+                          {incident.reverseSyncPrStatus === "merged" ? (
+                            <span className="status-pill passed" style={{ fontSize: 10 }}>Synced</span>
+                          ) : incident.reverseSyncPrNumber ? (
+                            <span className="status-pill" style={{ fontSize: 10 }}>Sync pending</span>
+                          ) : null}
+                        </div>
+                        <span className="text-link" style={{ fontSize: 11 }}>View details</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
+                <strong>No incidents reported yet</strong>
+                <p style={{ fontSize: 12, marginTop: 4 }}>Simulate or report an incident above to get started.</p>
+              </div>
+            )}
+          </div>
         </div>
 
         <aside className="panel">
-          {selected ? (
-            <>
-              <h2>{selected.title}</h2>
-              <div className="toolbar" style={{ marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
-                <span className="status amber">{selected.source}</span>
-                {selected.severity ? <span className={`status ${selected.severity === "critical" || selected.severity === "high" ? "red" : "amber"}`}>{selected.severity}</span> : null}
-                {selected.repo ? <span className="status green">{selected.repo}</span> : null}
-                {selected.releaseVersion ? <span className="status green">release {selected.releaseVersion}</span> : null}
-                {selected.externalId ? <code style={{ fontSize: 11, padding: "2px 6px", background: "var(--surface-elevated)", borderRadius: 4 }}>{selected.externalId}</code> : null}
-              </div>
-
-              {/* Incident Status Actions */}
-              {selected.status === "open" ? (
-                <div className="card" style={{ marginBottom: 14, background: "var(--surface-warning)", border: "1px solid var(--border-warning)" }}>
-                  <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <strong style={{ color: "var(--text-warning)" }}>Incident Open</strong>
-                      <p style={{ marginBottom: 0, fontSize: 13 }}>Acknowledge to start investigating, or reject if not actionable.</p>
-                    </div>
-                    <div className="toolbar" style={{ gap: 8 }}>
-                      <button className="button primary compact" onClick={acknowledgeIncident} disabled={statusBusy}>
-                        <Search size={14} />
-                        {statusBusy ? "..." : "Acknowledge"}
-                      </button>
-                      <button className="button secondary compact" onClick={() => setRejectModalOpen(true)} disabled={statusBusy}>
-                        <XCircle size={14} />
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : selected.status === "investigating" ? (
-                <div className="card" style={{ marginBottom: 14, background: "var(--surface-elevated)", border: "1px solid var(--accent)" }}>
-                  <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <strong style={{ color: "var(--accent)" }}>Investigating</strong>
-                      <p style={{ marginBottom: 0, fontSize: 13 }}>
-                        Acknowledged by {selected.acknowledgedBy ?? "user"} at {selected.acknowledgedAt ? new Date(selected.acknowledgedAt).toLocaleString() : "unknown"}
-                      </p>
-                    </div>
-                    <div className="toolbar" style={{ gap: 8 }}>
-                      <button className="button primary compact" onClick={() => setResolveModalOpen(true)} disabled={statusBusy}>
-                        <CheckCircle2 size={14} />
-                        Resolve
-                      </button>
-                      <button className="button secondary compact" onClick={() => setRejectModalOpen(true)} disabled={statusBusy}>
-                        <XCircle size={14} />
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : selected.status === "resolved" ? (
-                <div className="card" style={{ marginBottom: 14, background: "var(--surface-success)", border: "1px solid var(--border-success)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <CheckCircle2 size={18} style={{ color: "var(--text-success)" }} />
-                    <div>
-                      <strong style={{ color: "var(--text-success)" }}>Resolved</strong>
-                      <p style={{ marginBottom: 0, fontSize: 13 }}>
-                        {selected.resolutionNote ?? "No resolution note"}
-                        {selected.resolvedAt ? ` - ${new Date(selected.resolvedAt).toLocaleString()}` : ""}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ) : selected.status === "rejected" ? (
-                <div className="card" style={{ marginBottom: 14, background: "var(--surface)", border: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <XCircle size={18} style={{ color: "var(--text-muted)" }} />
-                    <div>
-                      <strong style={{ color: "var(--text-muted)" }}>Rejected</strong>
-                      <p style={{ marginBottom: 0, fontSize: 13 }}>
-                        {selected.rejectionReason ?? "Not actionable"}
-                        {selected.rejectedAt ? ` - ${new Date(selected.rejectedAt).toLocaleString()}` : ""}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              {actionMessage ? (
-                <div className="success-panel" role="status" style={{ marginBottom: 12 }}>
-                  <strong>Incident updated</strong>
-                  <p>{actionMessage}</p>
-                </div>
-              ) : null}
-                            <pre className="code-view" style={{ maxHeight: 160 }}>{selected.logs}</pre>
-              <div className="toolbar" style={{ marginTop: 14 }}>
-                <button className="button primary" disabled={analyzing} onClick={analyze}>
-                  <Wand2 size={16} />
-                  {analyzing ? "Analyzing..." : "Analyze with AI"}
-                </button>
-                <button className="button secondary" disabled={!analysis || analyzing || !selected.hotfixPrNumber || hotfixBusy} onClick={openApprovalGate}>
-                  <ShieldCheck size={16} />
-                  {hotfixBusy ? "Refreshing..." : "Approve fix"}
-                </button>
-                <button className="button secondary" disabled={!analysis || analyzing} onClick={generatePostmortem}>
-                  <Download size={16} />
-                  Generate post-mortem
-                </button>
-              </div>
-              {analysis || selected.hotfixPrNumber ? (
-                <div className="hotfix-panel">
-                  <div>
-                    <div className="eyebrow">Incident hotfix workflow</div>
-                    <strong>
-                      {selected.hotfixPrNumber
-                        ? `Draft PR #${selected.hotfixPrNumber} tracks the fix`
-                        : "Create a Draft PR for the incident fix"}
-                    </strong>
-                    <p>
-                      {selected.hotfixPrNumber
-                        ? "Developer commits should land on this hotfix branch. ShipBrain will show those commits before manager approval."
-                        : "ShipBrain will open a hotfix branch with the AI analysis and handoff notes, then wait for developer fix commits."}
-                    </p>
-                  </div>
-                  {!selected.hotfixPrNumber ? (
-                    <label className="field-label" style={{ marginTop: 0 }}>
-                      Destination branch
-                      <input
-                        className="input"
-                        value={hotfixBaseBranch}
-                        onChange={(event) => setHotfixBaseBranch(event.target.value)}
-                        placeholder="develop"
-                        style={{ marginTop: 6 }}
-                      />
-                    </label>
-                  ) : (
-                    <div className="commit-context" style={{ margin: 0 }}>
-                      <div>
-                        <span className="eyebrow">Hotfix branch</span>
-                        <strong>{selected.hotfixBranch}</strong>
-                      </div>
-                      <div>
-                        <span className="eyebrow">Destination</span>
-                        <strong>{selected.hotfixBaseBranch ?? "develop"}</strong>
-                      </div>
-                    </div>
+          <header className="panel-head">
+            <h2>Incident Workspace</h2>
+          </header>
+          <div style={{ padding: 16 }}>
+            {selected ? (
+              <>
+                <h2 style={{ fontSize: 15, fontWeight: 600 }}>{selected.title}</h2>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "8px 0 12px" }}>
+                  <span className="status-pill"><span className="dot"></span>{selected.source}</span>
+                  {selected.severity && (
+                    <span className={`status-pill ${selected.severity === "critical" || selected.severity === "high" ? "danger" : ""}`}>
+                      <span className="dot"></span>
+                      {selected.severity}
+                    </span>
                   )}
-                  <div className="toolbar">
-                    {selected.hotfixPrUrl ? (
-                      <a className="button secondary compact" href={selected.hotfixPrUrl} target="_blank" rel="noreferrer">
-                        <GitPullRequest size={15} />
-                        PR #{selected.hotfixPrNumber}
-                        <ExternalLink size={14} />
-                      </a>
-                    ) : null}
-                    <button className="button primary compact" disabled={!analysis || hotfixBusy || Boolean(selected.hotfixPrNumber) || !hotfixBaseBranch.trim()} onClick={createHotfixDraftPr}>
-                      <GitPullRequest size={15} />
-                      {hotfixBusy ? "Working..." : "Create hotfix Draft PR"}
-                    </button>
-                  </div>
+                  {selected.repo && <span className="status-pill passed"><span className="dot"></span>{selected.repo}</span>}
+                  {selected.releaseVersion && <span className="status-pill passed"><span className="dot"></span>release {selected.releaseVersion}</span>}
+                  {selected.externalId && <span className="status-pill mono">{selected.externalId}</span>}
                 </div>
-              ) : null}
-              {selected.reverseSyncPrNumber ? (
-                <div className="reverse-sync-panel" style={{ marginTop: 16, padding: 16, background: "var(--surface-elevated)", borderRadius: 8, border: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                    <ArrowLeftRight size={18} style={{ color: "var(--accent)" }} />
-                    <div className="eyebrow" style={{ margin: 0 }}>Branch sync</div>
-                    {selected.reverseSyncPrStatus === "merged" ? (
-                      <span className="status green" style={{ marginLeft: "auto" }}>
-                        <CheckCircle2 size={12} /> Synced
-                      </span>
+
+                {/* Incident Status Card Alerts */}
+                {selected.status === "open" ? (
+                  <div className="card" style={{ marginBottom: 14, padding: 12, borderColor: "var(--yellow)", background: "rgba(210, 153, 34, 0.04)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <strong style={{ color: "var(--yellow)", fontSize: 13.5 }}>Incident Open</strong>
+                        <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>Acknowledge to start investigating, or reject.</p>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button className="btn-primary" onClick={acknowledgeIncident} disabled={statusBusy} style={{ height: 28 }}>
+                          <Search size={12} />
+                          Acknowledge
+                        </button>
+                        <button className="btn subtle" onClick={() => setRejectModalOpen(true)} disabled={statusBusy} style={{ height: 28 }}>
+                          <XCircle size={12} />
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : selected.status === "investigating" ? (
+                  <div className="card" style={{ marginBottom: 14, padding: 12, borderColor: "var(--brand)", background: "rgba(163, 113, 247, 0.04)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <strong style={{ color: "var(--brand)", fontSize: 13.5 }}>Investigating Incident</strong>
+                        <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                          Assigned to {selected.acknowledgedBy ?? "operator"} at {selected.acknowledgedAt ? new Date(selected.acknowledgedAt).toLocaleTimeString() : "unknown"}
+                        </p>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button className="btn-primary" onClick={() => setResolveModalOpen(true)} disabled={statusBusy} style={{ height: 28 }}>
+                          <CheckCircle2 size={12} />
+                          Resolve
+                        </button>
+                        <button className="btn subtle" onClick={() => setRejectModalOpen(true)} disabled={statusBusy} style={{ height: 28 }}>
+                          <XCircle size={12} />
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : selected.status === "resolved" ? (
+                  <div className="card" style={{ marginBottom: 14, padding: 12, borderColor: "var(--green)", background: "rgba(63, 185, 80, 0.04)" }}>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <CheckCircle2 size={16} style={{ color: "var(--green)", marginTop: 2 }} />
+                      <div>
+                        <strong style={{ color: "var(--green)", fontSize: 13.5 }}>Resolved successfully</strong>
+                        <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                          {selected.resolutionNote ?? "Closed"} · {selected.resolvedAt ? new Date(selected.resolvedAt).toLocaleString() : ""}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : selected.status === "rejected" ? (
+                  <div className="card" style={{ marginBottom: 14, padding: 12 }}>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <XCircle size={16} style={{ color: "var(--text-muted)", marginTop: 2 }} />
+                      <div>
+                        <strong style={{ fontSize: 13.5 }}>Incident Rejected</strong>
+                        <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                          Reason: {selected.rejectionReason ?? "not actionable"} · {selected.rejectedAt ? new Date(selected.rejectedAt).toLocaleTimeString() : ""}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {actionMessage ? (
+                  <div className="success-panel" role="status" style={{ marginBottom: 12 }}>
+                    <strong>Incident status updated</strong>
+                    <p>{actionMessage}</p>
+                  </div>
+                ) : null}
+
+                <div className="code-view-container" style={{ marginBottom: 12 }}>
+                  <pre className="code-view mono" style={{ maxHeight: 150, fontSize: 11, padding: 10, background: "var(--panel-2)", border: "1px solid var(--line)" }}>{selected.logs}</pre>
+                </div>
+
+                <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                  <button className="btn-primary" disabled={analyzing} onClick={analyze} style={{ flex: 1, justifyContent: "center" }}>
+                    <Wand2 size={12} />
+                    {analyzing ? "Analyzing logs..." : "Analyze with AI"}
+                  </button>
+                  <button className="btn subtle" disabled={!analysis || analyzing || !selected.hotfixPrNumber || hotfixBusy} onClick={openApprovalGate} style={{ flex: 1, justifyContent: "center" }}>
+                    <ShieldCheck size={12} />
+                    {hotfixBusy ? "Syncing..." : "Approve fix"}
+                  </button>
+                  <button className="btn subtle" disabled={!analysis || analyzing} onClick={generatePostmortem} style={{ flex: 1, justifyContent: "center" }}>
+                    <Download size={12} />
+                    Draft post-mortem
+                  </button>
+                </div>
+
+                {/* Hotfix Panel */}
+                {(analysis || selected.hotfixPrNumber) && (
+                  <div className="card" style={{ padding: 12, background: "var(--panel-2)", border: "1px dashed var(--line)", marginBottom: 14 }}>
+                    <span className="eyebrow mono" style={{ fontSize: 10, display: "block", marginBottom: 4 }}>Incident hotfix pipeline</span>
+                    <strong style={{ fontSize: 13.5 }}>
+                      {selected.hotfixPrNumber ? `Draft PR #${selected.hotfixPrNumber} created` : "Create hotfix branch"}
+                    </strong>
+                    <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>
+                      {selected.hotfixPrNumber
+                        ? "Developer should commit fixes to this hotfix branch. ShipBrain will sync commits automatically before release."
+                        : "Ask ShipBrain to generate an isolated hotfix branch on GitHub populated with instructions."}
+                    </p>
+
+                    {!selected.hotfixPrNumber ? (
+                      <div style={{ marginBottom: 10 }}>
+                        <label className="field-label" htmlFor="hotfix-base" style={{ fontSize: 11, color: "var(--text-muted)" }}>Destination branch</label>
+                        <input
+                          id="hotfix-base"
+                          className="input compact"
+                          value={hotfixBaseBranch}
+                          onChange={(event) => setHotfixBaseBranch(event.target.value)}
+                          placeholder="develop"
+                          style={{ marginTop: 4, width: "100%" }}
+                        />
+                      </div>
                     ) : (
-                      <span className="status amber" style={{ marginLeft: "auto" }}>Pending merge</span>
+                      <div className="commit-context" style={{ padding: 8, background: "var(--bg)", border: "1px solid var(--line)", marginBottom: 10 }}>
+                        <div>
+                          <span className="eyebrow mono" style={{ fontSize: 9 }}>Hotfix branch</span>
+                          <strong>{selected.hotfixBranch}</strong>
+                        </div>
+                        <div>
+                          <span className="eyebrow mono" style={{ fontSize: 9 }}>Integration target</span>
+                          <strong>{selected.hotfixBaseBranch ?? "develop"}</strong>
+                        </div>
+                      </div>
                     )}
-                  </div>
-                  <strong>Reverse sync PR #{selected.reverseSyncPrNumber}</strong>
-                  <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>
-                    {selected.reverseSyncPrStatus === "merged"
-                      ? `Production hotfix has been synced back to ${selected.reverseSyncBranch ?? "develop"}. Both branches are now in sync.`
-                      : `This PR syncs the hotfix from main back to ${selected.reverseSyncBranch ?? "develop"}. Merge it to keep branches aligned.`}
-                  </p>
-                  <div className="commit-context" style={{ marginTop: 12 }}>
-                    <div>
-                      <span className="eyebrow">Source</span>
-                      <strong>main</strong>
-                    </div>
-                    <div>
-                      <span className="eyebrow">Target</span>
-                      <strong>{selected.reverseSyncBranch ?? "develop"}</strong>
-                    </div>
-                    <div>
-                      <span className="eyebrow">Status</span>
-                      <strong>{selected.reverseSyncPrStatus === "merged" ? "Merged" : "Open"}</strong>
+
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {selected.hotfixPrUrl && (
+                        <a className="btn subtle compact" href={selected.hotfixPrUrl} target="_blank" rel="noreferrer" style={{ flex: 1, justifyContent: "center" }}>
+                          <GitPullRequest size={12} />
+                          View PR #{selected.hotfixPrNumber}
+                        </a>
+                      )}
+                      {!selected.hotfixPrNumber && (
+                        <button className="btn-primary compact" disabled={!analysis || hotfixBusy || !hotfixBaseBranch.trim()} onClick={createHotfixDraftPr} style={{ flex: 1, justifyContent: "center" }}>
+                          <GitPullRequest size={12} />
+                          {hotfixBusy ? "Working..." : "Create Hotfix PR"}
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <div className="toolbar" style={{ marginTop: 12 }}>
+                )}
+
+                {/* Reverse Sync Panel */}
+                {selected.reverseSyncPrNumber ? (
+                  <div className="card" style={{ padding: 12, background: "var(--panel-2)", border: "1px solid var(--line)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <ArrowLeftRight size={14} style={{ color: "var(--brand)" }} />
+                      <span className="eyebrow mono" style={{ fontSize: 10 }}>Reverse Sync Gating</span>
+                      {selected.reverseSyncPrStatus === "merged" ? (
+                        <span className="status-pill passed" style={{ marginLeft: "auto", fontSize: 10 }}>Merged</span>
+                      ) : (
+                        <span className="status-pill" style={{ marginLeft: "auto", fontSize: 10 }}>Pending merge</span>
+                      )}
+                    </div>
+                    <strong style={{ fontSize: 13.5 }}>Reverse sync PR #{selected.reverseSyncPrNumber}</strong>
+                    <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>
+                      {selected.reverseSyncPrStatus === "merged"
+                        ? `The hotfix has been successfully back-synced into ${selected.reverseSyncBranch ?? "develop"}.`
+                        : `Keep integration branch aligned: sync changes from main back into ${selected.reverseSyncBranch ?? "develop"}.`}
+                    </p>
+                    <div className="commit-context" style={{ padding: 8, background: "var(--bg)", border: "1px solid var(--line)", marginBottom: 10 }}>
+                      <div>
+                        <span className="eyebrow mono" style={{ fontSize: 9 }}>Source branch</span>
+                        <strong>main</strong>
+                      </div>
+                      <div>
+                        <span className="eyebrow mono" style={{ fontSize: 9 }}>Destination target</span>
+                        <strong>{selected.reverseSyncBranch ?? "develop"}</strong>
+                      </div>
+                    </div>
                     <a
-                      className="button secondary compact"
+                      className="btn subtle compact"
                       href={selected.reverseSyncPrUrl ?? "#"}
                       target="_blank"
                       rel="noreferrer"
+                      style={{ width: "100%", justifyContent: "center" }}
                     >
-                      <GitPullRequest size={15} />
-                      View PR #{selected.reverseSyncPrNumber}
-                      <ExternalLink size={14} />
+                      <GitPullRequest size={12} style={{ marginRight: 4 }} />
+                      View Sync PR #{selected.reverseSyncPrNumber}
                     </a>
                   </div>
-                </div>
-              ) : selected.reverseSyncError ? (
-                <div className="error-panel" role="alert" style={{ marginTop: 16 }}>
-                  <strong>Reverse sync failed</strong>
-                  <p>{selected.reverseSyncError}</p>
-                  <p style={{ fontSize: 12, marginTop: 8 }}>
-                    Manually create a PR from main to develop to sync the hotfix changes.
-                  </p>
-                </div>
-              ) : null}
-              {(analyzing || analysisProgress > 0) && !analysis ? (
-                <div className={`progress-panel in-plan ${analyzing ? "streaming" : ""}`} style={{ marginTop: 16 }}>
-                  <div className="toolbar" style={{ justifyContent: "space-between" }}>
-                    <div>
-                      <strong>{analyzing ? "Analyzing incident context" : "Analysis queued"}</strong>
-                      <p>
-                        {analysisProgress < 40
-                          ? "Reading alert payload, release metadata, and checkout logs."
-                          : analysisProgress < 76
-                            ? "Asking Gemini for likely root cause and rollback direction."
-                            : "Structuring fix proposal and confidence signal."}
-                      </p>
-                    </div>
-                    <span className="status amber">~20-40 sec</span>
+                ) : selected.reverseSyncError ? (
+                  <div className="error-panel" role="alert" style={{ marginTop: 14 }}>
+                    <strong>Reverse sync failed</strong>
+                    <p>{selected.reverseSyncError}</p>
+                    <p style={{ fontSize: 12, marginTop: 8 }}>
+                      Manually create a PR from main to develop to sync the hotfix changes.
+                    </p>
                   </div>
-                  <div className="progress-track" aria-label={`Incident analysis progress ${analysisProgress}%`}>
-                    <div className="progress-fill" style={{ width: `${analysisProgress}%` }} />
-                  </div>
-                  <div className="progress-meta">
-                    <span>{analysisProgress}% complete</span>
-                    <span>Keep this tab open</span>
-                  </div>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="empty-state">
-              <strong>Select or report an incident</strong>
-              <p>Paste real logs to let Gemini produce root cause analysis, rollback steps, and a post-mortem draft.</p>
-            </div>
-          )}
-              {analysis ? (
-            <div className="card" style={{ marginTop: 16 }}>
-              <span className="status amber">confidence {Math.round(analysis.confidence * 100)}%</span>
-              <h3 style={{ marginTop: 10 }}>Root cause</h3>
-              <p>{analysis.rootCause}</p>
-              {analysis.changeSummary ? (
-                <>
-                  <h3>How it occurred</h3>
-                  <p>{analysis.changeSummary}</p>
-                </>
-              ) : null}
-              {analysis.releaseContext ? (
-                <>
-                  <h3>Branch and release trail</h3>
-                  <div className="commit-context">
-                    <div>
-                      <span className="eyebrow">Feature branch</span>
-                      <strong>{selected?.hotfixBranch ?? analysis.releaseContext.featureBranch ?? "not linked"}</strong>
+                ) : null}
+
+                {/* Progress Loader */}
+                {(analyzing || analysisProgress > 0) && !analysis && (
+                  <div className="progress-strip" style={{ marginTop: 14, background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 6 }}>
+                    <div className="progress-meta">
+                      <span className="progress-pct">{analysisProgress}%</span>
+                      <span className="progress-status">{analyzing ? "Analyzing incident logs" : "Queued"}</span>
                     </div>
-                    <div>
-                      <span className="eyebrow">Target branch</span>
-                      <strong>{selected?.hotfixBaseBranch ?? analysis.releaseContext.baseBranch ?? "develop"}</strong>
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${analysisProgress}%`,
+                          height: "100%",
+                          background: "var(--brand)",
+                          transition: "width 0.4s ease"
+                        }}
+                      />
                     </div>
-                    <div>
-                      <span className="eyebrow">Release</span>
-                      <strong>{analysis.releaseContext.release?.tag ?? selected?.releaseVersion ?? "not tagged"}</strong>
+                    <div className="progress-label">
+                      {analysisProgress < 40
+                        ? "Ingesting Alert Payload metadata logs."
+                        : analysisProgress < 76
+                          ? "Querying Gemini trace analyzer."
+                          : "Formatting fix proposals."}
                     </div>
                   </div>
-                </>
-              ) : null}
-              {analysis.implicatedCommits?.length ? (
-                <>
-                  <h3>Commit evidence</h3>
-                  <div className="split-list compact-list">
-                    {analysis.implicatedCommits.map((commit) => (
-                      <div className="commit-row" key={`${commit.sha}-${commit.message}`}>
-                        <code>{commit.sha.slice(0, 7)}</code>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
+                <strong>Select or report an incident</strong>
+                <p style={{ fontSize: 12, marginTop: 4 }}>Select a log trigger on the left to activate the incident command workspace.</p>
+              </div>
+            )}
+
+            {analysis && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 16, borderTop: "1px solid var(--line-muted)", paddingTop: 16 }}>
+                <div className="card" style={{ padding: 12 }}>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                    <span className="status-pill danger">confidence {Math.round(analysis.confidence * 100)}%</span>
+                  </div>
+                  <strong style={{ fontSize: 13, display: "block" }}>Root cause</strong>
+                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>{analysis.rootCause}</p>
+
+                  {analysis.changeSummary && (
+                    <>
+                      <strong style={{ fontSize: 13, display: "block" }}>Change summary</strong>
+                      <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>{analysis.changeSummary}</p>
+                    </>
+                  )}
+
+                  {analysis.releaseContext && (
+                    <>
+                      <strong style={{ fontSize: 13, display: "block" }}>Release Context</strong>
+                      <div className="commit-context" style={{ padding: 8, background: "var(--bg)", border: "1px solid var(--line)" }}>
                         <div>
-                          <strong>{commit.message}</strong>
-                          <p>{commit.reason}</p>
-                          <span className="status amber">{commit.risk}</span>
+                          <span className="eyebrow mono" style={{ fontSize: 9 }}>Feature branch</span>
+                          <strong>{selected?.hotfixBranch ?? analysis.releaseContext.featureBranch ?? "not linked"}</strong>
+                        </div>
+                        <div>
+                          <span className="eyebrow mono" style={{ fontSize: 9 }}>Integration target</span>
+                          <strong>{selected?.hotfixBaseBranch ?? analysis.releaseContext.baseBranch ?? "develop"}</strong>
+                        </div>
+                        <div>
+                          <span className="eyebrow mono" style={{ fontSize: 9 }}>Release tag</span>
+                          <strong>{analysis.releaseContext.release?.tag ?? selected?.releaseVersion ?? "not tagged"}</strong>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </>
-              ) : analysis.releaseContext?.commits?.featurePr?.length ? (
-                <>
-                  <h3>Related commits</h3>
-                  <div className="split-list compact-list">
-                    {analysis.releaseContext.commits.featurePr.slice(0, 6).map((commit) => (
-                      <div className="commit-row" key={commit.sha}>
-                        <code>{commit.shortSha}</code>
-                        <div>
-                          <strong>{commit.message}</strong>
-                          <p>{commit.author ?? "GitHub"} · feature PR history</p>
+                    </>
+                  )}
+                </div>
+
+                {/* Commit Rows list */}
+                {(analysis.implicatedCommits?.length || analysis.releaseContext?.commits?.featurePr?.length || selected?.hotfixCommits?.length) ? (
+                  <div className="card" style={{ padding: 12 }}>
+                    <strong style={{ fontSize: 13, display: "block", marginBottom: 8 }}>Related Commits</strong>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {(selected?.hotfixCommits ?? analysis.releaseContext?.commits?.featurePr ?? analysis.implicatedCommits ?? []).slice(0, 5).map((commit: any) => (
+                        <div className="pr-row" key={commit.sha} style={{ padding: 8, background: "var(--bg)", border: "1px solid var(--line)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <code className="mono" style={{ fontSize: 11, color: "var(--brand)" }}>{commit.shortSha ?? commit.sha?.slice(0, 7)}</code>
+                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{commit.author ?? "git author"}</span>
+                          </div>
+                          <strong style={{ fontSize: 12.5, display: "block", marginTop: 4 }}>{commit.message}</strong>
+                          {commit.reason && <p style={{ margin: "2px 0 0", fontSize: 11.5, color: "var(--text-muted)" }}>{commit.reason}</p>}
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </>
-              ) : selected?.hotfixCommits?.length ? (
-                <>
-                  <h3>Hotfix PR commits</h3>
-                  <div className="split-list compact-list">
-                    {selected.hotfixCommits.slice(0, 8).map((commit) => (
-                      <div className="commit-row" key={commit.sha}>
-                        <code>{commit.shortSha ?? commit.sha.slice(0, 7)}</code>
-                        <div>
-                          <strong>{commit.message}</strong>
-                          <p>{commit.author ?? "GitHub"} · hotfix branch history</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : null}
-              <h3>Fix proposal</h3>
-              <p>{analysis.fixProposal}</p>
-              <h3>Rollback steps</h3>
-              <p>{analysis.rollbackSteps.join(" → ")}</p>
-            </div>
-          ) : null}
-          {postmortem && !postmortemModalOpen ? <pre className="code-view" style={{ marginTop: 16, maxHeight: 340 }}>{postmortem}</pre> : null}
+                ) : null}
+
+                <div className="card" style={{ padding: 12 }}>
+                  <strong style={{ fontSize: 13, display: "block" }}>Fix proposal</strong>
+                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>{analysis.fixProposal}</p>
+
+                  <strong style={{ fontSize: 13, display: "block" }}>Rollback steps</strong>
+                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 0" }}>{analysis.rollbackSteps.join(" → ")}</p>
+                </div>
+              </div>
+            )}
+
+            {postmortem && !postmortemModalOpen && (
+              <div style={{ marginTop: 14 }}>
+                <strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Postmortem document draft</strong>
+                <pre className="code-view mono" style={{ maxHeight: 220, padding: 10, background: "var(--panel-2)", border: "1px solid var(--line)", fontSize: 11 }}>{postmortem}</pre>
+              </div>
+            )}
+          </div>
         </aside>
       </section>
 
-      {manualOpen ? (
+      {manualOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setManualOpen(false)}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <h2>Manual incident</h2>
+            <h2>Report simulation incident</h2>
+            <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 12 }}>Paste alert notification logs or details below.</p>
             <textarea
               className="textarea"
-              placeholder="Paste alert payload or logs"
+              placeholder="Paste alert payload or logs..."
               value={manualLogs}
               onChange={(event) => setManualLogs(event.target.value)}
+              rows={6}
+              style={{ width: "100%", background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--line)", padding: 8, borderRadius: 4 }}
             />
-            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14 }}>
-              <button className="button secondary" onClick={() => setManualOpen(false)}>Cancel</button>
-              <button className="button primary" disabled={!manualLogs.trim()} onClick={createManualIncident}>Submit</button>
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
+              <button className="btn subtle" onClick={() => setManualOpen(false)}>Cancel</button>
+              <button className="btn-primary" disabled={!manualLogs.trim()} onClick={createManualIncident}>Submit Incident</button>
             </div>
           </div>
         </div>
-      ) : null}
+      )}
 
-      {resolveModalOpen ? (
+      {resolveModalOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setResolveModalOpen(false)}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <h2>Resolve Incident</h2>
-            <p>Add a resolution note to close this incident.</p>
+            <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 12 }}>Add a resolution note to close this incident.</p>
             <textarea
               className="textarea"
               placeholder="Describe how the incident was resolved..."
               value={resolveNote}
               onChange={(event) => setResolveNote(event.target.value)}
               rows={4}
+              style={{ width: "100%", background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--line)", padding: 8, borderRadius: 4 }}
             />
-            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14 }}>
-              <button className="button secondary" onClick={() => setResolveModalOpen(false)}>Cancel</button>
-              <button className="button primary" onClick={resolveIncident} disabled={statusBusy}>
-                <CheckCircle2 size={14} />
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
+              <button className="btn subtle" onClick={() => setResolveModalOpen(false)}>Cancel</button>
+              <button className="btn-primary" onClick={resolveIncident} disabled={statusBusy}>
+                <CheckCircle2 size={12} />
                 {statusBusy ? "Resolving..." : "Resolve"}
               </button>
             </div>
           </div>
         </div>
-      ) : null}
+      )}
 
-      {rejectModalOpen ? (
+      {rejectModalOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setRejectModalOpen(false)}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <h2>Reject Incident</h2>
-            <p>Explain why this incident is not actionable.</p>
+            <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 12 }}>Explain why this incident is not actionable.</p>
             <textarea
               className="textarea"
-              placeholder="Reason for rejection (e.g., false positive, duplicate, not an incident)..."
+              placeholder="Reason for rejection (e.g., false positive, duplicate)..."
               value={rejectReason}
               onChange={(event) => setRejectReason(event.target.value)}
               rows={4}
+              style={{ width: "100%", background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--line)", padding: 8, borderRadius: 4 }}
             />
-            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14 }}>
-              <button className="button secondary" onClick={() => setRejectModalOpen(false)}>Cancel</button>
-              <button className="button primary" onClick={rejectIncident} disabled={statusBusy}>
-                <XCircle size={14} />
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
+              <button className="btn subtle" onClick={() => setRejectModalOpen(false)}>Cancel</button>
+              <button className="btn-primary" onClick={rejectIncident} disabled={statusBusy}>
+                <XCircle size={12} />
                 {statusBusy ? "Rejecting..." : "Reject"}
               </button>
             </div>
           </div>
         </div>
-      ) : null}
+      )}
 
-      {postmortemModalOpen ? (
+      {postmortemModalOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setPostmortemModalOpen(false)}>
           <div className="modal" style={{ maxWidth: 700, maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column" }} onClick={(event) => event.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 style={{ margin: 0 }}>Post-Mortem Report</h2>
-              <button className="button secondary compact" onClick={() => setPostmortemModalOpen(false)}>
+              <h2 style={{ margin: 0 }}>Incident Post-Mortem</h2>
+              <button className="btn subtle compact" onClick={() => setPostmortemModalOpen(false)}>
                 <XCircle size={14} />
               </button>
             </div>
 
             {/* Commit History Section */}
             {(analysis?.releaseContext?.commits?.featurePr?.length || selected?.hotfixCommits?.length || analysis?.implicatedCommits?.length) ? (
-              <div style={{ marginBottom: 16, padding: 12, background: "var(--surface-elevated)", borderRadius: 8, border: "1px solid var(--border)" }}>
-                <div className="eyebrow" style={{ marginBottom: 8 }}>Commit History</div>
+              <div style={{ marginBottom: 16, padding: 12, background: "var(--panel-2)", borderRadius: 6, border: "1px solid var(--line)" }}>
+                <span className="eyebrow mono" style={{ fontSize: 9, display: "block", marginBottom: 6 }}>Related Commit History</span>
                 <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
                   {analysis?.releaseContext?.featureBranch && (
                     <div>
-                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Source branch</span>
-                      <strong style={{ display: "block" }}>{analysis.releaseContext.featureBranch}</strong>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Source branch</span>
+                      <strong style={{ display: "block", fontSize: 12.5 }}>{analysis.releaseContext.featureBranch}</strong>
                     </div>
                   )}
                   {analysis?.releaseContext?.baseBranch && (
                     <div>
-                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Target branch</span>
-                      <strong style={{ display: "block" }}>{analysis.releaseContext.baseBranch}</strong>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Target branch</span>
+                      <strong style={{ display: "block", fontSize: 12.5 }}>{analysis.releaseContext.baseBranch}</strong>
                     </div>
                   )}
                   {(analysis?.releaseContext?.release?.tag || selected?.releaseVersion) && (
                     <div>
-                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Release tag</span>
-                      <strong style={{ display: "block" }}>{analysis?.releaseContext?.release?.tag ?? selected?.releaseVersion}</strong>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Release tag</span>
+                      <strong style={{ display: "block", fontSize: 12.5 }}>{analysis?.releaseContext?.release?.tag ?? selected?.releaseVersion}</strong>
                     </div>
                   )}
                 </div>
-                <div className="split-list compact-list" style={{ maxHeight: 150, overflow: "auto" }}>
-                  {(selected?.hotfixCommits ?? analysis?.releaseContext?.commits?.featurePr ?? analysis?.implicatedCommits ?? []).slice(0, 10).map((commit: any) => (
-                    <div className="commit-row" key={commit.sha} style={{ padding: "6px 0" }}>
-                      <code style={{ fontSize: 11 }}>{commit.shortSha ?? commit.sha?.slice(0, 7)}</code>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 140, overflow: "auto" }}>
+                  {(selected?.hotfixCommits ?? analysis?.releaseContext?.commits?.featurePr ?? analysis?.implicatedCommits ?? []).slice(0, 6).map((commit: any) => (
+                    <div key={commit.sha} style={{ display: "flex", gap: 10, fontSize: 12, padding: "4px 0" }}>
+                      <code className="mono" style={{ fontSize: 11, color: "var(--brand)" }}>{commit.shortSha ?? commit.sha?.slice(0, 7)}</code>
                       <div>
-                        <strong style={{ fontSize: 13 }}>{commit.message}</strong>
-                        {commit.author && <p style={{ fontSize: 11, margin: 0 }}>{commit.author}</p>}
-                        {commit.reason && <p style={{ fontSize: 11, margin: 0, color: "var(--text-muted)" }}>{commit.reason}</p>}
+                        <strong>{commit.message}</strong>
+                        {commit.author && <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>{commit.author}</span>}
                       </div>
                     </div>
                   ))}
@@ -998,34 +1023,33 @@ and auto-resolved when the workflow succeeds.`}</pre>
             {/* Post-mortem Content */}
             <div style={{ flex: 1, overflow: "auto" }}>
               {postmortemLoading ? (
-                <div className="loading-state" role="status" style={{ padding: 32 }}>
-                  <span className="loading-spinner" aria-hidden="true" />
-                  <strong>Generating post-mortem...</strong>
-                  <p>AI is analyzing the incident context, commits, and creating a structured report.</p>
+                <div style={{ padding: 32, textAlign: "center", color: "var(--text-muted)" }}>
+                  <span className="loading-spinner" style={{ marginInline: "auto", marginBottom: 8 }} />
+                  <strong>Generating post-mortem report</strong>
+                  <p style={{ fontSize: 12 }}>AI is building a structured markdown doc...</p>
                 </div>
               ) : postmortem ? (
-                <pre className="code-view" style={{ maxHeight: "none", margin: 0 }}>{postmortem}</pre>
+                <pre className="code-view mono" style={{ maxHeight: "none", margin: 0, fontSize: 11.5 }}>{postmortem}</pre>
               ) : (
-                <div className="empty-state">
+                <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)" }}>
                   <strong>No post-mortem generated</strong>
-                  <p>There was an issue generating the post-mortem report.</p>
                 </div>
               )}
             </div>
 
             {/* Actions */}
-            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
-              <button className="button secondary" onClick={() => setPostmortemModalOpen(false)}>Close</button>
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line-muted)", gap: 8 }}>
+              <button className="btn subtle" onClick={() => setPostmortemModalOpen(false)}>Close</button>
               {postmortem && (
-                <button className="button primary" onClick={() => navigator.clipboard.writeText(postmortem)}>
-                  <Download size={14} />
-                  Copy to clipboard
+                <button className="btn-primary" onClick={() => navigator.clipboard.writeText(postmortem)}>
+                  <Download size={12} />
+                  Copy Markdown
                 </button>
               )}
             </div>
           </div>
         </div>
-      ) : null}
+      )}
 
       <ApprovalGate
         open={gateOpen}
@@ -1035,57 +1059,31 @@ and auto-resolved when the workflow succeeds.`}</pre>
         entityId={selected?.id ?? "none"}
         details={
           selected && analysis ? (
-            <div className="approval-context">
-              <div className="commit-context">
+            <div style={{ padding: "10px 0" }}>
+              <div className="commit-context" style={{ padding: 8, background: "var(--bg)", border: "1px solid var(--line)", marginBottom: 12 }}>
                 <div>
-                  <span className="eyebrow">Branch</span>
+                  <span className="eyebrow mono" style={{ fontSize: 9 }}>Branch</span>
                   <strong>{selected.hotfixBranch ?? analysis.releaseContext?.featureBranch ?? selected.branch ?? "not linked"}</strong>
                 </div>
                 <div>
-                  <span className="eyebrow">PR target</span>
+                  <span className="eyebrow mono" style={{ fontSize: 9 }}>PR target</span>
                   <strong>{selected.hotfixBaseBranch ?? analysis.releaseContext?.baseBranch ?? "develop"}</strong>
                 </div>
               </div>
-              <strong>{selected.hotfixPrNumber ? `Hotfix PR #${selected.hotfixPrNumber} commits reviewed for this fix` : "Create hotfix PR before approval"}</strong>
+              <strong style={{ fontSize: 13 }}>{selected.hotfixPrNumber ? `Hotfix PR #${selected.hotfixPrNumber} commits ready to merge` : "Create hotfix PR before approval"}</strong>
               {selected.hotfixCommits?.length ? (
-                <div className="split-list compact-list" style={{ marginTop: 10 }}>
-                  {selected.hotfixCommits.slice(0, 8).map((commit) => (
-                    <div className="commit-row" key={commit.sha}>
-                      <code>{commit.shortSha ?? commit.sha.slice(0, 7)}</code>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, maxHeight: 150, overflow: "auto" }}>
+                  {selected.hotfixCommits.slice(0, 6).map((commit) => (
+                    <div key={commit.sha} style={{ display: "flex", gap: 10, fontSize: 12 }}>
+                      <code className="mono" style={{ fontSize: 11, color: "var(--brand)" }}>{commit.shortSha ?? commit.sha.slice(0, 7)}</code>
                       <div>
                         <strong>{commit.message}</strong>
-                        <p>{commit.author ?? "GitHub"} · will be merged on approval</p>
+                        <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)" }}>{commit.author ?? "GitHub"} · will merge automatically</p>
                       </div>
                     </div>
                   ))}
                 </div>
-              ) : analysis.implicatedCommits?.length ? (
-                <div className="split-list compact-list" style={{ marginTop: 10 }}>
-                  {analysis.implicatedCommits.slice(0, 5).map((commit) => (
-                    <div className="commit-row" key={`${commit.sha}-${commit.reason}`}>
-                      <code>{commit.sha.slice(0, 7)}</code>
-                      <div>
-                        <strong>{commit.message}</strong>
-                        <p>{commit.reason}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : analysis.releaseContext?.commits?.featurePr?.length ? (
-                <div className="split-list compact-list" style={{ marginTop: 10 }}>
-                  {analysis.releaseContext.commits.featurePr.slice(0, 5).map((commit) => (
-                    <div className="commit-row" key={commit.sha}>
-                      <code>{commit.shortSha}</code>
-                      <div>
-                        <strong>{commit.message}</strong>
-                        <p>{commit.author ?? "GitHub"} · feature branch history</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p>No linked commits were found. The approval will resolve the incident using the AI analysis and current release metadata.</p>
-              )}
+              ) : null}
             </div>
           ) : null
         }

@@ -27,7 +27,7 @@ export function AuthForm() {
       if (mode === "signin") {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
-        router.replace("/");
+        router.replace("/dashboard");
         router.refresh();
         return;
       }
@@ -42,7 +42,7 @@ export function AuthForm() {
 
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
-      router.replace("/");
+      router.replace("/dashboard");
       router.refresh();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Authentication failed");

@@ -15,21 +15,21 @@ export type RepoScan = {
   };
   project: {
     packageJson: boolean;
-    vercelJson: boolean;
+    wranglerToml: boolean;
     node: boolean;
-    vercel: boolean;
   };
 };
 
 type WorkflowInput = {
   devBranch?: string | null;
   prodBranch: string;
-  includeVercel: boolean;
+  includeCloudflare: boolean;
   includeIncidents: boolean;
   ciExists: boolean;
   deployExists: boolean;
   incidentsExists: boolean;
   packageJson: boolean;
+  buildOutputDir: string;
 };
 
 function splitRepo(repoFullName: string) {
@@ -63,7 +63,7 @@ export async function scanRepository(repoFullName: string, token?: string): Prom
     main,
     master,
     packageJson,
-    vercelJson
+    wranglerToml
   ] = await Promise.all([
     exists(() => octokit.repos.getContent({ owner, repo, path: ".github/workflows" })),
     // New workflow files
@@ -80,7 +80,7 @@ export async function scanRepository(repoFullName: string, token?: string): Prom
     exists(() => octokit.git.getRef({ owner, repo, ref: "heads/master" })),
     // Project files
     exists(() => octokit.repos.getContent({ owner, repo, path: "package.json" })),
-    exists(() => octokit.repos.getContent({ owner, repo, path: "vercel.json" }))
+    exists(() => octokit.repos.getContent({ owner, repo, path: "wrangler.toml" }))
   ]);
 
   const productionBranch = main ? "main" : master ? "master" : null;
@@ -105,9 +105,8 @@ export async function scanRepository(repoFullName: string, token?: string): Prom
     },
     project: {
       packageJson,
-      vercelJson,
-      node: packageJson,
-      vercel: vercelJson
+      wranglerToml,
+      node: packageJson
     }
   };
 }
@@ -174,13 +173,13 @@ export function workflowFiles(input: WorkflowInput) {
     files[".github/workflows/shipbrain-ci.yml"] = shipbrainCiWorkflowMinimal(input);
   }
 
-  // Include preview workflow if Vercel is enabled and develop branch exists
-  if (input.includeVercel && input.devBranch) {
+  // Include preview workflow if Cloudflare is enabled and develop branch exists
+  if (input.includeCloudflare && input.devBranch) {
     files[".github/workflows/shipbrain-preview.yml"] = shipbrainPreviewWorkflow(input);
   }
 
   // Include production workflow (handles both normal releases and hotfixes with reverse sync)
-  if (input.includeVercel && !input.deployExists) {
+  if (input.includeCloudflare && !input.deployExists) {
     files[".github/workflows/shipbrain-production.yml"] = shipbrainProductionWorkflow(input);
   }
 
@@ -192,13 +191,16 @@ export function workflowFiles(input: WorkflowInput) {
 
 function installSteps(packageJson: boolean) {
   return packageJson
-    ? `      - name: Install dependencies\n        run: npm ci\n\n      - name: Run tests\n        run: npm test --if-present\n`
-    : `      - name: No package.json detected\n        run: echo "No Node package.json found; smoke check only."\n`;
-}
+    ? `      - name: Install dependencies
+        run: npm ci
 
-// ============================================================================
-// NEW SIMPLIFIED WORKFLOW ARCHITECTURE
-// ============================================================================
+      - name: Run tests
+        run: npm test --if-present
+`
+    : `      - name: No package.json detected
+        run: echo "No Node package.json found; smoke check only."
+`;
+}
 
 /**
  * Minimal CI workflow - JUST smoke tests, no deployments
@@ -255,13 +257,18 @@ ${installSteps(input.packageJson)}`;
 }
 
 /**
- * Preview deployment workflow - dedicated workflow for Vercel preview
- * Triggered via workflow_dispatch from ShipBrain
+ * Preview deployment workflow - dedicated workflow for Cloudflare Pages preview
+ * Triggered via workflow_dispatch from ShipBrain or on push to develop
+ * Build logs stream in real-time, env vars are injected from Cloudflare project settings
  */
 function shipbrainPreviewWorkflow(input: WorkflowInput) {
+  const outputDir = input.buildOutputDir || "dist";
   return `name: ShipBrain Preview Deploy
 
 on:
+  push:
+    branches:
+      - ${input.devBranch || "develop"}
   workflow_dispatch:
     inputs:
       source_pr_number:
@@ -280,32 +287,56 @@ concurrency:
 
 jobs:
   preview:
-    name: Deploy to Vercel Preview
+    name: Deploy to Cloudflare Pages Preview
     runs-on: ubuntu-latest
-    env:
-      VERCEL_ORG_ID: \${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: \${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: \${{ inputs.branch }}
+          ref: \${{ inputs.branch || github.ref }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - name: Pull Vercel Preview environment
-        run: npx vercel@latest pull --yes --environment=preview --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Build Preview artifact
-        run: npx vercel@latest build --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Deploy to Preview
-        id: deploy
+
+      - name: Install dependencies
         run: |
-          OUTPUT=$(npx vercel@latest deploy --prebuilt --token="\${{ secrets.VERCEL_TOKEN }}" --env SHIPBRAIN_API_KEY="\${{ secrets.SHIPBRAIN_API_KEY }}" --env SHIPBRAIN_API_URL="\${{ secrets.SHIPBRAIN_API_URL }}" --env SHIPBRAIN_INCIDENT_WEBHOOK_URL="\${{ secrets.SHIPBRAIN_API_URL }}/api/webhooks/incidents" 2>&1)
-          echo "Vercel output:"
-          echo "$OUTPUT"
-          DEPLOY_URL=$(echo "$OUTPUT" | grep -oE 'https://[a-zA-Z0-9._-]+\\.vercel\\.app' | tail -1)
-          echo "Extracted URL: $DEPLOY_URL"
+          echo "::group::Installing dependencies"
+          npm ci
+          echo "::endgroup::"
+
+      - name: Build application
+        run: |
+          echo "::group::Running build"
+          npm run build
+          echo "::endgroup::"
+          echo "Build completed successfully"
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "::group::Deploying to Cloudflare Pages"
+          DEPLOY_OUTPUT=$(mktemp)
+          wrangler pages deploy ${outputDir} \\
+            --project-name="\${{ secrets.CF_PROJECT_NAME }}" \\
+            --branch="\${{ inputs.branch || '${input.devBranch || "develop"}' }}" \\
+            --commit-hash="$GITHUB_SHA" | tee "$DEPLOY_OUTPUT"
+          echo "::endgroup::"
+
+          # Extract deployment URL from output
+          DEPLOY_URL=$(grep -oE 'https://[a-zA-Z0-9._-]+\\.pages\\.dev' "$DEPLOY_OUTPUT" | tail -1)
           echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+          echo ""
+          echo "=========================================="
+          echo "Preview deployed: $DEPLOY_URL"
+          echo "=========================================="
+
       - name: Notify ShipBrain
         if: always()
         continue-on-error: true
@@ -323,7 +354,7 @@ jobs:
             -d "{
               \\"repo\\": \\"$GITHUB_REPOSITORY\\",
               \\"sha\\": \\"$GITHUB_SHA\\",
-              \\"branch\\": \\"\${{ inputs.branch }}\\",
+              \\"branch\\": \\"\${{ inputs.branch || '${input.devBranch || "develop"}' }}\\",
               \\"pr_number\\": \\"\${{ inputs.source_pr_number }}\\",
               \\"environment\\": \\"preview\\",
               \\"status\\": \\"\${{ job.status }}\\",
@@ -336,9 +367,11 @@ jobs:
 /**
  * Production deployment workflow - handles normal releases AND hotfixes
  * Includes built-in reverse sync for hotfixes (main → develop)
+ * Build logs stream in real-time, env vars are injected from Cloudflare project settings
  */
 function shipbrainProductionWorkflow(input: WorkflowInput) {
   const devBranch = input.devBranch || "develop";
+  const outputDir = input.buildOutputDir || "dist";
   return `name: ShipBrain Production Deploy
 
 on:
@@ -383,36 +416,73 @@ jobs:
     env:
       SHIPBRAIN_RELEASE_TAG: \${{ inputs.release_tag }}
       SHIPBRAIN_RELEASE_SHA: \${{ inputs.release_sha }}
-      VERCEL_ORG_ID: \${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: \${{ secrets.VERCEL_PROJECT_ID }}
+      CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: \${{ inputs.release_tag }}
           fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+
       - name: Verify release SHA
         run: |
+          echo "::group::Verifying release SHA"
           ACTUAL=$(git rev-parse HEAD)
           EXPECTED="$SHIPBRAIN_RELEASE_SHA"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "SHA mismatch - deploy blocked"
+            echo "::error::SHA mismatch - deploy blocked"
             echo "Expected : $EXPECTED"
             echo "Actual   : $ACTUAL"
             exit 1
           fi
-          echo "SHA verified - deploying $SHIPBRAIN_RELEASE_TAG"
-      - name: Pull Vercel Production environment
-        run: npx vercel@latest pull --yes --environment=production --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Build Production artifact
-        run: npx vercel@latest build --prod --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Deploy to Production
+          echo "SHA verified: $SHIPBRAIN_RELEASE_SHA"
+          echo "::endgroup::"
+          echo ""
+          echo "=========================================="
+          echo "Deploying release: $SHIPBRAIN_RELEASE_TAG"
+          echo "=========================================="
+
+      - name: Install dependencies
         run: |
-          npx vercel@latest deploy --prebuilt --prod \\
-            --token="\${{ secrets.VERCEL_TOKEN }}" \\
-            --env SHIPBRAIN_RELEASE_TAG="$SHIPBRAIN_RELEASE_TAG"
+          echo "::group::Installing dependencies"
+          npm ci
+          echo "::endgroup::"
+
+      - name: Build application
+        run: |
+          echo "::group::Running production build"
+          npm run build
+          echo "::endgroup::"
+          echo "Build completed successfully"
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy to Cloudflare Pages Production
+        id: deploy
+        run: |
+          echo "::group::Deploying to Cloudflare Pages Production"
+          DEPLOY_OUTPUT=$(mktemp)
+          wrangler pages deploy ${outputDir} \\
+            --project-name="\${{ secrets.CF_PROJECT_NAME }}" \\
+            --branch="main" \\
+            --commit-hash="$SHIPBRAIN_RELEASE_SHA" | tee "$DEPLOY_OUTPUT"
+          echo "::endgroup::"
+
+          # Extract deployment URL from output
+          DEPLOY_URL=$(grep -oE 'https://[a-zA-Z0-9._-]+\\.pages\\.dev' "$DEPLOY_OUTPUT" | tail -1)
+          echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+          echo ""
+          echo "=========================================="
+          echo "Production deployed: $DEPLOY_URL"
+          echo "Tag: $SHIPBRAIN_RELEASE_TAG"
+          echo "=========================================="
+
       - name: Notify ShipBrain
         if: always()
         continue-on-error: true
@@ -433,6 +503,7 @@ jobs:
               \\"sha\\": \\"$SHIPBRAIN_RELEASE_SHA\\",
               \\"status\\": \\"\${{ job.status }}\\",
               \\"is_hotfix\\": \\"\${{ inputs.is_hotfix }}\\",
+              \\"deploy_url\\": \\"\${{ steps.deploy.outputs.url }}\\",
               \\"run_url\\": \\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\\"
             }"
 
@@ -600,395 +671,6 @@ jobs:
               \\"run_url\\": \\"\${{ github.event.workflow_run.html_url }}\\"
             }"
 ${incidentJobs}`;
-}
-
-function shipbrainCiWorkflow(input: WorkflowInput) {
-  const branches = branchList(input);
-  const previewJob = input.includeVercel && input.devBranch ? `
-  preview:
-    name: Vercel preview deploy
-    runs-on: ubuntu-latest
-    needs: smoke
-    if: >
-      needs.smoke.outputs.passed == 'true' &&
-      (
-        (github.event_name == 'pull_request' && github.base_ref == '${input.devBranch}') ||
-        (github.event_name == 'push' && github.ref == 'refs/heads/${input.devBranch}') ||
-        (github.event_name == 'workflow_dispatch' && inputs.deploy_preview == 'true')
-      )
-    env:
-      VERCEL_ORG_ID: \${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: \${{ secrets.VERCEL_PROJECT_ID }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - name: Pull Vercel Preview environment settings
-        run: npx vercel@latest pull --yes --environment=preview --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Build Vercel Preview artifact
-        run: npx vercel@latest build --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Deploy to Vercel Preview
-        id: deploy
-        run: |
-          OUTPUT=$(npx vercel@latest deploy --prebuilt --token="\${{ secrets.VERCEL_TOKEN }}" --env SHIPBRAIN_API_KEY="\${{ secrets.SHIPBRAIN_API_KEY }}" --env SHIPBRAIN_API_URL="\${{ secrets.SHIPBRAIN_API_URL }}" --env SHIPBRAIN_INCIDENT_WEBHOOK_URL="\${{ secrets.SHIPBRAIN_API_URL }}/api/webhooks/incidents" 2>&1)
-          echo "Vercel output:"
-          echo "$OUTPUT"
-          DEPLOY_URL=$(echo "$OUTPUT" | grep -oE 'https://[a-zA-Z0-9._-]+\\.vercel\\.app' | tail -1)
-          echo "Extracted URL: $DEPLOY_URL"
-          echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
-          BRANCH_ALIAS=$(npx vercel@latest alias --token="\${{ secrets.VERCEL_TOKEN }}" ls 2>/dev/null | grep ${input.devBranch} | head -1 | awk '{print $1}' || echo "")
-          echo "branch_alias=$BRANCH_ALIAS" >> $GITHUB_OUTPUT
-      - name: Comment preview URL on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const url = "\${{ steps.deploy.outputs.url }}";
-            const sha = context.sha.slice(0, 7);
-            const branch = "\${{ github.head_ref }}";
-            const body = [
-              "### Vercel Preview - dev environment",
-              "",
-              \`**Preview URL:** \${url}\`,
-              \`**Branch:** \\\`\${branch}\\\`\`,
-              \`**SHA:** \\\`\${sha}\\\`\`,
-              "",
-              "> This preview uses Vercel **Preview** environment variables.",
-              "> Production variables are not used here.",
-              "",
-              "_Deployed by ShipBrain_"
-            ].join("\\n");
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.includes('Vercel Preview - dev environment'));
-            if (existing) {
-              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
-            }
-      - name: Notify ShipBrain - preview deployed
-        continue-on-error: true
-        env:
-          SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
-          SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
-        run: |
-          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
-            echo "ShipBrain callback secrets are missing; preview notification skipped."
-            exit 0
-          fi
-          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/deployments/preview" \\
-            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
-              \\"sha\\": \\"$GITHUB_SHA\\",
-              \\"branch\\": \\"$GITHUB_REF_NAME\\",
-              \\"event_type\\": \\"\${{ github.event_name }}\\",
-              \\"pr_number\\": \\"\${{ github.event.pull_request.number || inputs.source_pr_number }}\\",
-              \\"environment\\": \\"preview\\",
-              \\"preview_url\\": \\"\${{ steps.deploy.outputs.url }}\\",
-              \\"branch_alias\\": \\"\${{ steps.deploy.outputs.branch_alias }}\\"
-            }"
-` : "";
-
-  return `name: ShipBrain CI
-
-on:
-  pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
-    branches: ${branches}
-  push:
-    branches: ${branches}
-  workflow_dispatch:
-    inputs:
-      force_fail:
-        description: Trigger a deliberate ShipBrain CI failure for E2E testing
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
-      deploy_preview:
-        description: Deploy the current ref to the Vercel Preview environment
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
-      source_pr_number:
-        description: ShipBrain source PR number to attach preview metadata to
-        required: false
-        default: ""
-
-concurrency:
-  group: shipbrain-ci-\${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-jobs:
-  smoke:
-    name: Smoke test
-    runs-on: ubuntu-latest
-    outputs:
-      passed: \${{ steps.result.outputs.passed }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - name: Print context
-        run: |
-          echo "Branch : $GITHUB_REF_NAME"
-          echo "SHA    : $GITHUB_SHA"
-          echo "Event  : $GITHUB_EVENT_NAME"
-          echo "PR     : \${{ github.event.pull_request.number || 'n/a' }}"
-      - name: Force-fail escape hatch
-        run: |
-          if [ "\${{ github.event_name }}" = "workflow_dispatch" ] && [ "\${{ inputs.force_fail }}" = "true" ]; then
-            echo "Manual ShipBrain force-fail requested for E2E testing"
-            exit 1
-          fi
-          if [ "\${SHIPBRAIN_FORCE_FAIL:-false}" = "true" ]; then
-            echo "SHIPBRAIN_FORCE_FAIL=true - failing for ShipBrain CI test"
-            exit 1
-          fi
-${installSteps(input.packageJson)}
-      - name: Set result output
-        id: result
-        if: always()
-        run: echo "passed=\${{ job.status == 'success' }}" >> $GITHUB_OUTPUT
-      - name: Notify ShipBrain - CI result
-        if: always()
-        continue-on-error: true
-        env:
-          SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
-          SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
-        run: |
-          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
-            echo "ShipBrain callback secrets are missing; CI notification skipped."
-            exit 0
-          fi
-          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/ci/webhook" \\
-            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
-              \\"sha\\": \\"$GITHUB_SHA\\",
-              \\"branch\\": \\"$GITHUB_REF_NAME\\",
-              \\"pr_number\\": \\"\${{ github.event.pull_request.number }}\\",
-              \\"run_id\\": \\"$GITHUB_RUN_ID\\",
-              \\"status\\": \\"\${{ job.status }}\\",
-              \\"environment\\": \\"dev\\",
-              \\"run_url\\": \\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\\"
-            }"
-${previewJob}`;
-}
-
-function shipbrainDeployWorkflow() {
-  return `name: ShipBrain Vercel Production Deploy
-
-on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Release tag approved in ShipBrain
-        required: true
-        type: string
-      release_sha:
-        description: Merge commit SHA for the approved release
-        required: true
-        type: string
-
-concurrency:
-  group: shipbrain-vercel-prod
-  cancel-in-progress: false
-
-jobs:
-  deploy-production:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      deployments: write
-    env:
-      SHIPBRAIN_RELEASE_TAG: \${{ inputs.release_tag }}
-      SHIPBRAIN_RELEASE_SHA: \${{ inputs.release_sha }}
-      VERCEL_ORG_ID: \${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: \${{ secrets.VERCEL_PROJECT_ID }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: \${{ inputs.release_tag }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Verify release SHA
-        run: |
-          ACTUAL=$(git rev-parse HEAD)
-          EXPECTED="$SHIPBRAIN_RELEASE_SHA"
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "SHA mismatch - deploy blocked"
-            echo "Expected : $EXPECTED"
-            echo "Actual   : $ACTUAL"
-            exit 1
-          fi
-          echo "SHA verified - deploying $SHIPBRAIN_RELEASE_TAG at $SHIPBRAIN_RELEASE_SHA"
-      - name: Stamp ShipBrain release version
-        run: |
-          node - <<'NODE'
-          const fs = require('fs');
-          const tag = process.env.SHIPBRAIN_RELEASE_TAG;
-          const files = ['index.html', 'api/release.js', 'api/trigger-incident.js', 'server.mjs'];
-          const pattern = /cart-v[\\d.]+[-\\w.]*|hotfix-v[\\d.]+[-\\w.]*|shipbrain-v[\\d.]+[-\\w.]*|cart-local-dev/g;
-          for (const file of files) {
-            if (!fs.existsSync(file)) continue;
-            const src = fs.readFileSync(file, 'utf8');
-            const out = src.replace(pattern, tag);
-            if (out !== src) fs.writeFileSync(file, out);
-          }
-          NODE
-      - name: Pull Vercel project settings
-        run: npx vercel@latest pull --yes --environment=production --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Build Vercel artifact
-        run: npx vercel@latest build --prod --token="\${{ secrets.VERCEL_TOKEN }}"
-      - name: Deploy to Vercel production
-        run: |
-          npx vercel@latest deploy --prebuilt --prod \\
-            --token="\${{ secrets.VERCEL_TOKEN }}" \\
-            --env SHIPBRAIN_RELEASE_TAG="$SHIPBRAIN_RELEASE_TAG" \\
-            --env SHIPBRAIN_API_KEY="\${{ secrets.SHIPBRAIN_API_KEY }}" \\
-            --env SHIPBRAIN_API_URL="\${{ secrets.SHIPBRAIN_API_URL }}" \\
-            --env SHIPBRAIN_INCIDENT_WEBHOOK_URL="\${{ secrets.SHIPBRAIN_API_URL }}/api/webhooks/incidents"
-      - name: Notify ShipBrain - deploy result
-        if: always()
-        continue-on-error: true
-        env:
-          SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
-          SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
-        run: |
-          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
-            echo "ShipBrain callback secrets are missing; deployment notification skipped."
-            exit 0
-          fi
-          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/deployments/result" \\
-            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
-              \\"tag\\": \\"$SHIPBRAIN_RELEASE_TAG\\",
-              \\"sha\\": \\"$SHIPBRAIN_RELEASE_SHA\\",
-              \\"status\\": \\"\${{ job.status }}\\",
-              \\"run_url\\": \\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\\"
-            }"
-`;
-}
-
-function shipbrainIncidentsWorkflow() {
-  return `name: ShipBrain incident alerting
-
-on:
-  workflow_run:
-    workflows: ["ShipBrain CI", "ShipBrain Vercel Production Deploy"]
-    types: [completed]
-  workflow_dispatch:
-
-jobs:
-  alert:
-    runs-on: ubuntu-latest
-    if: >
-      (github.event.workflow_run.conclusion == 'failure' &&
-       github.event.workflow_run.name != 'ShipBrain incident alerting') ||
-      github.event_name == 'workflow_dispatch'
-    env:
-      SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
-      SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
-    steps:
-      - name: Send ShipBrain incident alert
-        run: |
-          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
-            echo "ShipBrain callback secrets are missing; incident alerting skipped."
-            exit 0
-          fi
-          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/webhooks/incidents" \\
-            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"source\\": \\"github-workflow\\",
-              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
-              \\"title\\": \\"Workflow \${{ github.event.workflow_run.name || github.workflow }} failed\\",
-              \\"severity\\": \\"critical\\",
-              \\"service\\": \\"ci-deploy\\",
-              \\"environment\\": \\"production\\",
-              \\"incidentId\\": \\"\${{ github.event.workflow_run.id || github.run_id }}\\",
-              \\"branch\\": \\"\${{ github.event.workflow_run.head_branch || github.ref_name }}\\",
-              \\"commit\\": \\"\${{ github.event.workflow_run.head_sha || github.sha }}\\",
-              \\"logs\\": \\"Run URL: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/\${{ github.event.workflow_run.id || github.run_id }}\\\\nTriggered by: \${{ github.event.workflow_run.triggering_actor.login || github.actor }}\\"
-            }"
-  resolve:
-    runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
-    env:
-      SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
-      SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
-    steps:
-      - name: Resolve ShipBrain incident
-        run: |
-          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
-            echo "ShipBrain callback secrets are missing; incident resolution skipped."
-            exit 0
-          fi
-          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/webhooks/incidents/resolve" \\
-            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"incidentId\\": \\"\${{ github.event.workflow_run.id }}\\",
-              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
-              \\"resolution\\": \\"Auto-resolved by successful workflow run \${{ github.event.workflow_run.name }}\\"
-            }"
-`;
-}
-
-function shipbrainCiNotifyWorkflow() {
-  return `name: ShipBrain CI notify
-
-on:
-  workflow_run:
-    workflows: ["*"]
-    types: [completed]
-
-jobs:
-  notify:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notify ShipBrain
-        continue-on-error: true
-        env:
-          SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
-          SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
-        run: |
-          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
-            echo "ShipBrain callback secrets are missing; CI notification skipped."
-            exit 0
-          fi
-          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/ci/webhook" \\
-            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
-              \\"sha\\": \\"\${{ github.event.workflow_run.head_sha }}\\",
-              \\"branch\\": \\"\${{ github.event.workflow_run.head_branch }}\\",
-              \\"run_id\\": \\"\${{ github.event.workflow_run.id }}\\",
-              \\"status\\": \\"\${{ github.event.workflow_run.conclusion }}\\",
-              \\"workflow_name\\": \\"\${{ github.event.workflow_run.name }}\\",
-              \\"run_url\\": \\"\${{ github.event.workflow_run.html_url }}\\"
-            }"
-`;
 }
 
 export async function openSetupPullRequest(input: {

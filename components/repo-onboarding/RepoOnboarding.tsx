@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, Copy, ExternalLink, Eye, EyeOff, Github, Lock, RefreshCw, Search, ShieldCheck, Trash2, XCircle } from "lucide-react";
+import { Check, ChevronDown, Copy, ExternalLink, Github, Lock, RefreshCw, Search, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -24,20 +24,13 @@ type RepoScan = {
     developmentBranch: string | null;
     scenario: string;
   };
-  project: { packageJson: boolean; vercelJson: boolean; node: boolean; vercel: boolean };
+  project: { packageJson: boolean; wranglerToml: boolean; node: boolean };
 };
 
-type VerifyState = "idle" | "verifying" | "verified" | "error";
 type SetupEvent = { label: string; status: "running" | "done" | "error"; detail?: string };
 
 const selectedRepoKey = "shipbrain:selectedRepo";
 const connectedReposKey = "shipbrain:connectedRepos";
-const vercelDashboardUrl = "https://vercel.com/dashboard";
-
-function safeVercelSettingsUrl(value?: string | null) {
-  if (!value || value.includes("/dashboard/project/")) return vercelDashboardUrl;
-  return value;
-}
 
 export function RepoOnboarding() {
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -52,16 +45,8 @@ export function RepoOnboarding() {
   const [error, setError] = useState("");
   const [scan, setScan] = useState<RepoScan | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
-  const [skipVercel, setSkipVercel] = useState(false);
   const [skipIncidents, setSkipIncidents] = useState(false);
-  const [vercelToken, setVercelToken] = useState("");
-  const [vercelOrgId, setVercelOrgId] = useState("");
-  const [vercelProjectId, setVercelProjectId] = useState("");
-  const [vercelSettingsUrl, setVercelSettingsUrl] = useState("");
-  const [vercelTokenState, setVercelTokenState] = useState<VerifyState>("idle");
-  const [vercelProjectState, setVercelProjectState] = useState<VerifyState>("idle");
-  const [secretError, setSecretError] = useState("");
-  const [showSecrets, setShowSecrets] = useState(false);
+  const [buildOutputDir, setBuildOutputDir] = useState("dist");
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupDone, setSetupDone] = useState<any>(null);
   const [setupEvents, setSetupEvents] = useState<SetupEvent[]>([]);
@@ -79,11 +64,9 @@ export function RepoOnboarding() {
   );
   const activeRepo = repos.find((repo) => repo.full_name === selectedRepo) ?? null;
   const filteredRepos = repos.filter((repo) => repo.full_name.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
-  const vercelVerified = skipVercel || (vercelTokenState === "verified" && vercelProjectState === "verified");
-  const incidentsVerified = true;
   const needsCustomBranches = scan?.branches.scenario === "custom_required";
   const customBranchesReady = !needsCustomBranches || Boolean(customProdBranch.trim());
-  const canSubmit = Boolean(activeRepo && scan && customBranchesReady && vercelVerified && incidentsVerified && !setupBusy);
+  const canSubmit = Boolean(activeRepo && scan && customBranchesReady && !setupBusy);
 
   useEffect(() => {
     setMounted(true);
@@ -259,26 +242,6 @@ export function RepoOnboarding() {
     }
   }
 
-  async function verify(type: "vercel_token" | "vercel_project") {
-    setSecretError("");
-    const setState = type === "vercel_token" ? setVercelTokenState : setVercelProjectState;
-    setState("verifying");
-    try {
-      const response = await fetch("/api/integrations/verify", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ type, vercelToken, vercelOrgId, vercelProjectId })
-      });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Verification failed");
-      if (type === "vercel_project" && json.settingsUrl) setVercelSettingsUrl(safeVercelSettingsUrl(json.settingsUrl));
-      setState("verified");
-    } catch (nextError) {
-      setState("error");
-      setSecretError(nextError instanceof Error ? nextError.message : "Verification failed");
-    }
-  }
-
   async function submitSetup() {
     if (!activeRepo) return;
     setSetupBusy(true);
@@ -292,12 +255,8 @@ export function RepoOnboarding() {
         body: JSON.stringify({
           stream: true,
           repo: activeRepo,
-          skipVercel,
           skipIncidents,
-          vercelToken,
-          vercelOrgId,
-          vercelProjectId,
-          vercelSettingsUrl,
+          buildOutputDir: buildOutputDir.trim() || "dist",
           productionBranch: customProdBranch.trim(),
           developmentBranch: customDevBranch.trim()
         })
@@ -456,7 +415,7 @@ export function RepoOnboarding() {
               <Github color="var(--brand)" />
               <div>
                 <h2 style={{ marginBottom: 4 }}>Connect your repo</h2>
-                <p style={{ marginBottom: 0 }}>ShipBrain scans your repo, injects secrets, and opens one PR for CI, deploy gate, and incident alerting.</p>
+                <p style={{ marginBottom: 0 }}>ShipBrain handles everything: CI workflows, preview deployments, and production releases. Just connect your repo.</p>
               </div>
             </div>
 
@@ -500,7 +459,7 @@ export function RepoOnboarding() {
                         </div>
                       ))}
                     </div>
-                    <p className="secret-helper">Use Settings → Secrets to rotate keys, replace GitHub Actions secrets, confirm Vercel preview setup, or disconnect a repo.</p>
+                    <p className="secret-helper">Use Settings &rarr; Secrets to rotate keys or disconnect a repo.</p>
                   </div>
                 ) : null}
 
@@ -547,22 +506,19 @@ export function RepoOnboarding() {
                 </div>
 
                 <div className="repo-connect-group">
-                  <div className="eyebrow">Deployment</div>
-                  <h3>Vercel deployment</h3>
-                  {skipVercel ? (
-                    <CollapsedSetup label="Vercel deployment" onRestore={() => setSkipVercel(false)} />
-                  ) : (
-                    <>
-                      <SecretField label="VERCEL_TOKEN" value={vercelToken} setValue={setVercelToken} state={vercelTokenState} visible={showSecrets} onVerify={() => verify("vercel_token")} helper="vercel.com/account/tokens -> Create -> copy token" link="https://vercel.com/account/tokens" />
-                      <SecretField label="VERCEL_ORG_ID" value={vercelOrgId} setValue={setVercelOrgId} state={vercelProjectState} visible={showSecrets} helper="Vercel project -> Settings -> General -> Team ID or Account ID" link={safeVercelSettingsUrl(vercelSettingsUrl)} />
-                      <SecretField label="VERCEL_PROJECT_ID" value={vercelProjectId} setValue={setVercelProjectId} state={vercelProjectState} visible={showSecrets} onVerify={() => verify("vercel_project")} helper="Same Settings -> General page -> Project ID" link={safeVercelSettingsUrl(vercelSettingsUrl)} />
-                      <button className="button secondary compact" onClick={() => setShowSecrets((value) => !value)}>
-                        {showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}
-                        {showSecrets ? "Hide secrets" : "Show while editing"}
-                      </button>
-                      <button className="text-link" onClick={() => setSkipVercel(true)}>Skip Vercel setup -&gt;</button>
-                    </>
-                  )}
+                  <div className="eyebrow">Build Settings</div>
+                  <h3>Deployment configuration</h3>
+                  <div className="secret-field">
+                    <label className="field-label">Build Output Directory</label>
+                    <div className="secret-input-row">
+                      <input type="text" value={buildOutputDir} onChange={(event) => setBuildOutputDir(event.target.value)} placeholder="dist" />
+                    </div>
+                    <p className="secret-helper">Directory containing your built files. Common values: dist, build, out, .next</p>
+                  </div>
+                  <div className="info-callout compact">
+                    <strong>Automatic deployment</strong>
+                    <p>ShipBrain automatically creates a Cloudflare Pages project and handles all deployments. Your app will be available at a <code>.pages.dev</code> domain.</p>
+                  </div>
                 </div>
 
                 <div className="repo-connect-group">
@@ -580,8 +536,6 @@ export function RepoOnboarding() {
                   )}
                 </div>
 
-                {secretError ? <div className="error-panel" role="alert"><strong>Verification failed</strong><p>{secretError}</p></div> : null}
-
                 {setupBusy || setupEvents.length ? <SetupProgress events={setupEvents} /> : null}
                 {error && !setupBusy ? (
                   <div className="setup-progress">
@@ -593,7 +547,7 @@ export function RepoOnboarding() {
                 <div className="modal-actions">
                   <button className="button primary full-width" disabled={!canSubmit} onClick={submitSetup}>
                     <ShieldCheck size={16} />
-                    {setupBusy ? "Setting up repo..." : "Connect repo and open PR"}
+                    {setupBusy ? "Setting up repo..." : "Connect repo and deploy"}
                   </button>
                   <button className="text-link" onClick={() => setModalOpen(false)}>Save progress and continue later</button>
                 </div>
@@ -662,10 +616,9 @@ function ScanPanel({
       <ScanRow label="shipbrain-deploy.yml" ok={!scan.workflows.deploy} detail={scan.workflows.deploy ? "already exists - kept as-is" : "will be created"} warning={scan.workflows.deploy} />
       <ScanRow label="shipbrain-incidents.yml" ok={!scan.workflows.incidents} detail={scan.workflows.incidents ? "already exists - kept as-is" : "will be created"} warning={scan.workflows.incidents} />
       <hr />
-      <ScanRow label="develop" ok={scan.branches.develop} detail={scan.branches.develop ? "dev environment" : "not found"} />
-      <ScanRow label={scan.branches.productionBranch ?? "production branch"} ok={Boolean(scan.branches.productionBranch)} detail={scan.branches.productionBranch ? "prod environment" : "not found"} />
+      <ScanRow label="develop" ok={scan.branches.develop} detail={scan.branches.develop ? "preview environment" : "not found"} />
+      <ScanRow label={scan.branches.productionBranch ?? "production branch"} ok={Boolean(scan.branches.productionBranch)} detail={scan.branches.productionBranch ? "production environment" : "not found"} />
       <ScanRow label="package.json" ok={scan.project.packageJson} detail={scan.project.packageJson ? "Node.js project detected" : "not found - smoke only"} />
-      <ScanRow label="vercel.json" ok={scan.project.vercelJson} detail={scan.project.vercelJson ? "Vercel project confirmed" : "not found"} />
       {scan.workflows.deploy ? (
         <div className="branch-decision">
           <strong>Existing deploy workflow kept</strong>
@@ -693,34 +646,10 @@ function ScanRow({ label, ok, detail, warning }: { label: string; ok: boolean; d
   );
 }
 
-function SecretField(props: {
-  label: string;
-  value: string;
-  setValue: (value: string) => void;
-  state: VerifyState;
-  visible: boolean;
-  onVerify?: () => void;
-  helper: string;
-  link: string;
-}) {
-  return (
-    <div className={`secret-field ${props.state}`}>
-      <label className="field-label">{props.label}</label>
-      <div className="secret-input-row">
-        <input type={props.visible ? "text" : "password"} value={props.value} onChange={(event) => props.setValue(event.target.value)} placeholder="Paste your token" />
-        {props.state === "verified" ? <span className="status green">Verified</span> : props.onVerify ? <button className="button secondary compact" onClick={props.onVerify} disabled={!props.value || props.state === "verifying"}>{props.state === "verifying" ? "Verifying..." : "Verify"}</button> : null}
-      </div>
-      <p className="secret-helper">
-        {props.helper} <a href={props.link} target="_blank" rel="noreferrer">Open <ExternalLink size={11} /></a>
-      </p>
-    </div>
-  );
-}
-
 function CollapsedSetup({ label, onRestore }: { label: string; onRestore: () => void }) {
   return (
     <div className="collapsed-setup">
-      <span className="dot amber" /> {label} skipped · <button className="text-link" onClick={onRestore}>Set up now</button>
+      <span className="dot amber" /> {label} skipped &middot; <button className="text-link" onClick={onRestore}>Set up now</button>
     </div>
   );
 }
@@ -731,7 +660,7 @@ function SetupProgress({ events }: { events: SetupEvent[] }) {
       {events.length ? events.map((event) => (
         <div className="setup-step" key={event.label}>
           {event.status === "done" ? <Check size={16} color="var(--green)" /> : event.status === "error" ? <XCircle size={16} color="var(--red)" /> : <RefreshCw size={16} className="spin" />}
-          <span>{event.status === "done" ? event.label.replace("Injecting", "Injected") : event.label}</span>
+          <span>{event.status === "done" ? event.label.replace("Creating", "Created").replace("Injecting", "Injected").replace("Setting", "Set") : event.label}</span>
           {event.detail ? <small>{event.detail}</small> : null}
         </div>
       )) : (
@@ -745,14 +674,26 @@ function SetupProgress({ events }: { events: SetupEvent[] }) {
 }
 
 function SetupSuccess({ setup, copied, hidden, onShow, onCopy }: { setup: any; copied: boolean; hidden: boolean; onShow: () => void; onCopy: () => void }) {
-  const vercelSettingsUrl = safeVercelSettingsUrl(setup.repo?.setup_metadata?.vercelSettingsUrl);
   return (
     <div className="modal-scroll-area repo-connect-flow">
       <div className="success-panel">
-        <strong>ShipBrain setup PR opened</strong>
-        <p>Next step: review and merge the PR to activate the workflows.</p>
-        {setup.pr?.html_url ? <a className="button primary compact" href={setup.pr.html_url} target="_blank" rel="noreferrer">View PR on GitHub <ExternalLink size={14} /></a> : <span className="status green">Workflows already configured</span>}
+        <strong>Your repo is connected!</strong>
+        <p>ShipBrain has set up CI, preview deployments, and production releases for your repo.</p>
+        {setup.pr?.html_url ? <a className="button primary compact" href={setup.pr.html_url} target="_blank" rel="noreferrer">Review setup PR on GitHub <ExternalLink size={14} /></a> : <span className="status green">Workflows already configured</span>}
       </div>
+
+      {setup.cloudflareProjectUrl ? (
+        <div className="info-callout">
+          <strong>Your deployment URL</strong>
+          <p>Your app will be deployed to:</p>
+          <a href={setup.cloudflareProjectUrl} target="_blank" rel="noreferrer" className="deployment-url">
+            {setup.cloudflareProjectUrl}
+            <ExternalLink size={14} />
+          </a>
+          <p className="secret-helper" style={{ marginTop: 8 }}>Preview deployments will have unique URLs for each commit.</p>
+        </div>
+      ) : null}
+
       <div className="api-key-reveal" aria-live="polite">
         <strong>Your ShipBrain API key</strong>
         <p>Use this in application code to raise incidents programmatically. This is shown only once.</p>
@@ -771,10 +712,14 @@ function SetupSuccess({ setup, copied, hidden, onShow, onCopy }: { setup: any; c
           </div>
         )}
       </div>
+
       <div className="info-callout">
-        <strong>One more step before preview deploys work</strong>
-        <p>Set dev environment variables in Vercel&apos;s Preview environment. Production variables are separate and are not used by preview builds.</p>
-        <a className="button secondary compact" href={vercelSettingsUrl} target="_blank" rel="noreferrer">Open Vercel settings <ExternalLink size={14} /></a>
+        <strong>Next steps</strong>
+        <ul className="compact-list" style={{ marginTop: 8 }}>
+          <li>Merge the setup PR to activate workflows</li>
+          <li>Push to <code>develop</code> to trigger preview deployments</li>
+          <li>Create a release PR to deploy to production</li>
+        </ul>
       </div>
     </div>
   );

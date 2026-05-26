@@ -12,18 +12,12 @@ type RepoSecretState = {
   setup_pr_number?: number;
   setup_pr_url?: string;
   shipbrain_api_key_last4?: string;
-  setup_metadata?: { injectedSecrets?: string[]; skipVercel?: boolean; skipIncidents?: boolean; vercelSettingsUrl?: string; apiUrl?: string };
-  vercel_preview_env_confirmed?: boolean;
+  setup_metadata?: { injectedSecrets?: string[]; skipCloudflare?: boolean; skipIncidents?: boolean; cloudflareProjectName?: string; apiUrl?: string };
 };
 
-const allSecrets = ["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_KEY", "SHIPBRAIN_API_URL"];
-const editableSecrets = ["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_URL"];
-const vercelDashboardUrl = "https://vercel.com/dashboard";
-
-function safeVercelSettingsUrl(value?: string | null) {
-  if (!value || value.includes("/dashboard/project/")) return vercelDashboardUrl;
-  return value;
-}
+const allSecrets = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CF_PROJECT_NAME", "SHIPBRAIN_API_KEY", "SHIPBRAIN_API_URL"];
+const editableSecrets = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CF_PROJECT_NAME", "SHIPBRAIN_API_URL"];
+const cloudflareDashboardUrl = "https://dash.cloudflare.com";
 
 export default function SecretsPage() {
   const [repos, setRepos] = useState<RepoSecretState[]>([]);
@@ -142,9 +136,9 @@ export default function SecretsPage() {
     setSecretDrafts((drafts) => ({
       ...drafts,
       [repo.id]: {
-        VERCEL_TOKEN: "",
-        VERCEL_ORG_ID: "",
-        VERCEL_PROJECT_ID: "",
+        CLOUDFLARE_API_TOKEN: "",
+        CLOUDFLARE_ACCOUNT_ID: "",
+        CF_PROJECT_NAME: "",
         SHIPBRAIN_API_URL: repo.setup_metadata?.apiUrl ?? ""
       }
     }));
@@ -275,7 +269,7 @@ export default function SecretsPage() {
                           placeholder={secret === "SHIPBRAIN_API_URL" ? "Public ShipBrain callback URL" : "Paste new value"}
                         />
                       ) : (
-                        editable ? "Hidden · edit to replace" : secret.startsWith("SHIPBRAIN") ? "ShipBrain managed" : "Hidden"
+                        editable ? "Hidden - edit to replace" : secret.startsWith("SHIPBRAIN") ? "ShipBrain managed" : "Hidden"
                       )}
                     </span>
                   </div>
@@ -315,15 +309,15 @@ export default function SecretsPage() {
                   <ExternalLink size={14} />
                 </a>
               ) : null}
-              {!repo.setup_metadata?.skipVercel && !repo.vercel_preview_env_confirmed ? (
-                <a className="button secondary compact" href={safeVercelSettingsUrl(repo.setup_metadata?.vercelSettingsUrl)} target="_blank" rel="noreferrer">
-                  Vercel env
+              {!repo.setup_metadata?.skipCloudflare ? (
+                <a className="button secondary compact" href={cloudflareDashboardUrl} target="_blank" rel="noreferrer">
+                  Cloudflare
                   <ExternalLink size={14} />
                 </a>
               ) : null}
-              <span className={`status ${repo.vercel_preview_env_confirmed ? "green" : "amber"}`}>
+              <span className={`status ${repo.setup_metadata?.cloudflareProjectName ? "green" : "amber"}`}>
                 <ShieldCheck size={14} />
-                Preview env {repo.vercel_preview_env_confirmed ? "confirmed" : "pending"}
+                Cloudflare {repo.setup_metadata?.cloudflareProjectName ? "configured" : "pending"}
               </span>
               <button className="button secondary compact danger-icon" onClick={() => setDisconnectRepo(repo)}>
                 <Trash2 size={14} />

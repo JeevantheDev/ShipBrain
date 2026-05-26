@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Globe, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 type Environment = {
@@ -42,9 +42,12 @@ export function EnvironmentsWidget() {
   if (loading) {
     return (
       <div className="panel">
-        <h2>Vercel Environments</h2>
-        <div className="loading-state" style={{ padding: "20px 0" }}>
-          <Loader2 size={20} className="spin" />
+        <header className="panel-head">
+          <h2>Vercel Environments</h2>
+          <span className="badge-count">syncing</span>
+        </header>
+        <div className="loading-state" style={{ border: "none", background: "transparent", padding: "20px 0" }}>
+          <Loader2 size={16} className="spin" />
         </div>
       </div>
     );
@@ -56,57 +59,41 @@ export function EnvironmentsWidget() {
 
   return (
     <div className="panel">
-      <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <h2 style={{ marginBottom: 0 }}>Vercel Environments</h2>
-        <span className="status green">{environments.length} active</span>
-      </div>
-      <div className="split-list">
-        {environments.map((env) => (
-          <div
-            key={env.id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "10px 0",
-              borderBottom: "1px solid var(--border)"
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Globe size={16} style={{ color: env.type === "production" ? "var(--green)" : "var(--blue)", flexShrink: 0 }} />
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>
-                  {env.type === "production" ? "Production" : "Preview"}
-                  <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>
-                    ({env.branch})
-                  </span>
-                  {env.type === "production" && (
-                    <span
-                      className={`status ${env.status === "deployed" ? "green" : env.status === "deploying" ? "amber" : ""}`}
-                      style={{ fontSize: 10, padding: "2px 6px" }}
-                    >
-                      {env.status === "deployed" ? "LIVE" : env.status === "deploying" ? "DEPLOYING" : "PENDING"}
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                  {env.repo}
-                  {env.releaseTag && (
-                    <span style={{ marginLeft: 6, color: "var(--green)" }}>· {env.releaseTag}</span>
-                  )}
-                  {env.commitSha && (
-                    <span style={{ marginLeft: 6, fontFamily: "monospace" }}>@ {env.commitSha}</span>
-                  )}
-                </div>
+      <header className="panel-head">
+        <h2>
+          <span className="triangle" aria-hidden="true" style={{ transform: "scale(0.85)", display: "inline-block", marginRight: 6 }}></span>
+          Vercel Environments
+          <span className="badge-count">{environments.length} active</span>
+        </h2>
+      </header>
+
+      {environments.map((env) => {
+        const isLive = env.status === "deployed" || env.status === "ready";
+        return (
+          <div className="env-card" key={env.id} style={{ borderBottom: environments.length > 1 ? "1px solid var(--line-muted)" : "none" }}>
+            <div className="env-card-head">
+              <div className="env-card-name">
+                {env.type === "production" ? "Production" : "Preview"}
+                <span className="branch">({env.branch})</span>
               </div>
+              <span className={`status-pill ${isLive ? "passed" : ""}`}>
+                <span className="dot"></span>
+                {env.status === "deployed" || env.status === "ready" ? "live" : env.status}
+              </span>
             </div>
-            <a className="button secondary compact" href={env.url} target="_blank" rel="noreferrer">
-              <ExternalLink size={12} />
-              Open
+            <div className="env-card-sub">
+              {env.repo} · <span className="sha">{env.commitSha ? env.commitSha.substring(0, 7) : "—"}</span>
+              {env.releaseTag && <span style={{ marginLeft: 6 }}>· {env.releaseTag}</span>}
+            </div>
+            <a className="btn" href={env.url} target="_blank" rel="noreferrer" style={{ width: "100%", justifyContent: "center" }}>
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 6 }}>
+                <path d="M4 2h6v6M10 2 4 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Open environment
             </a>
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }

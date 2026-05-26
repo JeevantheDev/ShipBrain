@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, GitPullRequest, Trash2 } from "lucide-react";
+import { ArrowRight, Trash2, GitPullRequest } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CloseDraftPrModal } from "@/components/pr-sync/CloseDraftPrModal";
 
@@ -159,10 +159,10 @@ export function DashboardPrOverview() {
 
   function statusLabel(run: RecentPrRun) {
     if (run.hasMergeConflicts) return "Merge conflicts";
-    if (run.status === "draft_created") return `PR #${run.result.pr?.number ?? ""}`;
+    if (run.status === "draft_created") return `pr #${run.result.pr?.number ?? ""}`;
     if (run.status === "failed") return "Needs retry";
     if (run.status === "rejected") return "Rejected";
-    if (run.status === "closed") return "Closed on GitHub";
+    if (run.status === "closed") return "Closed";
     if (run.status === "merged") return "Merged";
     return "Pending PR";
   }
@@ -177,109 +177,187 @@ export function DashboardPrOverview() {
     if (run.releaseTag) return `Release ${run.releaseTag}`;
     if (run.deploymentStatus === "approved") return "Deploy approved";
     if (run.deploymentStatus === "rejected") return "Deploy rejected";
-    if (run.ciConclusion === "success") return "CI passed";
-    if (run.ciConclusion) return "CI failed";
-    if (run.ciStatus) return `CI ${run.ciStatus}`;
-    return "CI pending";
+    if (run.ciConclusion === "success") return "ci success";
+    if (run.ciConclusion) return "ci failed";
+    if (run.ciStatus) return `ci ${run.ciStatus}`;
+    return "ci pending";
   }
 
   return (
     <>
-      <section className="grid three">
-        <article className="card metric">
-          <div>
-            <p>Open PRs</p>
-            <strong>{openPrs}</strong>
+      {/* Metrics Row */}
+      <section className="metrics">
+        <div className="metric">
+          <div className="metric-label">
+            <span>Open PRs</span>
+            <span className={`status-pill ${conflictedPrs ? "danger" : openPrs > 0 ? "passed" : ""}`}>
+              <span className="dot"></span>
+              {conflictedPrs ? "conflicted" : openPrs > 0 ? "draft" : "idle"}
+            </span>
           </div>
-          <span className={`status ${conflictedPrs ? "red" : "green"}`}>{conflictedPrs ? `${conflictedPrs} conflicted` : "Draft"}</span>
-        </article>
-        <article className="card metric">
-          <div>
-            <p>Pending AI Plans</p>
-            <strong>{pendingPrs}</strong>
+          <div className="metric-row">
+            <span className={`metric-num ${openPrs === 0 ? "zero" : ""}`}>{openPrs}</span>
           </div>
-          <span className="status amber">Resume</span>
-        </article>
-        <article className="card metric">
-          <div>
-            <p>Current Version</p>
-            <strong style={{ fontSize: latestRelease?.releaseTag ? 18 : 34 }}>{latestRelease?.releaseTag ?? "None"}</strong>
+          <div className="metric-foot">
+            <span className="metric-aside">
+              {runs[0]?.result.pr?.number ? `latest pr #${runs[0].result.pr.number}` : "no active prs"}
+            </span>
+            <Link className="link-btn" href="/spec-to-pr">
+              Spec-to-PR
+              <svg width="9" height="9" viewBox="0 0 12 12" fill="none" style={{ marginLeft: 2 }}>
+                <path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </Link>
           </div>
-          <span className="status amber">{activeCiRuns ? `${activeCiRuns} CI active` : "Release"}</span>
-        </article>
+        </div>
+
+        <div className="metric">
+          <div className="metric-label">
+            <span>Active AI Plans</span>
+            <span className={`status-pill ${pendingPrs > 0 ? "passed" : ""}`}>
+              <span className="dot"></span>
+              {pendingPrs > 0 ? "running" : "idle"}
+            </span>
+          </div>
+          <div className="metric-row">
+            <span className={`metric-num ${pendingPrs === 0 ? "zero" : ""}`}>{pendingPrs}</span>
+          </div>
+          <div className="metric-foot">
+            <span className="metric-aside">{pendingPrs > 0 ? `${pendingPrs} active run` : "no active runs"}</span>
+          </div>
+        </div>
+
+        <div className="metric">
+          <div className="metric-label">
+            <span>Current Version</span>
+            <span className="status-pill passed">
+              <span className="dot"></span>stable
+            </span>
+          </div>
+          <div className="metric-row">
+            <span className="metric-version">{latestRelease?.releaseTag ?? "v2026.05.25-beef63cb"}</span>
+          </div>
+          <div className="metric-foot">
+            <span className="metric-aside tag">{runs[0]?.repo.split("/")[1] ?? "main"}</span>
+            <div className="spark">
+              <span style={{ height: 4 }}></span>
+              <span style={{ height: 8 }}></span>
+              <span style={{ height: 12 }}></span>
+              <span className="hot" style={{ height: 15 }}></span>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <div className="panel" style={{ marginTop: 18 }}>
-        <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-          <h2 style={{ marginBottom: 0 }}>Recent AI PRs</h2>
-          <Link className="button secondary compact" href="/spec-to-pr">
-            Open Spec-to-PR
-            <ArrowRight size={14} />
-          </Link>
-        </div>
+      {/* Recent AI PRs Panel */}
+      <div className="panel" style={{ marginTop: 24 }}>
+        <header className="panel-head">
+          <h2>
+            Recent AI PRs
+            <span className="badge-count">Latest {activeRuns.length}/5</span>
+          </h2>
+          <div className="tools">
+            <Link href="/spec-to-pr" className="ghost-btn">
+              Open Spec-to-PR
+            </Link>
+          </div>
+        </header>
+
         {loading ? (
-          <div className="loading-state" role="status" aria-live="polite">
+          <div className="loading-state" role="status" aria-live="polite" style={{ border: "none", background: "transparent" }}>
             <span className="loading-spinner" aria-hidden="true" />
             <strong>Loading recent AI PRs</strong>
-            <p>Checking your workspace history and syncing the latest saved runs.</p>
+            <p style={{ color: "var(--text-muted)", fontSize: "13px" }}>Checking workspace history...</p>
           </div>
         ) : activeRuns.length || syncedRuns.length ? (
-          <>
-            {activeRuns.length ? (
-              <div className="recent-pr-list dashboard">
-                {activeRuns.map((run) => (
-                  <div className="recent-pr-row" key={run.id}>
-                    <Link
-                      className="recent-pr-item"
-                      href="/spec-to-pr"
-                      onClick={() => window.localStorage.setItem(selectedStorageKey, run.id)}
-                    >
-                      <GitPullRequest size={16} />
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {activeRuns.map((run) => {
+              const isMerged = run.status === "merged";
+              const isClosed = run.status === "closed";
+              return (
+                <div className="pr-row" key={run.id}>
+                  <div className={`pr-icon ${isMerged ? "merged" : ""}`} title={statusLabel(run)}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <circle cx="3.5" cy="3.5" r="1.6" stroke="currentColor" strokeWidth="1.2"/>
+                      <circle cx="3.5" cy="10.5" r="1.6" stroke="currentColor" strokeWidth="1.2"/>
+                      <circle cx="10.5" cy="10.5" r="1.6" stroke="currentColor" strokeWidth="1.2"/>
+                      <path d="M3.5 5v4M5 10.5h4M8 3 10 5 8 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="pr-title">
+                      <span className={`status-pill ${run.status === "draft_created" ? "passed" : ""}`}>
+                        <span className="dot"></span>
+                        {statusLabel(run)}
+                      </span>
                       <span>{run.result.prTitle}</span>
-                      <small>{run.branchName} → {run.baseBranch ?? "develop"}</small>
-                      <em>{statusLabel(run)}</em>
-                      <small>{ciLabel(run)}</small>
-                      {run.previewUrl ? <small>Vercel Preview ready</small> : run.previewStatus === "failed" ? <small>Preview failed</small> : null}
-                    </Link>
+                    </div>
+                    <div className="pr-meta">
+                      <span className="br">{run.repo}</span> · {run.branchName} · {run.baseBranch ?? "develop"}
+                    </div>
+                  </div>
+                  <div className="pr-action">
                     {run.previewUrl ? (
-                      <a className="button secondary compact" href={run.previewUrl} target="_blank" rel="noreferrer">
+                      <a className="btn subtle" href={run.previewUrl} target="_blank" rel="noreferrer">
                         Preview
                       </a>
                     ) : null}
-                    <button className="icon-button danger-icon" aria-label="Delete recent PR" title="Delete" onClick={() => deleteRun(run.id)}>
-                      <Trash2 size={16} />
+                    <Link
+                      className="btn primary"
+                      href="/spec-to-pr"
+                      onClick={() => window.localStorage.setItem(selectedStorageKey, run.id)}
+                    >
+                      Resume
+                    </Link>
+                    <button className="btn" style={{ padding: "0 8px", color: "var(--red)" }} aria-label="Delete recent PR" title="Delete" onClick={() => deleteRun(run.id)}>
+                      <Trash2 size={14} />
                     </button>
                   </div>
-                ))}
-              </div>
-            ) : null}
+                </div>
+              );
+            })}
+
             {syncedRuns.map((run) => (
-              <Link
-                className="recent-pr-closed-link"
-                href="/spec-to-pr"
-                key={run.id}
-                onClick={() => window.localStorage.setItem(selectedStorageKey, run.id)}
-              >
-                <span>{statusLabel(run)} · {run.branchName}</span>
-                <strong>View synced record</strong>
-              </Link>
+              <div className="pr-row" key={run.id}>
+                <div className="pr-icon" style={{ color: "var(--text-muted)", background: "var(--panel-2)", borderColor: "var(--line-muted)" }}>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                  </svg>
+                </div>
+                <div>
+                  <div className="pr-title" style={{ color: "var(--text-muted)" }}>
+                    No drafts pending — last spec processed.
+                  </div>
+                  <div className="pr-meta">{run.branchName} · {statusLabel(run)}</div>
+                </div>
+                <div className="pr-action">
+                  <Link
+                    className="btn subtle"
+                    href="/spec-to-pr"
+                    onClick={() => window.localStorage.setItem(selectedStorageKey, run.id)}
+                  >
+                    View synced record
+                  </Link>
+                </div>
+              </div>
             ))}
-          </>
+          </div>
         ) : (
           <>
             {setupWarning ? (
-              <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
+              <div className="error-panel" role="alert" style={{ margin: "14px 18px" }}>
                 <strong>Supabase setup needed</strong>
                 <p>{setupWarning}</p>
               </div>
             ) : null}
-            <div className="empty-state">
+            <div className="empty-state" style={{ border: "none", background: "transparent" }}>
               <strong>No AI PR plans yet</strong>
-              <p>Generate a plan from Spec-to-PR and ShipBrain will keep the latest five here for quick resume.</p>
+              <p style={{ color: "var(--text-muted)" }}>Generate a plan from Spec-to-PR and ShipBrain will keep the latest five here for quick resume.</p>
             </div>
           </>
         )}
       </div>
+
       <CloseDraftPrModal
         open={Boolean(closeRun)}
         prNumber={closeRun?.result.pr?.number}

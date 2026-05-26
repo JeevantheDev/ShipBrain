@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { verifyCloudflareToken, verifyCloudflareProject } from "@/lib/cloudflare/client";
 
 export const runtime = "nodejs";
 
@@ -11,28 +12,6 @@ async function requireUser() {
   return user;
 }
 
-async function readError(response: Response) {
-  try {
-    const body = await response.json();
-    return body?.error?.message ?? body?.message ?? JSON.stringify(body);
-  } catch {
-    return response.statusText;
-  }
-}
-
-function vercelSettingsUrl(project: any, projectId: string) {
-  const ownerSlug = project?.account?.slug ?? project?.owner?.slug ?? project?.owner?.username ?? project?.account?.name ?? "";
-  const projectName = project?.name ?? "";
-  if (ownerSlug && projectName) {
-    return `https://vercel.com/${ownerSlug}/${projectName}/settings/environment-variables`;
-  }
-  return "https://vercel.com/dashboard";
-}
-
-function vercelProjectAccountId(project: any) {
-  return project?.accountId ?? project?.account?.id ?? project?.owner?.id ?? project?.ownerId ?? null;
-}
-
 export async function POST(request: Request) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -40,57 +19,42 @@ export async function POST(request: Request) {
   const body = await request.json();
   const type = String(body.type ?? "");
 
-  if (type === "vercel_token") {
-    const token = String(body.vercelToken ?? "").trim();
-    if (!token) return NextResponse.json({ error: "Paste a Vercel token first." }, { status: 400 });
-    const response = await fetch("https://api.vercel.com/v2/user", {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!response.ok) {
+  if (type === "cloudflare_token") {
+    const token = String(body.cloudflareApiToken ?? "").trim();
+    if (!token) return NextResponse.json({ error: "Paste a Cloudflare API token first." }, { status: 400 });
+
+    const isValid = await verifyCloudflareToken(token);
+    if (!isValid) {
       return NextResponse.json(
-        { error: "Vercel rejected this token.", detail: "Make sure it has not expired and belongs to a member of the project's team." },
+        { error: "Cloudflare rejected this token.", detail: "Make sure it has not expired and has the correct permissions (Cloudflare Pages:Edit)." },
         { status: 400 }
       );
     }
     return NextResponse.json({ ok: true });
   }
 
-  if (type === "vercel_project") {
-    const token = String(body.vercelToken ?? "").trim();
-    const orgId = String(body.vercelOrgId ?? "").trim();
-    const projectId = String(body.vercelProjectId ?? "").trim();
-    if (!token || !orgId || !projectId) return NextResponse.json({ error: "Vercel token, org ID, and project ID are required." }, { status: 400 });
-    const teamScopedUrl = `https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}?teamId=${encodeURIComponent(orgId)}`;
-    let response = await fetch(teamScopedUrl, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (response.status === 404) {
-      response = await fetch(`https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+  if (type === "cloudflare_project") {
+    const token = String(body.cloudflareApiToken ?? "").trim();
+    const accountId = String(body.cloudflareAccountId ?? "").trim();
+    const projectName = String(body.cloudflareProjectName ?? "").trim();
+
+    if (!token || !accountId || !projectName) {
+      return NextResponse.json({ error: "Cloudflare token, account ID, and project name are required." }, { status: 400 });
     }
-    if (!response.ok) {
+
+    const result = await verifyCloudflareProject({ apiToken: token, accountId, projectName });
+
+    if (!result.success) {
       return NextResponse.json(
-        { error: "Vercel could not find this project ID.", detail: "Check you copied it from the correct project's Settings -> General page." },
+        { error: result.error ?? "Cloudflare project verification failed.", detail: "Create the Pages project in your Cloudflare dashboard first." },
         { status: 400 }
       );
     }
-    const project = await response.json().catch(() => null);
-    const accountId = vercelProjectAccountId(project);
-    if (accountId && accountId !== orgId) {
-      return NextResponse.json(
-        {
-          error: "Vercel project does not belong to this org/account ID.",
-          detail: "Copy VERCEL_ORG_ID from the same Vercel project Settings -> General page as the VERCEL_PROJECT_ID."
-        },
-        { status: 400 }
-      );
-    }
+
     return NextResponse.json({
       ok: true,
-      projectName: project?.name ?? null,
-      accountId,
-      settingsUrl: vercelSettingsUrl(project, projectId)
+      projectName,
+      projectUrl: result.projectUrl
     });
   }
 
@@ -126,5 +90,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  return NextResponse.json({ error: `Unknown verification type: ${type}`, detail: await readError(new Response(null, { status: 400, statusText: "Bad request" })) }, { status: 400 });
+  return NextResponse.json({ error: `Unknown verification type: ${type}` }, { status: 400 });
 }

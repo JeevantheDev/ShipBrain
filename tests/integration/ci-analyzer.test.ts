@@ -8,7 +8,7 @@ describe("CI analyzer", () => {
       id: "1",
       branch: "feat/test",
       conclusion: "failure",
-      logs: "src/app.ts:10 TypeError"
+      logs: "error TS1234: TypeError at src/app.ts:10"
     });
     expect(result.summary).toBeTruthy();
     expect(result.rootCause).toContain("src/app.ts");

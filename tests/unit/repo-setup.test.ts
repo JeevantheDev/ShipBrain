@@ -4,12 +4,13 @@ import { workflowFiles } from "@/lib/github/setup";
 const baseInput = {
   devBranch: "develop",
   prodBranch: "main",
-  includeVercel: true,
+  includeCloudflare: true,
   includeIncidents: true,
   ciExists: false,
   deployExists: false,
   incidentsExists: false,
-  packageJson: true
+  packageJson: true,
+  buildOutputDir: "dist"
 };
 
 describe("ShipBrain repo setup workflow generation", () => {
@@ -17,24 +18,16 @@ describe("ShipBrain repo setup workflow generation", () => {
     const files = workflowFiles(baseInput);
     expect(Object.keys(files).sort()).toEqual([
       ".github/workflows/shipbrain-ci.yml",
-      ".github/workflows/shipbrain-deploy.yml",
-      ".github/workflows/shipbrain-incidents.yml"
+      ".github/workflows/shipbrain-notify.yml",
+      ".github/workflows/shipbrain-preview.yml",
+      ".github/workflows/shipbrain-production.yml"
     ]);
     expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("branches: [develop, main]");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("Vercel preview deploy");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("inputs:");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("deploy_preview:");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("source_pr_number:");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("inputs.source_pr_number");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("SHIPBRAIN_FORCE_FAIL");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).not.toContain("shipbrain-force-fail.txt");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("continue-on-error: true");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("ShipBrain callback secrets are missing; CI notification skipped.");
-    expect(files[".github/workflows/shipbrain-deploy.yml"]).toContain("workflow_dispatch");
-    expect(files[".github/workflows/shipbrain-deploy.yml"]).not.toContain("push:");
+    expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("Smoke test");
+    expect(files[".github/workflows/shipbrain-preview.yml"]).toContain("workflow_dispatch");
   });
 
-  it("never overwrites existing ShipBrain workflows and adds only the CI notify companion", () => {
+  it("never overwrites existing ShipBrain workflows and adds only the notify companion", () => {
     const files = workflowFiles({
       ...baseInput,
       ciExists: true,
@@ -42,22 +35,24 @@ describe("ShipBrain repo setup workflow generation", () => {
       incidentsExists: true
     });
 
-    expect(Object.keys(files)).toEqual([".github/workflows/shipbrain-ci-notify.yml"]);
+    expect(Object.keys(files).sort()).toEqual([
+      ".github/workflows/shipbrain-notify.yml",
+      ".github/workflows/shipbrain-preview.yml"
+    ]);
     expect(files[".github/workflows/shipbrain-ci.yml"]).toBeUndefined();
-    expect(files[".github/workflows/shipbrain-deploy.yml"]).toBeUndefined();
-    expect(files[".github/workflows/shipbrain-incidents.yml"]).toBeUndefined();
-    expect(files[".github/workflows/shipbrain-ci-notify.yml"]).toContain("ShipBrain CI notify");
+    expect(files[".github/workflows/shipbrain-production.yml"]).toBeUndefined();
+    expect(files[".github/workflows/shipbrain-notify.yml"]).toContain("ShipBrain Notify");
   });
 
-  it("omits Vercel preview work when Vercel is skipped", () => {
-    const files = workflowFiles({ ...baseInput, includeVercel: false });
-    expect(files[".github/workflows/shipbrain-deploy.yml"]).toBeUndefined();
-    expect(files[".github/workflows/shipbrain-ci.yml"]).not.toContain("Vercel preview deploy");
+  it("omits Cloudflare preview work when Cloudflare is skipped", () => {
+    const files = workflowFiles({ ...baseInput, includeCloudflare: false });
+    expect(files[".github/workflows/shipbrain-preview.yml"]).toBeUndefined();
+    expect(files[".github/workflows/shipbrain-production.yml"]).toBeUndefined();
   });
 
   it("uses production-only branch lists when no development branch is configured", () => {
     const files = workflowFiles({ ...baseInput, devBranch: null });
     expect(files[".github/workflows/shipbrain-ci.yml"]).toContain("branches: [main]");
-    expect(files[".github/workflows/shipbrain-ci.yml"]).not.toContain("Vercel preview deploy");
+    expect(files[".github/workflows/shipbrain-preview.yml"]).toBeUndefined();
   });
 });

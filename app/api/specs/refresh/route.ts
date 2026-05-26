@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { getLatestPreviewUrl, getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/vercel/client";
+import { getLatestPreviewUrl, getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/cloudflare/client";
 
 export const runtime = "nodejs";
 
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   const { owner, repo } = splitRepo(spec.repo_full_name);
   const updates: Record<string, any> = { updated_at: new Date().toISOString() };
 
-  // Get Vercel credentials from repo record for URL lookups
+  // Get Cloudflare credentials from repo record for URL lookups
   const { data: repoRecord } = await supabase
     .from("repos")
     .select("setup_metadata")
@@ -52,8 +52,9 @@ export async function POST(request: Request) {
     .eq("user_id", user.id)
     .single();
 
-  const vercelProjectId = (repoRecord?.setup_metadata as any)?.vercelProjectId;
-  const vercelToken = process.env.VERCEL_TOKEN; // Use env var for now, can be per-repo later
+  const cloudflareProjectName = (repoRecord?.setup_metadata as any)?.cloudflareProjectName;
+  const cloudflareAccountId = (repoRecord?.setup_metadata as any)?.cloudflareAccountId;
+  const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN;
 
   try {
     // Check feature PR status
@@ -116,7 +117,7 @@ export async function POST(request: Request) {
 
     if (shouldCheckProductionDeploy && isNotFinalState) {
       // Try multiple workflow names for backwards compatibility
-      const workflowNames = ["shipbrain-production.yml", "shipbrain-deploy.yml", "shipbrain-vercel-prod.yml"];
+      const workflowNames = ["shipbrain-production.yml", "shipbrain-deploy.yml"];
       let deployRun: any = null;
 
       const deployTriggerTime = new Date(spec.updated_at).getTime();
@@ -178,13 +179,14 @@ export async function POST(request: Request) {
         if (previewRun) {
           if (previewRun.status === "completed") {
             if (previewRun.conclusion === "success") {
-              // Get actual preview URL from Vercel API matching this specific SHA
+              // Get actual preview URL from Cloudflare API matching this specific SHA
               let previewUrl: string | null = null;
-              if (vercelToken && vercelProjectId && mergeSha) {
+              if (cloudflareApiToken && cloudflareAccountId && cloudflareProjectName && mergeSha) {
                 try {
                   previewUrl = await getPreviewUrlForSha({
-                    vercelToken,
-                    projectId: vercelProjectId,
+                    apiToken: cloudflareApiToken,
+                    accountId: cloudflareAccountId,
+                    projectName: cloudflareProjectName,
                     sha: mergeSha
                   });
                 } catch (err) {
@@ -195,13 +197,12 @@ export async function POST(request: Request) {
               if (previewUrl) {
                 updates.preview_status = "deployed";
                 updates.preview_url = previewUrl;
-              } else if (!vercelToken || !vercelProjectId) {
-                // Fallback to constructed URL if no Vercel credentials
-                const vercelProjectName = repo.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+              } else if (!cloudflareApiToken || !cloudflareAccountId || !cloudflareProjectName) {
+                // Fallback to constructed URL if no Cloudflare credentials
                 updates.preview_status = "deployed";
-                updates.preview_url = `https://${vercelProjectName}-git-develop-${owner.toLowerCase()}.vercel.app`;
+                updates.preview_url = `https://${cloudflareProjectName || repo.toLowerCase()}.pages.dev`;
               } else {
-                // Vercel deployment not ready yet, keep in deploying status
+                // Cloudflare deployment not ready yet, keep in deploying status
                 updates.preview_status = "deploying";
               }
             } else {
@@ -217,11 +218,12 @@ export async function POST(request: Request) {
     }
 
     // Check production deployment and get actual production URL
-    if (spec.release_status === "deployed" && !spec.production_url && vercelToken && vercelProjectId) {
+    if (spec.release_status === "deployed" && !spec.production_url && cloudflareApiToken && cloudflareAccountId && cloudflareProjectName) {
       try {
         const productionUrl = await getLatestProductionUrl({
-          vercelToken,
-          projectId: vercelProjectId
+          apiToken: cloudflareApiToken,
+          accountId: cloudflareAccountId,
+          projectName: cloudflareProjectName
         });
         if (productionUrl) {
           updates.production_url = productionUrl;

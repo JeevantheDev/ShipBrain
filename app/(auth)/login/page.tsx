@@ -8,7 +8,7 @@ export default async function LoginPage() {
     data: { user }
   } = await supabase.auth.getUser();
 
-  if (user) redirect("/");
+  if (user) redirect("/dashboard");
 
   return (
     <main style={{ display: "grid", minHeight: "100vh", placeItems: "center", padding: 24 }}>

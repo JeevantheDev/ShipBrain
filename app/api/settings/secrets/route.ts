@@ -74,7 +74,7 @@ async function syncSetupPrStatuses(supabase: ReturnType<typeof getSupabaseServer
 }
 
 function normalizeSecretUpdates(input: unknown) {
-  const allowed = new Set(["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_URL"]);
+  const allowed = new Set(["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CF_PROJECT_NAME", "SHIPBRAIN_API_URL"]);
   if (!input || typeof input !== "object") return [];
   return Object.entries(input as Record<string, unknown>)
     .map(([name, value]) => [name, String(value ?? "").trim()] as const)
@@ -108,7 +108,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("repos")
-    .select("id, full_name, connected_at, created_at, setup_status, setup_pr_number, setup_pr_url, shipbrain_api_key_last4, setup_metadata, vercel_preview_env_confirmed")
+    .select("id, full_name, connected_at, created_at, setup_status, setup_pr_number, setup_pr_url, shipbrain_api_key_last4, setup_metadata")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
 
@@ -171,8 +171,8 @@ export async function POST(request: Request) {
       ...currentMetadata,
       injectedSecrets,
       ...(changed.SHIPBRAIN_API_URL ? { apiUrl: changed.SHIPBRAIN_API_URL } : {}),
-      ...(changed.VERCEL_ORG_ID ? { vercelOrgId: changed.VERCEL_ORG_ID } : {}),
-      ...(changed.VERCEL_PROJECT_ID ? { vercelProjectId: changed.VERCEL_PROJECT_ID } : {}),
+      ...(changed.CLOUDFLARE_ACCOUNT_ID ? { cloudflareAccountId: changed.CLOUDFLARE_ACCOUNT_ID } : {}),
+      ...(changed.CF_PROJECT_NAME ? { cloudflareProjectName: changed.CF_PROJECT_NAME } : {}),
       secretsUpdatedAt: new Date().toISOString()
     };
     const { error } = await supabase
@@ -182,12 +182,6 @@ export async function POST(request: Request) {
       .eq("user_id", user.id);
     if (error) return NextResponse.json({ error: "Secrets updated in GitHub, but ShipBrain could not update the repo record.", detail: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, updatedSecrets: updates.map(([name]) => name), setup_metadata: nextMetadata });
-  }
-
-  if (action === "confirm_preview_env") {
-    const { error } = await supabase.from("repos").update({ vercel_preview_env_confirmed: true }).eq("id", repo.id);
-    if (error) return NextResponse.json({ error: "Unable to save preview environment confirmation.", detail: error.message }, { status: 500 });
-    return NextResponse.json({ ok: true });
   }
 
   if (action === "sync_to_github") {
@@ -248,7 +242,7 @@ export async function POST(request: Request) {
     if (confirmation !== repo.full_name) {
       return NextResponse.json({ error: "Type the exact repo name to disconnect." }, { status: 400 });
     }
-    const secrets = ["PAGERDUTY_ROUTING_KEY", "VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "SHIPBRAIN_API_KEY", "SHIPBRAIN_API_URL"];
+    const secrets = ["PAGERDUTY_ROUTING_KEY", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CF_PROJECT_NAME", "SHIPBRAIN_API_KEY", "SHIPBRAIN_API_URL"];
     const results = await Promise.allSettled(secrets.map((secret) => deleteActionsSecret(repo.full_name, secret, token)));
     const failed = results
       .map((result, index) => result.status === "rejected" ? secrets[index] : "")

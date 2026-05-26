@@ -1,6 +1,6 @@
 import { getOctokit } from "@/lib/github/client";
 
-export type DispatchVercelDeployInput = {
+export type DispatchCloudflareDeployInput = {
   owner: string;
   repo: string;
   releaseTag: string;
@@ -11,11 +11,11 @@ export type DispatchVercelDeployInput = {
   token?: string;
 };
 
-export async function dispatchVercelProductionDeploy(input: DispatchVercelDeployInput) {
+export async function dispatchCloudflareProductionDeploy(input: DispatchCloudflareDeployInput) {
   // Try new workflow name first, fall back to old names for backwards compatibility
   const workflowCandidates = input.workflowId
     ? [input.workflowId]
-    : ["shipbrain-production.yml", "shipbrain-deploy.yml", "shipbrain-vercel-prod.yml"];
+    : ["shipbrain-production.yml", "shipbrain-deploy.yml"];
 
   const octokit = getOctokit(input.token);
   let usedWorkflowId = workflowCandidates[0];
@@ -190,9 +190,13 @@ export type DispatchHotfixDeployInput = {
 
 export async function dispatchHotfixDeploy(input: DispatchHotfixDeployInput) {
   // Hotfix deployments use the same production workflow with is_hotfix=true
-  return dispatchVercelProductionDeploy({
+  return dispatchCloudflareProductionDeploy({
     ...input,
     isHotfix: true,
     reverseSync: input.reverseSync !== false
   });
 }
+
+// Legacy export for backwards compatibility
+export const dispatchVercelProductionDeploy = dispatchCloudflareProductionDeploy;
+export type DispatchVercelDeployInput = DispatchCloudflareDeployInput;

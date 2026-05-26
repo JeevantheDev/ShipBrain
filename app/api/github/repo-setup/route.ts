@@ -5,6 +5,11 @@ import {
   scanRepository,
   workflowFiles
 } from "@/lib/github/setup";
+import {
+  ensureCloudflareProject,
+  generateProjectName,
+  getShipBrainCloudflareCredentials
+} from "@/lib/cloudflare/client";
 import { generateShipBrainApiKey, hashShipBrainApiKey, lastFour } from "@/lib/shipbrain/api-keys";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -16,20 +21,23 @@ function publicShipBrainApiUrl(request: Request) {
   const configured =
     process.env.SHIPBRAIN_API_URL ??
     process.env.NEXT_PUBLIC_SHIPBRAIN_API_URL ??
+    process.env.VERCEL_URL ??
     process.env.NGROK_PUBLIC_URL ??
     process.env.NGROK_URL;
-  if (configured?.trim()) return configured.trim().replace(/\/$/, "");
+
+  if (configured?.trim()) {
+    let url = configured.trim();
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      url = `https://${url}`;
+    }
+    return url.replace(/\/$/, "");
+  }
 
   const origin = new URL(request.url).origin;
   if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(origin)) {
     throw new Error("Set SHIPBRAIN_API_URL to your public ngrok URL before connecting a repo from localhost. GitHub Actions cannot call localhost.");
   }
   return origin.replace(/\/$/, "");
-}
-
-function safeVercelSettingsUrl(value: string) {
-  if (!value || value.includes("/dashboard/project/")) return null;
-  return value;
 }
 
 async function getContext() {
@@ -46,25 +54,6 @@ async function getContext() {
     .maybeSingle();
   return { supabase, user, token: profile?.github_access_token ?? session?.provider_token ?? null };
 }
-
-async function verifyVercelProject(vercelToken: string, vercelOrgId: string, vercelProjectId: string) {
-  const headers = { Authorization: `Bearer ${vercelToken}` };
-  const scopedUrl = `https://api.vercel.com/v9/projects/${encodeURIComponent(vercelProjectId)}?teamId=${encodeURIComponent(vercelOrgId)}`;
-  let response = await fetch(scopedUrl, { headers });
-  if (response.status === 404) {
-    response = await fetch(`https://api.vercel.com/v9/projects/${encodeURIComponent(vercelProjectId)}`, { headers });
-  }
-  if (!response.ok) {
-    throw new Error("Vercel could not verify the token, org ID, and project ID together.");
-  }
-  const project = await response.json().catch(() => null);
-  const accountId = project?.accountId ?? project?.account?.id ?? project?.owner?.id ?? project?.ownerId ?? null;
-  if (accountId && accountId !== vercelOrgId) {
-    throw new Error("Vercel project does not belong to the provided org/account ID.");
-  }
-}
-
-// verifyPagerDutyRoutingKey removed since we use ShipBrain incidents directly
 
 export async function POST(request: Request) {
   const { supabase, user, token } = await getContext();
@@ -132,67 +121,92 @@ async function runSetup({
   const repoFullName = String(repo?.full_name ?? body.repoFullName ?? "");
   if (!repoFullName.includes("/")) throw new Error("Select a valid GitHub repository.");
 
-  const skipVercel = Boolean(body.skipVercel);
   const skipIncidents = Boolean(body.skipIncidents);
-  const vercelToken = String(body.vercelToken ?? "").trim();
-  const vercelOrgId = String(body.vercelOrgId ?? "").trim();
-  const vercelProjectId = String(body.vercelProjectId ?? "").trim();
+  const buildOutputDir = String(body.buildOutputDir ?? "dist").trim() || "dist";
   const customProdBranch = String(body.productionBranch ?? "").trim();
   const customDevBranch = String(body.developmentBranch ?? "").trim();
-  const providedVercelSettingsUrl = safeVercelSettingsUrl(String(body.vercelSettingsUrl ?? "").trim());
 
-  if (!skipVercel && (!vercelToken || !vercelOrgId || !vercelProjectId)) {
-    throw new Error("Vercel setup needs VERCEL_TOKEN, VERCEL_ORG_ID, and VERCEL_PROJECT_ID or use Skip Vercel setup.");
-  }
-
-  if (!skipVercel) {
-    await emit?.({ type: "step", label: "Verifying Vercel project", status: "running" });
-    await verifyVercelProject(vercelToken, vercelOrgId, vercelProjectId);
-    await emit?.({ type: "step", label: "Verifying Vercel project", status: "done" });
-  }
-
+  // Scan repository first
   await emit?.({ type: "step", label: "Scanning repository", status: "running" });
   const scan = await scanRepository(repoFullName, token);
   await emit?.({ type: "step", label: "Scanning repository", status: "done" });
+
   if (scan.branches.scenario === "custom_required" && !customProdBranch) {
     throw new Error("Production branch is required because ShipBrain could not detect main, master, or develop.");
   }
 
   const prodBranch = customProdBranch || scan.branches.productionBranch || repo.default_branch || "main";
   const devBranch = customDevBranch || scan.branches.developmentBranch;
+
+  // Generate ShipBrain credentials
   const shipbrainApiKey = generateShipBrainApiKey();
   const apiUrl = publicShipBrainApiUrl(request);
-  const secretSteps: string[] = [];
 
-  const secrets: Array<[string, string, boolean]> = [
-    ["VERCEL_TOKEN", vercelToken, !skipVercel],
-    ["VERCEL_ORG_ID", vercelOrgId, !skipVercel],
-    ["VERCEL_PROJECT_ID", vercelProjectId, !skipVercel],
-    ["SHIPBRAIN_API_KEY", shipbrainApiKey, true],
-    ["SHIPBRAIN_API_URL", apiUrl, true]
+  // Get ShipBrain's Cloudflare credentials
+  const { apiToken: cfApiToken, accountId: cfAccountId } = getShipBrainCloudflareCredentials();
+
+  // Create Cloudflare Pages project automatically
+  await emit?.({ type: "step", label: "Creating Cloudflare Pages project", status: "running" });
+
+  let cloudflareProjectName: string;
+  let cloudflareProjectUrl: string;
+
+  try {
+    // Create or get the Cloudflare Pages project
+    const cfResult = await ensureCloudflareProject({
+      repoFullName,
+      productionBranch: prodBranch,
+      envVars: {
+        SHIPBRAIN_API_KEY: shipbrainApiKey,
+        SHIPBRAIN_API_URL: apiUrl
+      }
+    });
+
+    if (!cfResult.success) {
+      throw new Error(cfResult.error || "Failed to create Cloudflare Pages project");
+    }
+
+    cloudflareProjectName = cfResult.projectName;
+    cloudflareProjectUrl = cfResult.projectUrl;
+
+    await emit?.({ type: "step", label: "Creating Cloudflare Pages project", status: "done", detail: cloudflareProjectUrl });
+  } catch (error) {
+    throw new Error(`Cloudflare setup failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+  }
+
+  // Inject GitHub Actions secrets
+  const secretSteps: string[] = [];
+  const secrets: Array<[string, string]> = [
+    ["CLOUDFLARE_API_TOKEN", cfApiToken],
+    ["CLOUDFLARE_ACCOUNT_ID", cfAccountId],
+    ["CF_PROJECT_NAME", cloudflareProjectName],
+    ["SHIPBRAIN_API_KEY", shipbrainApiKey],
+    ["SHIPBRAIN_API_URL", apiUrl]
   ];
 
-  for (const [name, value, enabled] of secrets) {
-    if (!enabled) continue;
+  for (const [name, value] of secrets) {
     await emit?.({ type: "step", label: `Injecting ${name}`, status: "running" });
     await putActionsSecret(repoFullName, name, value, token);
     secretSteps.push(name);
     await emit?.({ type: "step", label: `Injecting ${name}`, status: "done" });
   }
 
+  // Prepare workflow files
   await emit?.({ type: "step", label: "Preparing workflow files", status: "running" });
   const files = workflowFiles({
     devBranch,
     prodBranch,
-    includeVercel: !skipVercel,
+    includeCloudflare: true,
     includeIncidents: !skipIncidents,
     ciExists: scan.workflows.ci,
     deployExists: scan.workflows.deploy,
     incidentsExists: scan.workflows.incidents,
-    packageJson: scan.project.packageJson
+    packageJson: scan.project.packageJson,
+    buildOutputDir
   });
   await emit?.({ type: "step", label: "Preparing workflow files", status: "done", files: Object.keys(files) });
 
+  // Open setup PR if there are workflow files to add
   let pr: Awaited<ReturnType<typeof openSetupPullRequest>> | null = null;
   if (Object.keys(files).length) {
     await emit?.({ type: "step", label: "Opening GitHub setup PR", status: "running" });
@@ -202,8 +216,10 @@ async function runSetup({
     await emit?.({ type: "step", label: "Workflow files already configured", status: "done" });
   }
 
+  // Save repo record to database
   await emit?.({ type: "step", label: "Saving ShipBrain repo record", status: "running" });
   await supabase.from("profiles").upsert({ id: user.id });
+
   const { data: savedRepo, error } = await supabase
     .from("repos")
     .upsert(
@@ -223,14 +239,14 @@ async function runSetup({
           scan,
           prodBranch,
           devBranch,
-          skipVercel,
           skipIncidents,
           injectedSecrets: secretSteps,
           filesAdded: Object.keys(files),
           apiUrl,
-          vercelSettingsUrl: providedVercelSettingsUrl,
-          vercelProjectId: skipVercel ? null : vercelProjectId,
-          vercelOrgId: skipVercel ? null : vercelOrgId
+          buildOutputDir,
+          cloudflareProjectName,
+          cloudflareProjectUrl,
+          cloudflareAccountId: cfAccountId
         }
       },
       { onConflict: "user_id,full_name" }
@@ -250,6 +266,8 @@ async function runSetup({
     pr,
     injectedSecrets: secretSteps,
     filesAdded: Object.keys(files),
-    shipbrainApiKey
+    shipbrainApiKey,
+    cloudflareProjectName,
+    cloudflareProjectUrl
   };
 }

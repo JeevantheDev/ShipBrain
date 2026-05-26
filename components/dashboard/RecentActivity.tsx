@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Activity, AlertTriangle, GitPullRequest, Rocket, TestTube2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 
 type ActivityItem = {
   id: string;
@@ -12,13 +12,6 @@ type ActivityItem = {
   status: string;
   href: string;
   createdAt: string;
-};
-
-const icons = {
-  pr: GitPullRequest,
-  ci: TestTube2,
-  deploy: Rocket,
-  incident: AlertTriangle
 };
 
 export function RecentActivity() {
@@ -46,41 +39,99 @@ export function RecentActivity() {
     }
   }
 
+  function getFiClass(item: ActivityItem) {
+    if (item.type === "incident" || item.status.toLowerCase().includes("fail")) {
+      return "fi alert";
+    }
+    if (item.type === "pr") {
+      return "fi ai";
+    }
+    return "fi ok";
+  }
+
+  function getFiIcon(item: ActivityItem) {
+    const isAlert = item.type === "incident" || item.status.toLowerCase().includes("fail");
+    if (isAlert) {
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M6 2v5M6 9h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      );
+    }
+    if (item.type === "pr") {
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <circle cx="3" cy="3" r="1.5" stroke="currentColor" strokeWidth="1.2"/>
+          <circle cx="3" cy="9" r="1.5" stroke="currentColor" strokeWidth="1.2"/>
+          <circle cx="9" cy="9" r="1.5" stroke="currentColor" strokeWidth="1.2"/>
+          <path d="M3 4.5v3M4.5 9h3" stroke="currentColor" strokeWidth="1.2"/>
+        </svg>
+      );
+    }
+    return (
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d="m3 6.5 2 2 4-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    );
+  }
+
+  function getTagLabel(type: string) {
+    switch (type) {
+      case "pr": return "spec-to-pr";
+      case "ci": return "ci monitor";
+      case "deploy": return "release";
+      case "incident": return "incidents";
+      default: return type;
+    }
+  }
+
   return (
     <div className="panel">
-      <h2>Recent Activity</h2>
+      <header className="panel-head">
+        <h2>
+          Recent Activity
+          <span className="badge-count">Live feed</span>
+        </h2>
+      </header>
+
       {error ? (
-        <div className="error-panel" role="alert" style={{ marginBottom: 12 }}>
+        <div className="error-panel" role="alert" style={{ margin: "14px 18px" }}>
           <strong>Activity sync needs attention</strong>
           <p>{error}</p>
         </div>
       ) : null}
+
       {loading ? (
-        <div className="loading-state" role="status">
+        <div className="loading-state" role="status" style={{ border: "none", background: "transparent" }}>
           <span className="loading-spinner" aria-hidden="true" />
-          <strong>Loading activity</strong>
-          <p>Collecting recent PR, CI, deployment, and incident events.</p>
+          <p style={{ color: "var(--text-muted)", fontSize: "13px" }}>Checking activity logs...</p>
         </div>
       ) : items.length ? (
-        <div className="activity">
-          {items.map((item) => {
-            const Icon = icons[item.type] ?? Activity;
-            return (
-              <Link className="activity-row activity-link" href={item.href} key={item.id}>
-                <Icon size={16} />
-                <div>
-                  <strong>{item.title}</strong>
-                  <p>{item.detail}</p>
-                </div>
-                <span className="status amber">{item.status}</span>
-              </Link>
-            );
-          })}
-        </div>
+        <ul className="feed">
+          {items.map((item) => (
+            <li key={item.id} style={{ cursor: "pointer" }} onClick={() => {
+              if (item.href) window.location.href = item.href;
+            }}>
+              <div className={getFiClass(item)} title={item.type}>
+                {getFiIcon(item)}
+              </div>
+              <div>
+                <div className="fa-title">{item.title}</div>
+                <div className="fa-meta">{item.detail}</div>
+              </div>
+              <div className="fa-right">
+                <span className="fa-tag">{getTagLabel(item.type)}</span>
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+            </li>
+          ))}
+        </ul>
       ) : (
-        <div className="empty-state">
+        <div className="empty-state" style={{ border: "none", background: "transparent" }}>
           <strong>No production activity yet</strong>
-          <p>Connect a repo, generate your first Draft PR, run CI, or simulate an incident to start filling this feed.</p>
+          <p style={{ color: "var(--text-muted)" }}>Connect a repo and start shipping to fill this feed.</p>
         </div>
       )}
     </div>

@@ -1,10 +1,10 @@
 "use client";
 
-import { Copy, ExternalLink, FileText, GitPullRequest, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, FileText, GitPullRequest, Loader2, Play, RefreshCw, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
 import { CloseDraftPrModal } from "@/components/pr-sync/CloseDraftPrModal";
-import { SpecEditor } from "@/components/spec-editor/SpecEditor";
 
 type SpecResult = {
   tasks: Array<{ title: string; description: string; files: string[]; estimatedLines?: number }>;
@@ -54,89 +54,59 @@ const selectedPrStorageKey = "shipbrain:selected-pr-run";
 const flowCopy: Record<FlowStage, { percent: number; label: string; note: string; estimate: string }> = {
   idle: {
     percent: 0,
-    label: "Waiting for a ticket",
-    note: "Paste a ticket or load the sample ticket to begin.",
-    estimate: "Not started"
+    label: "Awaiting Input",
+    note: "Provide a spec on the left and choose a recipe to start planning.",
+    estimate: "Idle"
   },
   sample: {
     percent: 8,
-    label: "Sample ticket loaded",
-    note: "Review or edit the sample, then generate the AI plan.",
-    estimate: "Next step: 20-45 sec"
+    label: "Recipe loaded",
+    note: "Review or edit the spec, then generate the AI plan.",
+    estimate: "Ready"
   },
   planning: {
     percent: 35,
-    label: "Gemini is decomposing the ticket",
-    note: "Do not close this browser tab. ShipBrain is creating the developer handoff plan.",
-    estimate: "Usually 20-45 sec"
+    label: "Decomposing ticket...",
+    note: "Do not close this tab. ShipBrain is creating the developer handoff plan.",
+    estimate: "Planning"
   },
   review: {
     percent: 65,
     label: "AI plan ready for approval",
     note: "Review the generated tasks before allowing ShipBrain to touch GitHub.",
-    estimate: "Waiting for your approval"
+    estimate: "Awaiting approval"
   },
   creating_pr: {
     percent: 85,
-    label: "Creating GitHub Draft PR",
-    note: "Do not close this browser tab. ShipBrain is creating the feature branch, committing the handoff note, and opening a Draft PR.",
-    estimate: "Usually 20-60 sec"
+    label: "Creating GitHub Draft PR...",
+    note: "Creating the feature branch, committing the handoff, and opening a Draft PR.",
+    estimate: "Deploying plan"
   },
   ready: {
     percent: 100,
     label: "Draft PR created",
-    note: "Open the PR link, let the development review happen, then merge into develop when ready.",
+    note: "Open the PR link, let the development review happen, then merge to develop.",
     estimate: "Complete"
   },
   failed: {
     percent: 70,
     label: "Workflow paused",
     note: "The AI plan is preserved. Fix the issue, then retry Draft PR creation.",
-    estimate: "Waiting for action"
+    estimate: "Failed"
   },
   cancelled: {
     percent: 60,
     label: "Approval cancelled",
     note: "The AI plan is preserved. You can retry Draft PR creation when ready.",
-    estimate: "Waiting for action"
+    estimate: "Cancelled"
   }
 };
-
-const sampleTicket = `# Ticket: Update Cartlane checkout heading color
-
-Context:
-The sandbox repo represents Cartlane, a mock ecommerce checkout application used for the ShipBrain E2E demo. We need a very small visual change so the full flow can be tested safely: ShipBrain creates the feature branch and Draft PR into develop, the developer can continue work on that same feature branch, GitHub preserves PR history, the developer merges into develop after review, CI/dev validation runs, CI Monitor gates production approval, ShipBrain creates a release tag, Vercel deploys production, and incident investigation can still use the release context if checkout latency spikes after release.
-
-Change the main checkout heading color in the sandbox app. ShipBrain should only create the feature branch, Draft PR, and developer handoff note. The actual index.html color change will be committed manually by the developer on the same feature branch after the PR is created.
-
-Requirements:
-- Create a Draft PR that clearly tells the developer to update the primary checkout heading color in index.html
-- Do not change index.html automatically from ShipBrain
-- Keep the existing layout, checkout modal, release refresh icon, and incident alert flow unchanged
-- Use a clear, readable color that still fits the Cartlane checkout design
-- Keep the implementation lightweight and dependency-free
-
-Acceptance criteria:
-- Draft PR targets the develop branch and contains only a ShipBrain handoff note, not the final app source change
-- Developer continues work on the ShipBrain-created feature branch so all commits stay attached to the same PR history
-- Developer manually commits the heading color change to index.html on the same feature branch
-- Developer can review the PR, mark it ready, and merge it into develop outside ShipBrain
-- CI runs once for the PR lifecycle and the develop validation path, not once per generated file
-- Manager can approve production deployment in ShipBrain CI Monitor only after green CI and after the PR is merged
-- Approval creates the release tag from the merged PR commit, dispatches the Vercel production deploy workflow, and updates Dashboard current version
-- Vercel production deployment exposes the approved release tag through /api/release
-- If the deployed checkout triggers a production alert, ShipBrain Incident Commander can investigate the incident with release/version context and connect it back to the feature branch history, Draft PR, CI run, deployment audit, and release tag
-
-Suggested implementation notes:
-- Prefer changing only CSS in index.html
-- ShipBrain-codegen: handoff-only
-- Do not modify server.mjs, api routes, workflows, or Vercel config
-- Do not change the checkout behavior`;
 
 const quickPrTemplates = [
   {
     id: "test-color-change",
-    label: "TEST: Heading color change",
+    label: "Heading color change",
+    prefix: "test",
     baseBranch: "develop",
     sourceBranch: undefined,
     ticket: `# TEST: Update checkout heading color
@@ -172,7 +142,8 @@ ShipBrain-codegen: handoff-only`
   },
   {
     id: "feature",
-    label: "Feature: New functionality",
+    label: "New functionality",
+    prefix: "feature",
     baseBranch: "develop",
     sourceBranch: undefined,
     ticket: `# Feature: [Feature Name]
@@ -198,15 +169,13 @@ As a [type of user], I want [goal] so that [benefit].
 - Dependencies or integrations
 - Performance considerations
 
-## Out of Scope
-- Items explicitly not included in this feature
-
 ---
 ShipBrain-codegen: handoff-only`
   },
   {
     id: "bugfix",
-    label: "Bug Fix: Issue resolution",
+    label: "Issue resolution",
+    prefix: "bug fix",
     baseBranch: "develop",
     sourceBranch: undefined,
     ticket: `# Bug Fix: [Bug Title]
@@ -222,28 +191,16 @@ Clear description of the bug and its impact.
 ## Expected Behavior
 What should happen.
 
-## Actual Behavior
-What is happening instead.
-
-## Environment
-- Browser/Device:
-- Version:
-- OS:
-
 ## Proposed Fix
 Brief description of the solution approach.
-
-## Testing Plan
-- [ ] Test case 1
-- [ ] Test case 2
-- [ ] Regression test
 
 ---
 ShipBrain-codegen: handoff-only`
   },
   {
     id: "refactor",
-    label: "Refactor: Code improvement",
+    label: "Code improvement",
+    prefix: "refactor",
     baseBranch: "develop",
     sourceBranch: undefined,
     ticket: `# Refactor: [Component/Module Name]
@@ -261,24 +218,13 @@ Description of the current implementation and its issues.
 - Better performance
 - Cleaner code structure
 
-## Risk Assessment
-- Low/Medium/High risk areas
-- Mitigation strategies
-
-## Testing Strategy
-- [ ] Unit tests updated
-- [ ] Integration tests pass
-- [ ] No functional changes
-
-## Rollback Plan
-Steps to revert if issues arise.
-
 ---
 ShipBrain-codegen: handoff-only`
   },
   {
     id: "develop-to-prod",
-    label: "Release: Develop to production",
+    label: "Develop → production",
+    prefix: "release",
     baseBranch: "main",
     sourceBranch: "develop",
     ticket: `# Release: Promote develop to production
@@ -298,18 +244,6 @@ Create a production release PR from develop branch to main.
 - Feature 1
 - Feature 2
 
-### Bug Fixes
-- Fix 1
-- Fix 2
-
-### Breaking Changes
-- None / List changes
-
-## Post-release Verification
-- [ ] Production deployment successful
-- [ ] Smoke tests passing
-- [ ] Monitoring alerts normal
-
 ---
 ShipBrain-codegen: handoff-only
 Source branch: develop
@@ -317,7 +251,8 @@ Destination branch: main`
   },
   {
     id: "documentation",
-    label: "Docs: Documentation update",
+    label: "Documentation update",
+    prefix: "docs",
     baseBranch: "develop",
     sourceBranch: undefined,
     ticket: `# Documentation: [Topic]
@@ -330,17 +265,6 @@ What documentation needs to be added or updated.
 - [ ] API documentation
 - [ ] User guide
 - [ ] Code comments
-
-## Content Outline
-1. Section 1
-2. Section 2
-3. Section 3
-
-## Review Checklist
-- [ ] Technical accuracy verified
-- [ ] Examples tested and working
-- [ ] Grammar and spelling checked
-- [ ] Links validated
 
 ---
 ShipBrain-codegen: handoff-only`
@@ -372,7 +296,20 @@ export default function SpecToPrPage() {
   const [closeError, setCloseError] = useState("");
   const [quickTemplateId, setQuickTemplateId] = useState("");
   const [retryCountdown, setRetryCountdown] = useState(0);
-  // Detect release PR mode: either from template selection OR from branch names (develop → main)
+
+  // Compute stats for editor
+  const lineCount = useMemo(() => {
+    return spec.split("\n").length;
+  }, [spec]);
+
+  const wordCount = useMemo(() => {
+    return spec.trim() === "" ? 0 : spec.trim().split(/\s+/).length;
+  }, [spec]);
+
+  const tokenCount = useMemo(() => {
+    return Math.round(wordCount * 1.3);
+  }, [wordCount]);
+
   const useExistingSourceBranch = quickTemplateId === "develop-to-prod" || (branchName === "develop" && baseBranch === "main");
   const flow = flowCopy[flowStage];
   const displayedPercent = flowStage === "planning" || flowStage === "creating_pr" ? livePercent : flow.percent;
@@ -411,7 +348,7 @@ export default function SpecToPrPage() {
       const json = await response.json().catch(() => ({}));
       if (json.detail) setHistoryWarning(json.detail);
     } catch {
-      // Local fallback below keeps the resume flow usable during setup.
+      // Local fallback keeps the resume flow usable
     }
 
     const saved = window.localStorage.getItem(recentPrStorageKey);
@@ -855,241 +792,463 @@ export default function SpecToPrPage() {
 
   return (
     <>
-      <div className="page-header">
+      <header className="page-head">
         <div>
-          <div className="eyebrow">Pillar 1</div>
-          <h1>Spec-to-PR</h1>
-          <p>Decompose a ticket, inspect the developer handoff, then approve Draft PR creation for {repo}.</p>
+          <div className="eyebrow mono">
+            <span className="bar"></span>
+            <span className="pillar-tag">Pillar 01</span>
+            Spec-to-PR
+          </div>
+          <h1>Convert specifications directly into reviewable Pull Requests.</h1>
+          <div className="sub">
+            Deploying changes to <span className="repo">{repo}</span>. Paste a ticket, feature spec, or choose a template below.
+          </div>
         </div>
-        <span className="status green">{status}</span>
-      </div>
+        <div className="head-meta mono">
+          <span className={`status-pill ${flowStage === "ready" ? "passed" : flowStage === "failed" ? "danger" : ""}`}>
+            <span className="dot"></span>
+            {flowStage}
+          </span>
+          <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>{status}</span>
+        </div>
+      </header>
 
       {error ? (
         <div className="error-panel" role="alert" style={{ marginBottom: 16 }}>
-          <strong>Generation needs another pass</strong>
+          <strong>Generation needs attention</strong>
           <p>{error}</p>
           {prRetryAvailable && result ? (
-            <button className="button primary" style={{ marginTop: 10 }} disabled={retryCountdown > 0} onClick={retryDraftPr}>
-              <GitPullRequest size={16} />
+            <button className="button primary compact" style={{ marginTop: 10 }} disabled={retryCountdown > 0} onClick={retryDraftPr}>
+              <GitPullRequest size={14} style={{ marginRight: 6 }} />
               {retryCountdown > 0 ? `Retry available in ${retryCountdown}s` : "Retry Draft PR creation"}
             </button>
           ) : null}
         </div>
       ) : null}
 
-      {activeRecentRuns.length || syncedRecentRuns.length ? (
-        <section className="recent-pr-strip recent-pr-overview" aria-label="Recent AI PRs">
-          <div className="toolbar recent-pr-overview-header">
-            <div>
-              <strong>Recent AI PRs</strong>
-              <p>Resume a saved plan or retry a Draft PR without rebuilding the ticket.</p>
-            </div>
-            <span className="status green">Latest {activeRecentRuns.length}/5</span>
-          </div>
-          {activeRecentRuns.length ? (
-            <div className="recent-pr-list overview">
+      {/* Editor toolbar */}
+      <div className="editor-toolbar">
+        <div className="toolbar-left">
+          <button className="select" type="button">
+            <span className="select-label">Repo</span>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2.5 1.5h6L10 3v7.5H2.5v-9Z" stroke="currentColor" strokeWidth="1.2"/>
+              <path d="M8.5 1.5V3H10" stroke="currentColor" strokeWidth="1.2"/>
+            </svg>
+            {repo}
+          </button>
+          <span className="branch-chip">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
+              <circle cx="3" cy="2.5" r="1.2" stroke="currentColor" strokeWidth="1.1"/>
+              <circle cx="3" cy="9.5" r="1.2" stroke="currentColor" strokeWidth="1.1"/>
+              <circle cx="9" cy="6" r="1.2" stroke="currentColor" strokeWidth="1.1"/>
+              <path d="M3 4v4M4.2 9.5C7 9.5 7.8 8 7.8 7" stroke="currentColor" strokeWidth="1.1"/>
+            </svg>
+            base: {baseBranch}
+          </span>
+          <span className="branch-chip" style={{ color: "var(--ai-purple)", borderColor: "rgba(163, 113, 247, 0.3)" }}>
+            <span style={{ color: "var(--ai-purple)", marginRight: 4 }}>◆</span>
+            google
+          </span>
+        </div>
+
+        <div className="toolbar-right">
+          <button className="ghost-btn" type="button" onClick={() => applyQuickTemplate("test-color-change")}>
+            <span>Load sample ticket</span>
+          </button>
+          <button className="btn-primary" type="button" disabled={!spec.trim() || flowStage === "planning" || flowStage === "creating_pr"} onClick={() => void generate()}>
+            {flowStage === "planning" ? <Loader2 size={12} className="spin" /> : <Play size={12} style={{ marginRight: 4 }} />}
+            Generate PR
+            <span className="kbd-inline">⌘⏎</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Workspace */}
+      <section className="workspace">
+        {/* LEFT column */}
+        <div className="stack">
+          {/* Recent AI PRs */}
+          {(activeRecentRuns.length > 0 || syncedRecentRuns.length > 0) && (
+            <div className="panel">
+              <header className="panel-head">
+                <h2>
+                  Recent AI PRs
+                  <span className="badge-count">Latest {activeRecentRuns.length}/5</span>
+                </h2>
+              </header>
+              <p className="panel-desc">Resume a saved plan or retry a Draft PR without rebuilding the ticket.</p>
+
               {activeRecentRuns.map((run) => (
-                <div className="recent-pr-row" key={run.id}>
-                  <button className="recent-pr-item" onClick={() => loadRecentRun(run)}>
-                    <span>{run.result.prTitle}</span>
-                    <small>{run.branchName} → {run.baseBranch ?? "develop"}</small>
-                    <em>{recentStatusLabel(run)}</em>
-                    <small>{ciLabel(run)}</small>
-                  </button>
-                  <button className="icon-button danger-icon" aria-label="Delete recent PR" title="Delete" onClick={() => deleteRecentRun(run.id)}>
-                    <Trash2 size={16} />
-                  </button>
+                <div className="resume-row" key={run.id}>
+                  <div className="pr-icon" title={recentStatusLabel(run)}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <circle cx="3.5" cy="3.5" r="1.6" stroke="currentColor" strokeWidth="1.2"/>
+                      <circle cx="3.5" cy="10.5" r="1.6" stroke="currentColor" stroke-width="1.2"/>
+                      <circle cx="10.5" cy="10.5" r="1.6" stroke="currentColor" stroke-width="1.2"/>
+                      <path d="M3.5 5v4M5 10.5h4M8 3 10 5 8 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="resume-title">
+                      <span className="status-pill">
+                        <span className="dot"></span>
+                        {recentStatusLabel(run)}
+                      </span>
+                      <span style={{ marginLeft: 6 }}>{run.result.prTitle}</span>
+                    </div>
+                    <div className="resume-meta">{run.branchName} → {run.baseBranch ?? "develop"} · {ciLabel(run)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button className="btn subtle" type="button" onClick={() => loadRecentRun(run)}>Resume</button>
+                    <button className="btn subtle" style={{ color: "var(--red)" }} type="button" onClick={() => deleteRecentRun(run.id)}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              {syncedRecentRuns.map((run) => (
+                <div className="resume-row" key={run.id}>
+                  <div className="pr-icon" style={{ color: "var(--success)", background: "rgba(63, 185, 80, 0.12)", borderColor: "rgba(63, 185, 80, 0.3)" }}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="m3 6.5 2 2 4-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="resume-title">
+                      <span className="status-pill passed">
+                        <span className="dot"></span>
+                        synced
+                      </span>
+                      <span style={{ marginLeft: 6 }}>{run.result.prTitle}</span>
+                    </div>
+                    <div className="resume-meta">PR #{run.result.pr?.number ?? "merged"}</div>
+                  </div>
+                  <button className="btn subtle" type="button" onClick={() => loadRecentRun(run)}>View synced record</button>
                 </div>
               ))}
             </div>
-          ) : null}
-          {syncedRecentRuns.map((run) => (
-            <button className="recent-pr-closed-link" key={run.id} onClick={() => loadRecentRun(run)}>
-              <span>{recentStatusLabel(run)} · PR #{run.result.pr?.number ?? "synced"}</span>
-              <strong>View synced record</strong>
-            </button>
-          ))}
-        </section>
-      ) : historyWarning ? (
-        <div className="error-panel" role="alert" style={{ marginBottom: 16 }}>
-          <strong>Recent PR history needs Supabase setup</strong>
-          <p>{historyWarning}</p>
-        </div>
-      ) : null}
+          )}
 
-      <section className="grid two spec-workspace">
-        <div className="panel spec-column">
-          <div className="toolbar" style={{ marginBottom: 14 }}>
-            <button className="button primary" onClick={() => void generate()}>
-              <Play size={16} />
-              Generate PR
-            </button>
-            <label className="quick-template-select" aria-label="Quick PR template">
-              <FileText size={16} />
-              <select
-                value={quickTemplateId}
-                onChange={(event) => applyQuickTemplate(event.target.value)}
-              >
-                <option value="">Quick PR templates</option>
-                {quickPrTemplates.map((template) => (
-                  <option key={template.id} value={template.id}>{template.label}</option>
+          {historyWarning && (
+            <div className="error-panel" role="alert" style={{ marginBottom: 16 }}>
+              <strong>History synchronization needs attention</strong>
+              <p>{historyWarning}</p>
+            </div>
+          )}
+
+          {/* Code Editor Card */}
+          <div className="editor-card">
+            <div className="editor-tabs">
+              <div className="editor-tab active">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ marginRight: 6 }}>
+                  <path d="M3 1.5h4.5L9.5 3.5V10.5H3v-9Z" stroke="currentColor" strokeWidth="1.1"/>
+                </svg>
+                <span>ticket.md</span>
+                {spec.trim() && <span className="dot-unsaved"></span>}
+              </div>
+              <div className="editor-tab add" title="New tab">+</div>
+              <div className="editor-meta mono">
+                <span>markdown</span>
+                <span>·</span>
+                <span>utf-8</span>
+              </div>
+            </div>
+
+            <div className="editor-body">
+              <div className="gutter">
+                {Array.from({ length: Math.max(12, lineCount) }).map((_, i) => (
+                  <span className={`ln ${i === 0 ? "active" : ""}`} key={i}>{i + 1}</span>
                 ))}
-              </select>
-            </label>
+              </div>
+              <div className="editor-text" style={{ padding: 0 }}>
+                <textarea
+                  className="mono"
+                  value={spec}
+                  onChange={(e) => setSpec(e.target.value)}
+                  placeholder="Paste a Jira ticket, GitHub issue, or plain English spec…"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    minHeight: "300px",
+                    background: "transparent",
+                    border: "none",
+                    outline: "none",
+                    color: "var(--text)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "13px",
+                    lineHeight: "20px",
+                    padding: "12px 16px",
+                    resize: "none"
+                  }}
+                />
+
+                {!spec.trim() && (
+                  <div className="examples">
+                    <span className="ex-label mono">try:</span>
+                    <button className="ex-chip" type="button" onClick={() => applyQuickTemplate("test-color-change")}>
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
+                        <path d="M2 2h8v8H2z" stroke="currentColor" strokeWidth="1.1"/>
+                        <path d="M4 5h4M4 7h3" stroke="currentColor" strokeWidth="1.1"/>
+                      </svg>
+                      test-color-change
+                    </button>
+                    <button className="ex-chip" type="button" onClick={() => applyQuickTemplate("feature")}>
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
+                        <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.1"/>
+                        <path d="M6 4v2.5l1.5 1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
+                      </svg>
+                      feature-template
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="editor-foot mono">
+              <div className="left">
+                <span>ln {lineCount} · col 1</span>
+                <span>{wordCount} words</span>
+                <span>{tokenCount} tokens</span>
+              </div>
+              <div className="right">
+                <span>autosave on</span>
+                <span style={{ color: "var(--green)" }}>●</span>
+              </div>
+            </div>
           </div>
-          <SpecEditor value={spec} onChange={setSpec} />
+
+          {/* Quick PR templates */}
+          <div className="panel">
+            <header className="panel-head">
+              <h2>
+                Quick PR recipes
+                <span className="badge-count">{quickPrTemplates.length}</span>
+              </h2>
+              <div className="tools">
+                <span className="sub-h2">click to prefill the editor</span>
+              </div>
+            </header>
+
+            <div className="templates-grid">
+              {quickPrTemplates.map((template) => (
+                <button
+                  className="tpl"
+                  type="button"
+                  key={template.id}
+                  onClick={() => applyQuickTemplate(template.id)}
+                >
+                  <span className={`tpl-icon ${template.prefix}`}>
+                    {template.prefix === "test" && (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M5 1v3.5L1.5 11A1 1 0 0 0 2.4 12.5h9.2A1 1 0 0 0 12.5 11L9 4.5V1M4.5 1h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                    {template.prefix === "feature" && (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M7 1 8.5 5.5 13 7l-4.5 1.5L7 13l-1.5-4.5L1 7l4.5-1.5L7 1Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                    {template.prefix === "bug fix" && (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <rect x="4" y="4" width="6" height="7" rx="3" stroke="currentColor" strokeWidth="1.2"/>
+                        <path d="M5 3.5 4 2M9 3.5 10 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                      </svg>
+                    )}
+                    {template.prefix === "refactor" && (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M2 4h7l-2-2M12 10H5l2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                    {template.prefix === "release" && (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M3 11.5 9.5 5l-1-1L2 10.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                    {template.prefix === "docs" && (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M3 1.5h6L11.5 4v8.5H3v-11Z" stroke="currentColor" strokeWidth="1.2"/>
+                      </svg>
+                    )}
+                  </span>
+                  <span className="tpl-text">
+                    <span className="tpl-prefix">{template.prefix}</span>
+                    <span className="tpl-title">{template.label}</span>
+                  </span>
+                  <svg className="tpl-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M3 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        <aside className="panel spec-column">
-          <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <h2 style={{ marginBottom: 0 }}>AI Plan</h2>
+        {/* RIGHT column — AI Plan status */}
+        <div className="ai-plan">
+          <header className="ai-plan-head">
+            <h2>AI Workspace Plan</h2>
             {result?.pr ? (
-              <a className="button primary compact" href={result.pr.html_url} target="_blank" rel="noreferrer">
-                <GitPullRequest size={15} />
+              <a className="btn primary compact" href={result.pr.html_url} target="_blank" rel="noreferrer">
+                <GitPullRequest size={12} style={{ marginRight: 4 }} />
                 PR #{result.pr.number}
-                <ExternalLink size={14} />
               </a>
             ) : result ? (
-              <button className="button primary compact" onClick={requestDraftPrApproval}>
-                <GitPullRequest size={15} />
+              <button className="btn primary compact" onClick={requestDraftPrApproval}>
+                <GitPullRequest size={12} style={{ marginRight: 4 }} />
                 Create Draft PR
               </button>
             ) : null}
-          </div>
-          <div className={`progress-panel in-plan ${flowStage === "planning" || flowStage === "creating_pr" ? "streaming" : ""}`}>
-            <div className="toolbar" style={{ justifyContent: "space-between" }}>
-              <div>
-                <strong>{flow.label}</strong>
-                <p>{flow.note}</p>
-              </div>
-              <span className="status amber">{flow.estimate}</span>
-            </div>
-            <div className="progress-track" aria-label={`Spec-to-PR progress ${flow.percent}%`}>
-              <div className="progress-fill" style={{ width: `${displayedPercent}%` }} />
-            </div>
+          </header>
+
+          <div className="progress-strip">
             <div className="progress-meta">
-              <span>{displayedPercent}% complete</span>
-              <span>{flowStage === "planning" || flowStage === "creating_pr" ? "Keep this tab open" : status}</span>
+              <span className={`progress-pct ${displayedPercent === 0 ? "zero" : ""}`}>
+                {displayedPercent}%
+              </span>
+              <span className="progress-status">{flow.label}</span>
             </div>
+            <div className="progress-bar">
+              <div
+                className="progress-fill"
+                style={{
+                  width: `${displayedPercent}%`,
+                  height: "100%",
+                  background: flowStage === "failed" ? "var(--red)" : "var(--brand)",
+                  transition: "width 0.4s ease"
+                }}
+              />
+            </div>
+            <div className="progress-label">{flow.note}</div>
           </div>
-          {!result ? <p>Generated tasks, reviewer chips, developer handoff, and PR link appear here.</p> : null}
-          {result ? (
-            <div className="split-list">
-              <div className="card">
-                <strong>{result.prTitle}</strong>
-                {useExistingSourceBranch ? (
-                  <div className="toolbar" style={{ marginTop: 10 }}>
-                    <span className="status green">Deployment PR</span>
-                    <span className="status amber">{branchName || "develop"} → {baseBranch || "main"}</span>
-                    <span className="status green">Existing source branch allowed</span>
+
+          <div className="plan-body">
+            {!result ? (
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", minHeight: "260px" }}>
+                <div className="status-pill" style={{ marginBottom: 12 }}>
+                  <span className="dot"></span>
+                  Awaiting Input
+                </div>
+                <div style={{ maxWidth: "260px", textAlign: "center", color: "var(--text-muted)" }}>
+                  <strong style={{ color: "var(--text)", display: "block", marginBottom: "6px" }}>Ready to generate</strong>
+                  Provide a spec on the left and choose a recipe to start planning.
+                </div>
+              </div>
+            ) : (
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
+                <div>
+                  <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase" }}>
+                    Proposed Branch Handoff
                   </div>
-                ) : null}
-                {currentRunId ? (
-                  <div className="toolbar" style={{ marginTop: 10 }}>
-                    {(() => {
-                      const activeRun = recentRuns.find((run) => run.id === currentRunId);
-                      return activeRun ? (
-                        <>
-                          <span className="status amber">{ciLabel(activeRun)}</span>
-                          <span className={`status ${activeRun.deploymentStatus === "approved" ? "green" : "amber"}`}>
-                            Deploy {activeRun.deploymentStatus ?? "not requested"}
-                          </span>
-                          {activeRun.result.pr && activeRun.status === "draft_created" ? (
-                            <button className="button danger compact" onClick={() => setCloseRun(activeRun)}>
-                              Close PR + delete branch
-                            </button>
-                          ) : null}
-                        </>
-                      ) : null;
-                    })()}
-                  </div>
-                ) : null}
-                {currentRunId ? (() => {
-                  const activeRun = recentRuns.find((run) => run.id === currentRunId);
-                  return activeRun?.hasMergeConflicts ? (
-                    <div className="error-panel" role="alert" style={{ marginTop: 12 }}>
-                      <strong>Merge conflicts detected</strong>
-                      <p>
-                        GitHub says this PR cannot be merged cleanly into {activeRun.baseBranch ?? "the destination branch"}.
-                        Resolve conflicts in GitHub or on the source branch, then refresh ShipBrain before approving deployment.
+                  <div className="card" style={{ padding: "12px", border: "1px solid var(--line)" }}>
+                    <strong style={{ display: "block", fontSize: "13.5px", marginBottom: "8px" }}>
+                      {result.prTitle}
+                    </strong>
+
+                    <label className="field-label" htmlFor="base-branch" style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "10px", display: "block" }}>
+                      Destination branch
+                    </label>
+                    <input
+                      id="base-branch"
+                      className="input compact"
+                      value={baseBranch}
+                      onChange={(event) => setBaseBranch(event.target.value)}
+                      placeholder="develop"
+                      style={{ width: "100%", marginTop: "4px", fontSize: "12.5px" }}
+                    />
+                    {baseBranchMessage && (
+                      <p style={{ fontSize: "11px", color: baseBranchCheck === "exists" ? "var(--green)" : "var(--yellow)", marginTop: "4px", marginBottom: "12px" }}>
+                        {baseBranchMessage}
                       </p>
+                    )}
+
+                    <label className="field-label" htmlFor="feature-branch" style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "10px", display: "block" }}>
+                      {useExistingSourceBranch ? "Source branch" : "Feature branch"}
+                    </label>
+                    <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                      <input
+                        id="feature-branch"
+                        className="input compact"
+                        value={branchName}
+                        onChange={(event) => setBranchName(event.target.value)}
+                        placeholder="feat/heading-color"
+                        style={{ flex: 1, fontSize: "12.5px" }}
+                      />
+                      {!useExistingSourceBranch && (
+                        <button className="btn" type="button" onClick={() => setBranchName(`${result.suggestedBranch}-${Date.now().toString().slice(-4)}`)}>
+                          <RefreshCw size={12} />
+                        </button>
+                      )}
                     </div>
-                  ) : null;
-                })() : null}
-                <label className="field-label" htmlFor="base-branch">Destination branch</label>
-                <div className="toolbar" style={{ marginTop: 8 }}>
-                  <input
-                    id="base-branch"
-                    className="input"
-                    value={baseBranch}
-                    onChange={(event) => setBaseBranch(event.target.value)}
-                    placeholder="develop"
-                  />
+                    {branchMessage && (
+                      <p style={{ fontSize: "11px", color: branchCheck === "available" ? "var(--green)" : "var(--yellow)", marginTop: "4px", marginBottom: "0" }}>
+                        {branchMessage}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                {baseBranchMessage ? (
-                  <p className={`branch-check ${baseBranchCheck === "exists" ? "available" : baseBranchCheck === "missing" ? "exists" : baseBranchCheck}`} style={{ marginBottom: 0 }}>
-                    {baseBranchMessage}
-                  </p>
-                ) : null}
-                <label className="field-label" htmlFor="feature-branch">{useExistingSourceBranch ? "Source branch" : "Feature branch"}</label>
-                <div className="toolbar" style={{ marginTop: 8 }}>
-                  <input
-                    id="feature-branch"
-                    className="input"
-                    value={branchName}
-                    onChange={(event) => setBranchName(event.target.value)}
-                    placeholder="feat/my-feature-branch"
-                  />
-                  {!useExistingSourceBranch ? <button className="button secondary" onClick={() => setBranchName(`${result.suggestedBranch}-${Date.now().toString().slice(-4)}`)}>
-                    <RefreshCw size={16} />
-                    Make unique
-                  </button> : null}
+
+                <div>
+                  <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase" }}>
+                    Decomposed Tasks
+                  </div>
+                  <div className="plan-stages">
+                    {result.tasks.map((task, idx) => (
+                      <div className="stage" key={idx}>
+                        <div className="stage-num">{idx + 1}</div>
+                        <div className="stage-name">{task.title}</div>
+                        <div className="stage-meta">{task.files[0]}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                {branchMessage ? (
-                  <p className={`branch-check ${branchCheck}`} style={{ marginBottom: 0 }}>
-                    {branchMessage}
-                  </p>
-                ) : null}
-              </div>
-              {result.tasks.map((task, index) => (
-                <article className="card" key={task.title}>
-                  <span className="status green">Task {index + 1}</span>
-                  <h3 style={{ marginTop: 10 }}>{task.title}</h3>
-                  <p>{task.description}</p>
-                  <p style={{ marginBottom: 0 }}>{task.files.join(", ")}</p>
-                </article>
-              ))}
-              <div className="toolbar">
-                {result.suggestedReviewers.map((reviewer) => (
-                  <span className="status amber" key={reviewer}>
-                    @{reviewer}
-                  </span>
-                ))}
-              </div>
-              <pre className="code-view" style={{ maxHeight: 240 }}>{scaffoldText}</pre>
-              {result.pr ? (
-                <a className="button primary" href={result.pr.html_url} target="_blank" rel="noreferrer">
-                  <GitPullRequest size={16} />
-                  Draft PR #{result.pr.number}
-                  <ExternalLink size={16} />
-                </a>
-              ) : (
-                <div className="toolbar">
-                  <button className="button secondary" onClick={() => navigator.clipboard.writeText(scaffoldText)}>
-                    <Copy size={16} />
-                    Copy scaffold
+
+                {result.suggestedReviewers.length > 0 && (
+                  <div>
+                    <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase", marginBottom: "6px" }}>
+                      Suggested Reviewers
+                    </div>
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      {result.suggestedReviewers.map((reviewer) => (
+                        <span className="status-pill passed" key={reviewer}>
+                          @{reviewer}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase", marginBottom: "6px" }}>
+                    Developer Handoff Note
+                  </div>
+                  <pre className="code-view" style={{ maxHeight: "160px", fontSize: "11.5px", padding: "10px", background: "var(--panel-2)", border: "1px solid var(--line)" }}>
+                    {scaffoldText}
+                  </pre>
+                </div>
+
+                <div style={{ marginTop: "auto", display: "flex", gap: "8px" }}>
+                  <button className="btn" style={{ flex: 1 }} onClick={() => navigator.clipboard.writeText(scaffoldText)}>
+                    <Copy size={12} style={{ marginRight: 6 }} />
+                    Copy Scaffold
                   </button>
-                  {prRetryAvailable ? (
-                    <button className="button primary" onClick={requestDraftPrApproval}>
-                      <GitPullRequest size={16} />
-                      Retry Draft PR creation
+                  {result.pr ? (
+                    <a className="btn primary" style={{ flex: 1, justifyContent: "center" }} href={result.pr.html_url} target="_blank" rel="noreferrer">
+                      <GitPullRequest size={12} style={{ marginRight: 6 }} />
+                      Open Draft PR
+                    </a>
+                  ) : (
+                    <button className="btn primary" style={{ flex: 1, justifyContent: "center" }} onClick={requestDraftPrApproval}>
+                      <GitPullRequest size={12} style={{ marginRight: 6 }} />
+                      Create Draft PR
                     </button>
-                  ) : null}
+                  )}
                 </div>
-              )}
-            </div>
-          ) : null}
-        </aside>
+              </div>
+            )}
+          </div>
+        </div>
       </section>
 
       <ApprovalGate
@@ -1107,6 +1266,7 @@ export default function SpecToPrPage() {
         }}
         onClose={() => setGateOpen(false)}
       />
+
       {successOpen && result?.pr ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setSuccessOpen(false)}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
@@ -1125,6 +1285,7 @@ export default function SpecToPrPage() {
           </div>
         </div>
       ) : null}
+
       <CloseDraftPrModal
         open={Boolean(closeRun)}
         prNumber={closeRun?.result.pr?.number}

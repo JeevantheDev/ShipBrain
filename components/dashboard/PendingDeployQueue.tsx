@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -51,7 +51,6 @@ export function PendingDeployQueue() {
     const interval = window.setInterval(() => void loadPending(), intervalTime);
     return () => window.clearInterval(interval);
   }, [pending]);
-
 
   async function loadPending() {
     try {
@@ -136,22 +135,19 @@ export function PendingDeployQueue() {
 
   function stageLabel(item: PendingDeploy) {
     switch (item.stage) {
-      case "awaiting_preview": return "Awaiting Preview";
-      case "preview_deploying": return "Preview Deploying";
-      case "preview_ready": return "Preview Ready";
-      case "release_pr_open": return "Release PR Open";
-      case "pending_production_deploy": return "Ready for Production";
-      case "deploying": return "Deploying...";
-      case "deploy_failed": return "Deploy Failed";
+      case "awaiting_preview": return "awaiting preview";
+      case "preview_deploying": return "preview deploying";
+      case "preview_ready": return "preview ready";
+      case "release_pr_open": return "release pr open";
+      case "pending_production_deploy": return "ready for production";
+      case "deploying": return "deploying...";
+      case "deploy_failed": return "deploy failed";
       default: return item.stage;
     }
   }
 
-  function stageClass(item: PendingDeploy) {
-    if (item.stage === "preview_ready") return "green";
-    if (item.stage === "deploy_failed") return "red";
-    if (item.stage === "pending_production_deploy") return "amber";
-    return "amber";
+  function isStagePassed(item: PendingDeploy) {
+    return item.stage === "preview_ready" || item.stage === "release_pr_open" || item.stage === "pending_production_deploy";
   }
 
   function stageCopy(item: PendingDeploy) {
@@ -178,13 +174,13 @@ export function PendingDeployQueue() {
   if (loading) {
     return (
       <div className="panel">
-        <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-          <h2 style={{ marginBottom: 0 }}>Deployment Queue</h2>
-          <span className="status amber">Loading...</span>
-        </div>
-        <div className="loading-state" role="status">
+        <header className="panel-head">
+          <h2>Deployment Queue</h2>
+          <span className="badge-count">syncing</span>
+        </header>
+        <div className="loading-state" role="status" style={{ border: "none", background: "transparent" }}>
           <span className="loading-spinner" aria-hidden="true" />
-          <p>Checking for pending deployments...</p>
+          <p style={{ color: "var(--text-muted)", fontSize: "13px" }}>Checking deployment workflows...</p>
         </div>
       </div>
     );
@@ -193,11 +189,11 @@ export function PendingDeployQueue() {
   if (error) {
     return (
       <div className="panel">
-        <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-          <h2 style={{ marginBottom: 0 }}>Deployment Queue</h2>
-          <span className="status red">Error</span>
-        </div>
-        <div className="error-panel" role="alert">
+        <header className="panel-head">
+          <h2>Deployment Queue</h2>
+          <span className="badge-count" style={{ color: "var(--red)" }}>error</span>
+        </header>
+        <div className="error-panel" role="alert" style={{ margin: "14px 18px" }}>
           <strong>Unable to load queue</strong>
           <p>{error}</p>
         </div>
@@ -205,173 +201,145 @@ export function PendingDeployQueue() {
     );
   }
 
-  const developQueue = pending.filter(p => p.queueType === "develop");
-  const productionQueue = pending.filter(p => p.queueType === "production");
-
   return (
     <div className="panel">
-      <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <h2 style={{ marginBottom: 0 }}>Deployment Queue</h2>
-        <div className="toolbar" style={{ gap: 8 }}>
-          <button className="button secondary compact" onClick={() => loadPending()} disabled={loading}>
-            <RefreshCw size={14} />
+      <header className="panel-head">
+        <h2>
+          Deployment Queue
+          <span className="badge-count">{pending.length} pending</span>
+        </h2>
+        <div className="tools">
+          <button className="ghost-btn" type="button" onClick={() => loadPending()} disabled={loading}>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" className={loading ? "spin" : ""}>
+              <path d="M10 6a4 4 0 1 1-1.2-2.8L10 4.5M10 1.5V4.5H7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
             Refresh
           </button>
-          <span className={`status ${pending.length > 0 ? "amber" : "green"}`}>
-            {pending.length > 0 ? `${pending.length} pending` : "Queue empty"}
-          </span>
         </div>
-      </div>
+      </header>
 
       {pending.length === 0 ? (
-        <div className="empty-state">
-          <Rocket size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
+        <div className="empty-state" style={{ border: "none", background: "transparent" }}>
           <strong>No pending deployments</strong>
-          <p>Merge a feature PR to develop to start the deployment flow.</p>
+          <p style={{ color: "var(--text-muted)" }}>Merge a feature PR to develop to start the deployment flow.</p>
         </div>
       ) : (
-        <div className="split-list">
-          {/* Production Queue First */}
-          {productionQueue.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div className="eyebrow" style={{ marginBottom: 8 }}>Production</div>
-              {productionQueue.map((item) => (
-                <div className="card" key={item.id} style={{ marginBottom: 8 }}>
-                  <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <p style={{ marginBottom: 0, fontSize: 13 }}>
-                        {item.repo} · PR #{item.prNumber}
-                        {item.releaseTag && <> · <code>{item.releaseTag}</code></>}
-                      </p>
-                    </div>
-                    <span className={`status ${stageClass(item)}`}>{stageLabel(item)}</span>
+        <div>
+          {pending.map((item) => {
+            const isProd = item.queueType === "production";
+            const passed = isStagePassed(item);
+            return (
+              <div className="dq-card" key={item.id}>
+                <div className="dq-head">
+                  <div className="dq-head-left">
+                    <span className="env-pill">{isProd ? "Production" : "Develop Preview"}</span>
+                    <span className={`status-pill ${passed ? "passed" : item.stage === "deploy_failed" ? "danger" : ""}`}>
+                      <span className="dot"></span>
+                      {stageLabel(item)}
+                    </span>
                   </div>
-                  <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, marginBottom: 0 }}>
-                    {stageCopy(item)}
-                  </p>
-                  <div className="toolbar" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
-                    {item.stage === "pending_production_deploy" && (
-                      <button
-                        className="button primary compact"
-                        onClick={() => startProductionDeploy(item)}
-                        disabled={actionLoading === item.id}
-                      >
-                        {actionLoading === item.id ? <Loader2 size={14} className="spin" /> : <Rocket size={14} />}
-                        {actionLoading === item.id ? "Deploying..." : "Deploy to Production"}
-                      </button>
-                    )}
-                    <button
-                      className="button secondary compact"
-                      onClick={() => refreshSpec(item.id)}
-                      disabled={refreshing === item.id}
-                    >
-                      {refreshing === item.id ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-                      Sync
-                    </button>
-                    {item.prUrl && (
-                      <a className="button secondary compact" href={item.prUrl} target="_blank" rel="noreferrer">
-                        <GitPullRequest size={14} />
-                        PR #{item.prNumber}
-                      </a>
-                    )}
+                  <div className="vercel-pill">
+                    <span className="triangle" aria-hidden="true"></span>
+                    Vercel
                   </div>
-                  {actionErrors[item.id] && (
-                    <div className="error-panel" role="alert" style={{ marginTop: 8, padding: 8, fontSize: 12 }}>
-                      {actionErrors[item.id]}
-                    </div>
-                  )}
                 </div>
-              ))}
-            </div>
-          )}
 
-          {/* Develop Queue */}
-          {developQueue.length > 0 && (
-            <div>
-              <div className="eyebrow" style={{ marginBottom: 8 }}>Develop Preview</div>
-              {developQueue.map((item) => (
-                <div className="card" key={item.id} style={{ marginBottom: 8 }}>
-                  <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <p style={{ marginBottom: 0, fontSize: 13 }}>
-                        {item.repo} · PR #{item.prNumber} · {item.branchName} → {item.baseBranch}
-                      </p>
-                    </div>
-                    <span className={`status ${stageClass(item)}`}>{stageLabel(item)}</span>
-                  </div>
-                  {item.mergedAt && (
-                    <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8, marginBottom: 0 }}>
-                      Merged {new Date(item.mergedAt).toLocaleString()}
-                    </p>
-                  )}
-                  <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, marginBottom: 0 }}>
+                <div className="dq-title">{item.title}</div>
+                <div className="dq-sub">
+                  {item.repo} · PR #{item.prNumber} · {item.branchName} → {item.baseBranch}
+                </div>
+
+                <div className="dq-callout">
+                  <svg className="ci" viewBox="0 0 14 14" fill="none" aria-hidden="true" width="14" height="14">
+                    <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.3"/>
+                    <path d="M4.5 7.2 6.3 9l3.2-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <div>
                     {stageCopy(item)}
-                  </p>
-                  {item.previewUrl && (
-                    <div style={{ marginTop: 10, padding: 10, background: "var(--surface-elevated)", borderRadius: 6, border: "1px solid var(--border)" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span className="status green" style={{ fontSize: 11 }}>Preview Live</span>
+                    {item.mergedAt && (
+                      <div className="merged-line mono">
+                        merged {new Date(item.mergedAt).toLocaleString()}
                       </div>
-                      <a href={item.previewUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, wordBreak: "break-all" }}>
-                        {item.previewUrl} <ExternalLink size={12} />
-                      </a>
-                    </div>
-                  )}
-                  <div className="toolbar" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
-                    {item.stage === "awaiting_preview" && (
-                      <button
-                        className="button primary compact"
-                        onClick={() => startPreviewDeploy(item)}
-                        disabled={actionLoading === item.id}
-                      >
-                        {actionLoading === item.id ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
-                        {actionLoading === item.id ? "Starting..." : "Start Preview Deploy"}
-                      </button>
-                    )}
-                    {item.stage === "preview_ready" && (
-                      <>
-                        <a className="button primary compact" href={item.previewUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink size={14} />
-                          Open Preview
-                        </a>
-                        <Link className="button secondary compact" href="/spec-to-pr?template=develop-to-prod">
-                          <Rocket size={14} />
-                          Create Release PR
-                        </Link>
-                      </>
-                    )}
-                    {item.stage === "release_pr_open" && item.releasePrUrl && (
-                      <a className="button primary compact" href={item.releasePrUrl} target="_blank" rel="noreferrer">
-                        <GitPullRequest size={14} />
-                        Review Release PR #{item.releasePrNumber}
-                      </a>
-                    )}
-                    <button
-                      className="button secondary compact"
-                      onClick={() => refreshSpec(item.id)}
-                      disabled={refreshing === item.id}
-                    >
-                      {refreshing === item.id ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-                      Sync
-                    </button>
-                    {item.prUrl && (
-                      <a className="button secondary compact" href={item.prUrl} target="_blank" rel="noreferrer">
-                        <GitPullRequest size={14} />
-                        View PR
-                      </a>
                     )}
                   </div>
-                  {actionErrors[item.id] && (
-                    <div className="error-panel" role="alert" style={{ marginTop: 8, padding: 8, fontSize: 12 }}>
-                      {actionErrors[item.id]}
-                    </div>
+                </div>
+
+                {item.previewUrl && (
+                  <div className="dq-url">
+                    <span className="live-dot" aria-hidden="true"></span>
+                    <span className="mono" style={{ color: "var(--green)", textTransform: "lowercase" }}>preview live</span>
+                    <span className="url" style={{ color: "var(--text-muted)" }}>{item.previewUrl}</span>
+                    <a href={item.previewUrl} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center" }}>
+                      <svg className="external" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M4 2h6v6M10 2 4 8M4 4v6h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </a>
+                  </div>
+                )}
+
+                <div className="dq-actions">
+                  {item.stage === "awaiting_preview" && (
+                    <button
+                      className="btn primary"
+                      onClick={() => startPreviewDeploy(item)}
+                      disabled={actionLoading === item.id}
+                    >
+                      {actionLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
+                      Start Preview Deploy
+                    </button>
+                  )}
+                  {item.stage === "preview_ready" && item.previewUrl && (
+                    <>
+                      <a className="btn" href={item.previewUrl} target="_blank" rel="noreferrer">
+                        Open Preview
+                      </a>
+                      <Link className="btn primary" href="/spec-to-pr?template=develop-to-prod">
+                        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
+                          <path d="M2 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        Create Release PR
+                      </Link>
+                    </>
+                  )}
+                  {item.stage === "release_pr_open" && item.releasePrUrl && (
+                    <a className="btn primary" href={item.releasePrUrl} target="_blank" rel="noreferrer">
+                      Review Release PR #{item.releasePrNumber}
+                    </a>
+                  )}
+                  {item.stage === "pending_production_deploy" && (
+                    <button
+                      className="btn primary"
+                      onClick={() => startProductionDeploy(item)}
+                      disabled={actionLoading === item.id}
+                    >
+                      {actionLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
+                      Deploy to Production
+                    </button>
+                  )}
+                  <button
+                    className="btn"
+                    onClick={() => refreshSpec(item.id)}
+                    disabled={refreshing === item.id}
+                  >
+                    {refreshing === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
+                    Sync
+                  </button>
+                  {item.prUrl && (
+                    <a className="btn subtle" href={item.prUrl} target="_blank" rel="noreferrer">
+                      View PR
+                    </a>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
+
+                {actionErrors[item.id] && (
+                  <div className="error-panel" role="alert" style={{ marginTop: 12 }}>
+                    <strong>Action Failed</strong>
+                    <p>{actionErrors[item.id]}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
