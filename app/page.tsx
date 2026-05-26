@@ -194,7 +194,7 @@ export default async function LandingPage() {
                 </span>
                 <span>PR #42 created on <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "13px" }}>acme/api-server</span></span>
               </div>
-              <a href="#" className="link" onClick={(e) => e.preventDefault()}>view on GitHub →</a>
+              <a href="#" className="link">view on GitHub →</a>
             </div>
           </div>
 
