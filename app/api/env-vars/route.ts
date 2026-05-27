@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requirePasswordConfirmation } from "@/lib/auth/reauth";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getCloudflareProject, setProjectEnvVars } from "@/lib/cloudflare/client";
 
@@ -102,6 +103,11 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
+  try {
+    await requirePasswordConfirmation(user, body.reauthPassword);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Password confirmation failed." }, { status: 401 });
+  }
   const { repo: repoFullName, envVars, environment = "both" } = body;
 
   if (!repoFullName) {
@@ -185,6 +191,11 @@ export async function DELETE(request: Request) {
   }
 
   const body = await request.json();
+  try {
+    await requirePasswordConfirmation(user, body.reauthPassword);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Password confirmation failed." }, { status: 401 });
+  }
   const { repo: repoFullName, key, environment = "both" } = body;
 
   if (!repoFullName || !key) {

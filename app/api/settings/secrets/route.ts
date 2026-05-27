@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { deleteActionsSecret, putActionsSecret } from "@/lib/github/setup";
 import { generateShipBrainApiKey, hashShipBrainApiKey, lastFour } from "@/lib/shipbrain/api-keys";
+import { requirePasswordConfirmation } from "@/lib/auth/reauth";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -108,7 +109,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("repos")
-    .select("id, full_name, connected_at, created_at, setup_status, setup_pr_number, setup_pr_url, shipbrain_api_key_last4, setup_metadata")
+    .select("id, full_name, connected_at, created_at, setup_status, setup_pr_number, setup_pr_url, shipbrain_api_key_last4, setup_metadata, telegram_notifications_enabled")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
 
@@ -123,6 +124,11 @@ export async function POST(request: Request) {
   if (!token) return NextResponse.json({ error: "GitHub is not connected.", requiresGithub: true }, { status: 409 });
 
   const body = await request.json();
+  try {
+    await requirePasswordConfirmation(user, body.reauthPassword);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Password confirmation failed." }, { status: 401 });
+  }
   const repoId = String(body.repoId ?? "");
   const action = String(body.action ?? "");
   const { data: repo, error: repoError } = await supabase
@@ -182,6 +188,17 @@ export async function POST(request: Request) {
       .eq("user_id", user.id);
     if (error) return NextResponse.json({ error: "Secrets updated in GitHub, but ShipBrain could not update the repo record.", detail: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, updatedSecrets: updates.map(([name]) => name), setup_metadata: nextMetadata });
+  }
+
+  if (action === "toggle_telegram") {
+    const enabled = Boolean(body.enabled);
+    const { error } = await supabase
+      .from("repos")
+      .update({ telegram_notifications_enabled: enabled })
+      .eq("id", repo.id)
+      .eq("user_id", user.id);
+    if (error) return NextResponse.json({ error: "Unable to update Telegram notifications.", detail: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, telegramNotificationsEnabled: enabled });
   }
 
   if (action === "sync_to_github") {

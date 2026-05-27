@@ -205,7 +205,7 @@ export function DashboardPrOverview() {
             <Link className="link-btn" href="/spec-to-pr">
               Spec-to-PR
               <svg width="9" height="9" viewBox="0 0 12 12" fill="none" style={{ marginLeft: 2 }}>
-                <path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </Link>
           </div>

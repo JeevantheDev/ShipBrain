@@ -11,6 +11,7 @@ import {
   getShipBrainCloudflareCredentials
 } from "@/lib/cloudflare/client";
 import { generateShipBrainApiKey, hashShipBrainApiKey, lastFour } from "@/lib/shipbrain/api-keys";
+import { requirePasswordConfirmation } from "@/lib/auth/reauth";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -61,6 +62,11 @@ export async function POST(request: Request) {
   if (!token) return NextResponse.json({ error: "GitHub is not connected.", requiresGithub: true }, { status: 409 });
 
   const body = await request.json();
+  try {
+    await requirePasswordConfirmation(user, body.reauthPassword);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Password confirmation failed." }, { status: 401 });
+  }
   if (body?.stream) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -122,7 +128,9 @@ async function runSetup({
   if (!repoFullName.includes("/")) throw new Error("Select a valid GitHub repository.");
 
   const skipIncidents = Boolean(body.skipIncidents);
+  const enableTelegram = Boolean(body.enableTelegram);
   const buildOutputDir = String(body.buildOutputDir ?? "dist").trim() || "dist";
+  const buildCommand = String(body.buildCommand ?? "npm run build").trim() || "npm run build";
   const customProdBranch = String(body.productionBranch ?? "").trim();
   const customDevBranch = String(body.developmentBranch ?? "").trim();
   const userEnvVars = (body.envVars ?? {}) as Record<string, string>;
@@ -201,10 +209,14 @@ async function runSetup({
     includeCloudflare: true,
     includeIncidents: !skipIncidents,
     ciExists: scan.workflows.ci,
+    previewExists: scan.workflows.preview,
+    productionExists: scan.workflows.production,
+    notifyExists: scan.workflows.notify,
     deployExists: scan.workflows.deploy,
     incidentsExists: scan.workflows.incidents,
     packageJson: scan.project.packageJson,
-    buildOutputDir
+    buildOutputDir,
+    buildCommand
   });
   await emit?.({ type: "step", label: "Preparing workflow files", status: "done", files: Object.keys(files) });
 
@@ -242,14 +254,17 @@ async function runSetup({
           prodBranch,
           devBranch,
           skipIncidents,
+          enableTelegram,
           injectedSecrets: secretSteps,
           filesAdded: Object.keys(files),
           apiUrl,
           buildOutputDir,
+          buildCommand,
           cloudflareProjectName,
           cloudflareProjectUrl,
           cloudflareAccountId: cfAccountId
-        }
+        },
+        telegram_notifications_enabled: enableTelegram
       },
       { onConflict: "user_id,full_name" }
     )

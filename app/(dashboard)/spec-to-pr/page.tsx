@@ -338,11 +338,26 @@ export default function SpecToPrPage() {
   }, [result]);
 
   useEffect(() => {
-    const savedRepo = window.localStorage.getItem("shipbrain:selectedRepo");
-    if (savedRepo) setRepo(savedRepo);
+    let cancelled = false;
+    async function loadActiveRepo() {
+      const response = await fetch("/api/github/active-repo", { cache: "no-store" }).catch(() => null);
+      if (!response?.ok) return;
+      const json = await response.json();
+      if (!cancelled && json.activeRepoFullName) setRepo(json.activeRepoFullName);
+    }
+    function handleActiveRepo(event: Event) {
+      const nextRepo = (event as CustomEvent<string>).detail;
+      if (nextRepo) setRepo(nextRepo);
+    }
+    void loadActiveRepo();
     void loadRecentRuns();
     const interval = window.setInterval(() => void loadRecentRuns(), 30000);
-    return () => window.clearInterval(interval);
+    window.addEventListener("shipbrain:active-repo", handleActiveRepo);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("shipbrain:active-repo", handleActiveRepo);
+    };
   }, []);
 
   async function loadRecentRuns() {

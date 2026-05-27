@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isBranchDeleteEvent, statusFromPullRequestEvent, verifyWebhookSignature } from "@/lib/github/webhooks";
+import { createOrUpdateTrace, updateTraceBySpec } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -140,6 +141,39 @@ export async function POST(request: Request) {
           };
 
       await supabase.from("specs").update(specUpdate).eq("id", spec.id);
+
+      await updateTraceBySpec(spec.id, {
+        status: isVercelDeploy
+          ? workflowRun.status === "completed"
+            ? workflowRun.conclusion === "success"
+              ? "production_live"
+              : "failed"
+            : "merged_main"
+          : workflowRun.status === "completed"
+            ? workflowRun.conclusion === "success"
+              ? "preview_live"
+              : "failed"
+            : "merged_develop",
+        ...(isVercelDeploy
+          ? { production_deployment: { status: workflowRun.conclusion ?? workflowRun.status, url: workflowRun.html_url, sha: workflowRun.head_sha, timestamp: new Date().toISOString() } }
+          : { preview_deployment: { status: workflowRun.conclusion ?? workflowRun.status, url: workflowRun.html_url, sha: workflowRun.head_sha, timestamp: new Date().toISOString() } })
+      }, {
+        eventType: workflowRun.status === "completed"
+          ? workflowRun.conclusion === "success"
+            ? "deployment_succeeded"
+            : "deployment_failed"
+          : "deployment_started",
+        source: "github",
+        actor: workflowRun.actor?.login ?? "github-actions",
+        actorType: "github",
+        details: {
+          workflowRunId: workflowRun.id,
+          workflowName: workflowRun.name,
+          runUrl: workflowRun.html_url,
+          conclusion: workflowRun.conclusion,
+          status: workflowRun.status
+        }
+      });
     }
 
     return NextResponse.json({
@@ -273,6 +307,45 @@ export async function POST(request: Request) {
         updated = data?.length ?? 0;
       } else {
         updated = 1; // Release promotion PR was handled above
+      }
+
+      try {
+        const baseBranch = pullRequest.base?.ref ?? "develop";
+        const headBranch = pullRequest.head?.ref ?? "feature";
+        const isHotfix = headBranch.startsWith("hotfix/");
+        const traceStatus =
+          nextStatus === "merged"
+            ? baseBranch === "main"
+              ? "merged_main"
+              : "merged_develop"
+            : pullRequest.draft
+              ? "draft"
+              : "ready_for_review";
+
+        await createOrUpdateTrace({
+          repoFullName,
+          type: isReleasePromotionPr ? "release" : isHotfix ? "hotfix" : "feature",
+          title: pullRequest.title ?? `PR #${pullRequest.number}`,
+          description: pullRequest.body ?? null,
+          status: traceStatus,
+          sourceBranch: headBranch,
+          targetBranch: baseBranch,
+          draftPrNumber: pullRequest.number,
+          draftPrUrl: pullRequest.html_url,
+          releasePrNumber: isReleasePromotionPr ? pullRequest.number : null,
+          releasePrUrl: isReleasePromotionPr ? pullRequest.html_url : null,
+          source: "github",
+          actor: pullRequest.user?.login ?? "github",
+          eventType: nextStatus === "merged" ? "pr_merged" : json.action === "opened" ? "pr_opened" : "pr_updated",
+          details: {
+            action: json.action,
+            merged: pullRequest.merged ?? false,
+            mergeCommitSha: pullRequest.merge_commit_sha ?? null,
+            prNumber: pullRequest.number
+          }
+        });
+      } catch (error) {
+        console.error("release trace sync failed", error);
       }
 
       await supabase

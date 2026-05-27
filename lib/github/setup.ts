@@ -26,10 +26,14 @@ type WorkflowInput = {
   includeCloudflare: boolean;
   includeIncidents: boolean;
   ciExists: boolean;
+  previewExists: boolean;
+  productionExists: boolean;
+  notifyExists: boolean;
   deployExists: boolean;
   incidentsExists: boolean;
   packageJson: boolean;
   buildOutputDir: string;
+  buildCommand?: string | null;
 };
 
 function splitRepo(repoFullName: string) {
@@ -174,17 +178,22 @@ export function workflowFiles(input: WorkflowInput) {
   }
 
   // Include preview workflow if Cloudflare is enabled and develop branch exists
-  if (input.includeCloudflare && input.devBranch) {
+  // Skip if preview workflow already exists
+  if (input.includeCloudflare && input.devBranch && !input.previewExists) {
     files[".github/workflows/shipbrain-preview.yml"] = shipbrainPreviewWorkflow(input);
   }
 
   // Include production workflow (handles both normal releases and hotfixes with reverse sync)
-  if (input.includeCloudflare && !input.deployExists) {
+  // Skip if production or legacy deploy workflow already exists
+  if (input.includeCloudflare && !input.deployExists && !input.productionExists) {
     files[".github/workflows/shipbrain-production.yml"] = shipbrainProductionWorkflow(input);
   }
 
   // Unified notification workflow (combines CI notify + incident alerting)
-  files[".github/workflows/shipbrain-notify.yml"] = shipbrainNotifyWorkflow(input);
+  // Skip if notify workflow already exists
+  if (!input.notifyExists) {
+    files[".github/workflows/shipbrain-notify.yml"] = shipbrainNotifyWorkflow(input);
+  }
 
   return files;
 }
@@ -263,6 +272,7 @@ ${installSteps(input.packageJson)}`;
  */
 function shipbrainPreviewWorkflow(input: WorkflowInput) {
   const outputDir = input.buildOutputDir || "dist";
+  const buildCommand = input.buildCommand || "npm run build";
   return `name: ShipBrain Preview Deploy
 
 on:
@@ -308,7 +318,7 @@ jobs:
       - name: Build application
         run: |
           echo "::group::Running build"
-          npm run build
+          ${buildCommand}
           echo "::endgroup::"
           echo "Build completed successfully"
 
@@ -372,6 +382,7 @@ jobs:
 function shipbrainProductionWorkflow(input: WorkflowInput) {
   const devBranch = input.devBranch || "develop";
   const outputDir = input.buildOutputDir || "dist";
+  const buildCommand = input.buildCommand || "npm run build";
   return `name: ShipBrain Production Deploy
 
 on:
@@ -456,7 +467,7 @@ jobs:
       - name: Build application
         run: |
           echo "::group::Running production build"
-          npm run build
+          ${buildCommand}
           echo "::endgroup::"
           echo "Build completed successfully"
 
@@ -687,31 +698,64 @@ export async function openSetupPullRequest(input: {
 
   for (const [path, content] of Object.entries(input.files)) {
     let sha: string | undefined;
+
+    // Check if file exists on the BASE branch first (files are inherited when branch is created)
     try {
       const { data } = (await octokit.repos.getContent({
         owner,
         repo,
         path,
-        ref: branch
+        ref: input.base // Check base branch, not the new branch
       })) as any;
       if (data && !Array.isArray(data) && data.sha) {
         sha = data.sha;
       }
     } catch (error: any) {
+      // 404 means file doesn't exist - that's fine, we'll create it
       if (error.status !== 404) {
-        throw error;
+        console.error(`Error checking file ${path}:`, error.message);
+        // Don't throw - try to create without sha
       }
     }
 
-    await octokit.repos.createOrUpdateFileContents({
-      owner,
-      repo,
-      path,
-      branch,
-      message: `chore: add ${path}`,
-      content: Buffer.from(content).toString("base64"),
-      ...(sha ? { sha } : {})
-    });
+    try {
+      await octokit.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        path,
+        branch,
+        message: `chore: add ${path}`,
+        content: Buffer.from(content).toString("base64"),
+        ...(sha ? { sha } : {})
+      });
+    } catch (error: any) {
+      // If we get a sha error, try to get the sha from the branch and retry
+      if (error.message?.includes("sha") && !sha) {
+        try {
+          const { data } = (await octokit.repos.getContent({
+            owner,
+            repo,
+            path,
+            ref: branch
+          })) as any;
+          if (data && !Array.isArray(data) && data.sha) {
+            await octokit.repos.createOrUpdateFileContents({
+              owner,
+              repo,
+              path,
+              branch,
+              message: `chore: add ${path}`,
+              content: Buffer.from(content).toString("base64"),
+              sha: data.sha
+            });
+            continue; // Success on retry
+          }
+        } catch {
+          // Ignore retry errors
+        }
+      }
+      throw error;
+    }
   }
 
   const fileList = Object.keys(input.files).map((file) => `- \`${file}\``).join("\n");

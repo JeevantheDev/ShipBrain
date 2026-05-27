@@ -79,17 +79,32 @@ export async function POST(request: Request) {
   const logs = String(body.logs ?? "").trim();
   if (!logs) return NextResponse.json({ error: "logs are required" }, { status: 400 });
 
+  // Get user's connected repo if not specified
+  let repoFullName = body.repo ?? null;
+  if (!repoFullName) {
+    const { data: repos } = await supabase
+      .from("repos")
+      .select("full_name")
+      .eq("user_id", user.id)
+      .order("connected_at", { ascending: false })
+      .limit(1);
+
+    if (repos?.length) {
+      repoFullName = repos[0].full_name;
+    }
+  }
+
   const { data, error } = await supabase
     .from("incidents")
     .insert({
       user_id: user.id,
-      alert_source: body.source ?? "simulation",
+      alert_source: body.source ?? "manual",
       status: "open",
       title: body.title ?? "Manual incident",
-      repo_full_name: body.repo ?? null,
-      environment: body.environment ?? "sandbox",
-      service: body.service ?? "manual",
-      severity: body.severity ?? "medium",
+      repo_full_name: repoFullName,
+      environment: body.environment ?? "production",
+      service: body.service || null,
+      severity: body.severity ?? "high",
       release_version: body.releaseVersion ?? null,
       raw_logs: logs,
       updated_at: new Date().toISOString()

@@ -9,20 +9,25 @@ export function Crumbs() {
   const [repo, setRepo] = useState("JeevantheDev/shipbrain_sandbox");
 
   useEffect(() => {
-    const savedRepo = localStorage.getItem("shipbrain:selectedRepo");
-    if (savedRepo) setRepo(savedRepo);
-    
-    // Listen to changes in localStorage
-    const handleStorageChange = () => {
-      const current = localStorage.getItem("shipbrain:selectedRepo");
-      if (current) setRepo(current);
-    };
-    window.addEventListener("storage", handleStorageChange);
-    // Periodically poll since 'storage' event only fires across tabs
-    const interval = setInterval(handleStorageChange, 1000);
+    let cancelled = false;
+
+    async function loadActiveRepo() {
+      const response = await fetch("/api/github/active-repo", { cache: "no-store" }).catch(() => null);
+      if (!response?.ok) return;
+      const json = await response.json();
+      if (!cancelled && json.activeRepoFullName) setRepo(json.activeRepoFullName);
+    }
+
+    function handleActiveRepo(event: Event) {
+      const nextRepo = (event as CustomEvent<string>).detail;
+      if (nextRepo) setRepo(nextRepo);
+    }
+
+    void loadActiveRepo();
+    window.addEventListener("shipbrain:active-repo", handleActiveRepo);
     return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      clearInterval(interval);
+      cancelled = true;
+      window.removeEventListener("shipbrain:active-repo", handleActiveRepo);
     };
   }, []);
 
@@ -33,6 +38,7 @@ export function Crumbs() {
   let pageName = "Dashboard";
   if (pathname.includes("/spec-to-pr")) pageName = "Spec-to-PR";
   else if (pathname.includes("/ci")) pageName = "CI Monitor";
+  else if (pathname.includes("/releases")) pageName = "Release Trace";
   else if (pathname.includes("/incidents")) pageName = "Incidents";
   else if (pathname.includes("/settings")) pageName = "Settings";
 

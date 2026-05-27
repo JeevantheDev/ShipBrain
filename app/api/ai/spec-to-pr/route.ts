@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import { generateScaffold } from "@/lib/ai/chains/code-scaffold";
 import { decomposeSpec, specPlanSchema } from "@/lib/ai/chains/spec-decompose";
 import { createDraftPR } from "@/lib/github/pr";
+import { createOrUpdateTrace } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -92,6 +93,24 @@ export async function POST(request: Request) {
       files: scaffold,
       reviewers: plan.suggestedReviewers,
       useExistingHead: Boolean(body.useExistingSourceBranch)
+    });
+
+    await createOrUpdateTrace({
+      repoFullName: body.repoFullName ?? "shipbrain-sandbox",
+      type: body.useExistingSourceBranch ? "release" : "feature",
+      title: plan.prTitle,
+      description: body.rawSpec,
+      status: "draft",
+      sourceBranch: branch,
+      targetBranch: base,
+      draftPrNumber: pr.number,
+      draftPrUrl: pr.html_url,
+      source: "manual",
+      actor: "ShipBrain",
+      eventType: "pr_opened",
+      details: { createdFrom: "spec-to-pr", useExistingSourceBranch: Boolean(body.useExistingSourceBranch) }
+    }).catch((traceError) => {
+      console.error("release trace creation failed", traceError);
     });
 
     return NextResponse.json({ ...response, pr });

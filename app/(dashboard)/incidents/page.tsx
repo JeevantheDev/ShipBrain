@@ -1,8 +1,9 @@
 "use client";
 
-import { AlertTriangle, ArrowLeftRight, CheckCircle2, ClipboardPlus, Download, ExternalLink, GitPullRequest, Search, ShieldCheck, Wand2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, CheckCircle2, ClipboardPlus, Download, ExternalLink, GitBranch, GitPullRequest, Search, ShieldCheck, Wand2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
+import { IncidentTemplateEditor, getDefaultTemplate, templateToLogs, type IncidentTemplateData } from "@/components/incidents/IncidentTemplateEditor";
 
 type Incident = {
   id: string;
@@ -141,7 +142,6 @@ export default function IncidentsPage() {
   const [postmortem, setPostmortem] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
   const [gateOpen, setGateOpen] = useState(false);
-  const [manualLogs, setManualLogs] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
@@ -156,6 +156,12 @@ export default function IncidentsPage() {
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [postmortemModalOpen, setPostmortemModalOpen] = useState(false);
   const [postmortemLoading, setPostmortemLoading] = useState(false);
+  // New template editor state
+  const [templateData, setTemplateData] = useState<IncidentTemplateData>(getDefaultTemplate());
+  const [createHotfixOnSubmit, setCreateHotfixOnSubmit] = useState(true);
+  const [hotfixTargetBranch, setHotfixTargetBranch] = useState("main");
+  const [runAiAnalysis, setRunAiAnalysis] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     void loadIncidents();
@@ -268,20 +274,112 @@ export default function IncidentsPage() {
   }
 
   async function createManualIncident() {
-    const response = await fetch("/api/incidents", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ source: "simulation", logs: manualLogs })
-    });
-    const incident = await response.json();
-    if (!response.ok) {
-      setError(incident.detail ?? incident.error ?? "Unable to create incident");
+    if (!templateData.title.trim() || !templateData.description.trim()) {
+      setError("Title and description are required");
       return;
     }
-    setIncidents((items) => [incident, ...items]);
-    setSelected(incident);
-    setManualOpen(false);
-    setManualLogs("");
+
+    setSubmitting(true);
+    setError("");
+
+    try {
+      // Create the incident
+      const logs = templateToLogs(templateData);
+      const response = await fetch("/api/incidents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source: "manual",
+          title: templateData.title,
+          severity: templateData.severity,
+          service: templateData.service || undefined,
+          environment: templateData.environment,
+          logs
+        })
+      });
+      const incident = await response.json();
+      if (!response.ok) {
+        throw new Error(incident.detail ?? incident.error ?? "Unable to create incident");
+      }
+
+      setIncidents((items) => [incident, ...items]);
+      setSelected(incident);
+      setAnalysis(null);
+
+      // Optionally run AI analysis
+      if (runAiAnalysis) {
+        setAnalyzing(true);
+        setAnalysisProgress(8);
+        try {
+          const analysisRes = await fetch("/api/ai/incident", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "analyze", incident })
+          });
+          const analysisJson = await analysisRes.json();
+          if (analysisRes.ok) {
+            setAnalysisProgress(100);
+            setAnalysis(analysisJson);
+            await persistIncident({
+              id: incident.id,
+              rootCause: analysisJson.rootCause,
+              fixProposal: analysisJson.fixProposal,
+              aiAnalysis: analysisJson
+            });
+          }
+        } catch {
+          // AI analysis is optional, continue without it
+        } finally {
+          setAnalyzing(false);
+        }
+      }
+
+      // Optionally create hotfix branch
+      if (createHotfixOnSubmit && incident.id) {
+        setHotfixBusy(true);
+        try {
+          const hotfixRes = await fetch("/api/incidents/hotfix", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              action: "create",
+              incidentId: incident.id,
+              analysis: analysis ?? {
+                rootCause: templateData.description,
+                fixProposal: "Fix to be determined by developer",
+                rollbackSteps: ["Revert changes", "Verify system stable"],
+                confidence: 0.5
+              },
+              baseBranch: hotfixTargetBranch
+            })
+          });
+          const hotfixJson = await hotfixRes.json();
+          if (hotfixRes.ok) {
+            setSelected(hotfixJson.incident);
+            setIncidents((items) => items.map((item) => (item.id === hotfixJson.incident.id ? hotfixJson.incident : item)));
+            setActionMessage(`Incident created with hotfix branch. Draft PR #${hotfixJson.pr.number} ready for fixes.`);
+          }
+        } catch {
+          // Hotfix creation failed, but incident was created
+          setActionMessage("Incident created. Hotfix branch creation failed - you can create it manually.");
+        } finally {
+          setHotfixBusy(false);
+        }
+      } else {
+        setActionMessage("Incident created successfully.");
+      }
+
+      // Reset form
+      setManualOpen(false);
+      setTemplateData(getDefaultTemplate());
+      setCreateHotfixOnSubmit(true);
+      setRunAiAnalysis(false);
+      setHotfixTargetBranch("main");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create incident");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function acknowledgeIncident() {
@@ -355,10 +453,20 @@ export default function IncidentsPage() {
   }
 
   async function createHotfixDraftPr() {
-    if (!selected || !analysis) return;
+    if (!selected) return;
     setHotfixBusy(true);
     setError("");
     setActionMessage("");
+
+    // Use analysis if available, otherwise create a basic structure
+    const analysisPayload = analysis ?? {
+      rootCause: selected.logs ? summarizeIncidentLogs(selected.logs) : "To be determined",
+      fixProposal: "Developer to investigate and implement fix",
+      rollbackSteps: ["Revert the hotfix PR if issues arise", "Verify system stability"],
+      confidence: 0.5,
+      releaseContext: null
+    };
+
     try {
       const response = await fetch("/api/incidents/hotfix", {
         method: "POST",
@@ -366,8 +474,8 @@ export default function IncidentsPage() {
         body: JSON.stringify({
           action: "create",
           incidentId: selected.id,
-          analysis,
-          releaseContext: analysis.releaseContext,
+          analysis: analysisPayload,
+          releaseContext: analysis?.releaseContext ?? null,
           baseBranch: hotfixBaseBranch
         })
       });
@@ -682,47 +790,135 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
                   <pre className="code-view mono" style={{ maxHeight: 150, fontSize: 11, padding: 10, background: "var(--panel-2)", border: "1px solid var(--line)" }}>{selected.logs}</pre>
                 </div>
 
-                <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-                  <button className="btn-primary" disabled={analyzing} onClick={analyze} style={{ flex: 1, justifyContent: "center" }}>
-                    <Wand2 size={12} />
-                    {analyzing ? "Analyzing logs..." : "Analyze with AI"}
-                  </button>
-                  {selected.status !== "resolved" && (
-                    <button className="btn subtle" disabled={!analysis || analyzing || !selected.hotfixPrNumber || hotfixBusy} onClick={openApprovalGate} style={{ flex: 1, justifyContent: "center" }}>
-                      <ShieldCheck size={12} />
-                      {hotfixBusy ? "Syncing..." : "Approve fix"}
+                {/* Action Buttons - Context-aware based on status */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                  {/* Primary Actions Row */}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {/* AI Analysis - Optional */}
+                    <button
+                      className="btn subtle"
+                      disabled={analyzing || selected.status === "resolved"}
+                      onClick={analyze}
+                      style={{ flex: 1, justifyContent: "center" }}
+                      title="AI analysis is optional - you can proceed without it"
+                    >
+                      <Wand2 size={12} />
+                      {analyzing ? "Analyzing..." : analysis ? "Re-analyze" : "Analyze with AI"}
+                      <span style={{ fontSize: 9, marginLeft: 4, opacity: 0.7 }}>(optional)</span>
                     </button>
-                  )}
-                  <button className="btn subtle" disabled={!analysis || analyzing} onClick={generatePostmortem} style={{ flex: 1, justifyContent: "center" }}>
-                    <Download size={12} />
-                    Draft post-mortem
-                  </button>
+
+                    {/* Create Draft PR - Available after acknowledging */}
+                    {selected.status === "investigating" && !selected.hotfixPrNumber && (
+                      <button
+                        className="btn-primary"
+                        disabled={hotfixBusy || !hotfixBaseBranch.trim()}
+                        onClick={createHotfixDraftPr}
+                        style={{ flex: 1, justifyContent: "center" }}
+                      >
+                        <GitPullRequest size={12} />
+                        {hotfixBusy ? "Creating..." : "Create Draft PR"}
+                      </button>
+                    )}
+
+                    {/* Approve Fix - Available when PR exists and incident is not resolved/rejected */}
+                    {selected.status !== "resolved" && selected.status !== "rejected" && selected.hotfixPrNumber && (
+                      <button
+                        className="btn-primary"
+                        disabled={hotfixBusy}
+                        onClick={openApprovalGate}
+                        style={{ flex: 1, justifyContent: "center" }}
+                      >
+                        <ShieldCheck size={12} />
+                        {hotfixBusy ? "Syncing..." : "Approve Fix"}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Secondary Actions Row */}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      className="btn subtle"
+                      disabled={!analysis || analyzing}
+                      onClick={generatePostmortem}
+                      style={{ flex: 1, justifyContent: "center" }}
+                    >
+                      <Download size={12} />
+                      Draft post-mortem
+                    </button>
+                    {selected.hotfixPrUrl && (
+                      <a
+                        className="btn subtle"
+                        href={selected.hotfixPrUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ flex: 1, justifyContent: "center" }}
+                      >
+                        <ExternalLink size={12} />
+                        View PR #{selected.hotfixPrNumber}
+                      </a>
+                    )}
+                  </div>
                 </div>
 
-                {/* Hotfix Panel */}
-                {(analysis || selected.hotfixPrNumber) && (
+                {/* Hotfix Panel - Show when investigating or has PR, but not for rejected incidents */}
+                {(selected.status === "investigating" || selected.hotfixPrNumber) && selected.status !== "rejected" && (
                   <div className="card" style={{ padding: 12, background: "var(--panel-2)", border: "1px dashed var(--line)", marginBottom: 14 }}>
-                    <span className="eyebrow mono" style={{ fontSize: 10, display: "block", marginBottom: 4 }}>Incident hotfix pipeline</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <GitBranch size={14} style={{ color: "var(--brand)" }} />
+                      <span className="eyebrow mono" style={{ fontSize: 10 }}>Hotfix Pipeline</span>
+                      {selected.hotfixPrNumber && (
+                        <span className="status-pill passed" style={{ marginLeft: "auto", fontSize: 10 }}>
+                          PR #{selected.hotfixPrNumber}
+                        </span>
+                      )}
+                    </div>
+
                     <strong style={{ fontSize: 13.5 }}>
-                      {selected.hotfixPrNumber ? `Draft PR #${selected.hotfixPrNumber} created` : "Create hotfix branch"}
+                      {selected.hotfixPrNumber
+                        ? selected.hotfixPrStatus === "merged"
+                          ? "Hotfix merged successfully"
+                          : "Draft PR ready for fixes"
+                        : "Configure hotfix branch"}
                     </strong>
                     <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>
                       {selected.hotfixPrNumber
-                        ? "Developer should commit fixes to this hotfix branch. ShipBrain will sync commits automatically before release."
-                        : "Ask ShipBrain to generate an isolated hotfix branch on GitHub populated with instructions."}
+                        ? selected.hotfixPrStatus === "merged"
+                          ? "The hotfix has been merged and deployed."
+                          : "Push fix commits to the branch. Click 'Approve Fix' when ready to merge and deploy."
+                        : "Select target branch and create a draft PR with incident context for developers."}
                     </p>
 
                     {!selected.hotfixPrNumber ? (
                       <div style={{ marginBottom: 10 }}>
-                        <label className="field-label" htmlFor="hotfix-base" style={{ fontSize: 11, color: "var(--text-muted)" }}>Destination branch</label>
-                        <input
+                        <label className="field-label" htmlFor="hotfix-base" style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+                          Target branch for hotfix
+                        </label>
+                        <select
                           id="hotfix-base"
-                          className="input compact"
+                          className="input"
                           value={hotfixBaseBranch}
                           onChange={(event) => setHotfixBaseBranch(event.target.value)}
-                          placeholder="develop"
-                          style={{ marginTop: 4, width: "100%" }}
-                        />
+                          style={{
+                            width: "100%",
+                            height: 36,
+                            padding: "0 12px",
+                            fontSize: 13,
+                            color: "var(--text)",
+                            background: "var(--panel-2)",
+                            border: "1px solid var(--line)",
+                            borderRadius: 4,
+                            cursor: "pointer",
+                            appearance: "auto"
+                          }}
+                        >
+                          <option value="main">main (Production hotfix)</option>
+                          <option value="develop">develop (Preview fix)</option>
+                        </select>
+                        <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--text-muted)" }}>
+                          {hotfixBaseBranch === "main"
+                            ? "Hotfix will deploy to production. Changes auto-sync to develop after merge."
+                            : "Fix will deploy to preview environment only."}
+                        </p>
                       </div>
                     ) : (
                       <div className="commit-context" style={{ padding: 8, background: "var(--bg)", border: "1px solid var(--line)", marginBottom: 10 }}>
@@ -731,8 +927,29 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
                           <strong>{selected.hotfixBranch}</strong>
                         </div>
                         <div>
-                          <span className="eyebrow mono" style={{ fontSize: 9 }}>Integration target</span>
+                          <span className="eyebrow mono" style={{ fontSize: 9 }}>Target branch</span>
                           <strong>{selected.hotfixBaseBranch ?? "develop"}</strong>
+                        </div>
+                        {selected.hotfixBaseBranch === "main" && !selected.reverseSyncPrNumber && selected.hotfixPrStatus !== "merged" && (
+                          <div>
+                            <span className="eyebrow mono" style={{ fontSize: 9 }}>Auto-sync</span>
+                            <strong style={{ color: "var(--brand)" }}>main → develop</strong>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Commit list if PR exists */}
+                    {selected.hotfixCommits && selected.hotfixCommits.length > 0 && (
+                      <div style={{ marginBottom: 10 }}>
+                        <span className="eyebrow mono" style={{ fontSize: 9, display: "block", marginBottom: 6 }}>Commits ({selected.hotfixCommits.length})</span>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 100, overflow: "auto" }}>
+                          {selected.hotfixCommits.slice(0, 5).map((commit) => (
+                            <div key={commit.sha} style={{ display: "flex", gap: 8, fontSize: 11 }}>
+                              <code className="mono" style={{ color: "var(--brand)" }}>{commit.shortSha ?? commit.sha.slice(0, 7)}</code>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{commit.message}</span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -740,14 +957,19 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
                     <div style={{ display: "flex", gap: 6 }}>
                       {selected.hotfixPrUrl && (
                         <a className="btn subtle compact" href={selected.hotfixPrUrl} target="_blank" rel="noreferrer" style={{ flex: 1, justifyContent: "center" }}>
-                          <GitPullRequest size={12} />
-                          View PR #{selected.hotfixPrNumber}
+                          <ExternalLink size={12} />
+                          View PR
                         </a>
                       )}
                       {!selected.hotfixPrNumber && (
-                        <button className="btn-primary compact" disabled={!analysis || hotfixBusy || !hotfixBaseBranch.trim()} onClick={createHotfixDraftPr} style={{ flex: 1, justifyContent: "center" }}>
+                        <button
+                          className="btn-primary compact"
+                          disabled={hotfixBusy || !hotfixBaseBranch.trim()}
+                          onClick={createHotfixDraftPr}
+                          style={{ flex: 1, justifyContent: "center" }}
+                        >
                           <GitPullRequest size={12} />
-                          {hotfixBusy ? "Working..." : "Create Hotfix PR"}
+                          {hotfixBusy ? "Creating..." : "Create Draft PR"}
                         </button>
                       )}
                     </div>
@@ -916,20 +1138,119 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
 
       {manualOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setManualOpen(false)}>
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <h2>Report simulation incident</h2>
-            <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 12 }}>Paste alert notification logs or details below.</p>
-            <textarea
-              className="textarea"
-              placeholder="Paste alert payload or logs..."
-              value={manualLogs}
-              onChange={(event) => setManualLogs(event.target.value)}
-              rows={6}
-              style={{ width: "100%", background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--line)", padding: 8, borderRadius: 4 }}
-            />
-            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 14, gap: 8 }}>
-              <button className="btn subtle" onClick={() => setManualOpen(false)}>Cancel</button>
-              <button className="btn-primary" disabled={!manualLogs.trim()} onClick={createManualIncident}>Submit Incident</button>
+          <div className="modal" style={{ maxWidth: 720, maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column" }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Report Incident</h2>
+                <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "4px 0 0" }}>Use the template below to report a new incident</p>
+              </div>
+              <button className="btn subtle compact" onClick={() => setManualOpen(false)}>
+                <XCircle size={14} />
+              </button>
+            </div>
+
+            <div style={{ flex: 1, overflow: "auto", paddingRight: 8 }}>
+              <IncidentTemplateEditor value={templateData} onChange={setTemplateData} />
+
+              {/* Options Section */}
+              <div className="card" style={{ marginTop: 16, padding: 14, background: "var(--panel-2)", border: "1px solid var(--line)" }}>
+                <span className="eyebrow mono" style={{ fontSize: 10, display: "block", marginBottom: 10 }}>Incident Response Options</span>
+
+                {/* Create Hotfix Branch Option */}
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={createHotfixOnSubmit}
+                    onChange={(e) => setCreateHotfixOnSubmit(e.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <GitBranch size={14} style={{ color: "var(--brand)" }} />
+                      <strong style={{ fontSize: 13 }}>Create hotfix branch automatically</strong>
+                    </div>
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                      Creates an isolated hotfix branch with a draft PR ready for fixes
+                    </p>
+                  </div>
+                </label>
+
+                {createHotfixOnSubmit && (
+                  <div style={{ marginLeft: 24, marginBottom: 12 }}>
+                    <label className="field-label" style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+                      Target branch for hotfix
+                    </label>
+                    <select
+                      className="input"
+                      value={hotfixTargetBranch}
+                      onChange={(e) => setHotfixTargetBranch(e.target.value)}
+                      style={{
+                        width: "100%",
+                        maxWidth: 200,
+                        height: 36,
+                        padding: "0 12px",
+                        fontSize: 13,
+                        color: "var(--text)",
+                        background: "var(--panel-2)",
+                        border: "1px solid var(--line)",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        appearance: "auto"
+                      }}
+                    >
+                      <option value="main">main (Production)</option>
+                      <option value="develop">develop (Preview)</option>
+                    </select>
+                    <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--text-muted)" }}>
+                      {hotfixTargetBranch === "main"
+                        ? "Hotfix will be merged to main and auto-synced back to develop"
+                        : "Hotfix will be merged to develop only"}
+                    </p>
+                  </div>
+                )}
+
+                {/* AI Analysis Option */}
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={runAiAnalysis}
+                    onChange={(e) => setRunAiAnalysis(e.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <Wand2 size={14} style={{ color: "var(--brand)" }} />
+                      <strong style={{ fontSize: 13 }}>Run AI analysis (optional)</strong>
+                    </div>
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                      Analyze incident logs to suggest root cause and fix proposal
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line-muted)", gap: 8 }}>
+              <button className="btn subtle" onClick={() => { setManualOpen(false); setTemplateData(getDefaultTemplate()); }}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!templateData.title.trim() || !templateData.description.trim() || submitting}
+                onClick={createManualIncident}
+              >
+                {submitting ? (
+                  <>
+                    <span className="loading-spinner" style={{ width: 12, height: 12, marginRight: 6 }} />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={12} />
+                    Report Incident
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

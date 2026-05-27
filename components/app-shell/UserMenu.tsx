@@ -20,8 +20,6 @@ export function UserMenu({ name, email, avatarUrl, variant = "sidebar" }: UserMe
     }
     const supabase = getSupabaseBrowserClient();
     await supabase.auth.signOut();
-    window.localStorage.removeItem("shipbrain:selectedRepo");
-    window.localStorage.removeItem("shipbrain:connectedRepos");
     router.replace("/login");
     router.refresh();
   }

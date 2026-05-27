@@ -7,10 +7,14 @@ const baseInput = {
   includeCloudflare: true,
   includeIncidents: true,
   ciExists: false,
+  previewExists: false,
+  productionExists: false,
+  notifyExists: false,
   deployExists: false,
   incidentsExists: false,
   packageJson: true,
-  buildOutputDir: "dist"
+  buildOutputDir: "dist",
+  buildCommand: "npm run build"
 };
 
 describe("ShipBrain repo setup workflow generation", () => {

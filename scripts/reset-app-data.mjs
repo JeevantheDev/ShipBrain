@@ -80,9 +80,16 @@ async function main() {
     await client.query(`
       truncate table
         public.approval_events,
+        public.cloudflare_webhook_events,
         public.ci_runs,
         public.incidents,
+        public.notifications,
+        public.release_traces,
         public.specs,
+        public.telegram_notification_deliveries,
+        public.telegram_users,
+        public.telegram_webhook_updates,
+        public.trace_events,
         public.repos,
         public.profiles
       cascade;

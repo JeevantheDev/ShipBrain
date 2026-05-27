@@ -2,6 +2,7 @@
 
 import { Copy, Edit3, ExternalLink, RefreshCw, Save, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
+import { usePasswordConfirmation } from "@/components/ui/usePasswordConfirmation";
 
 type RepoSecretState = {
   id: string;
@@ -12,6 +13,7 @@ type RepoSecretState = {
   setup_pr_number?: number;
   setup_pr_url?: string;
   shipbrain_api_key_last4?: string;
+  telegram_notifications_enabled?: boolean;
   setup_metadata?: { injectedSecrets?: string[]; skipCloudflare?: boolean; skipIncidents?: boolean; cloudflareProjectName?: string; apiUrl?: string };
 };
 
@@ -33,11 +35,16 @@ export default function SecretsPage() {
   const [savingRepoId, setSavingRepoId] = useState<string | null>(null);
   const [syncingRepoId, setSyncingRepoId] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState("");
+  const [telegramCode, setTelegramCode] = useState("");
+  const [telegramState, setTelegramState] = useState<{ linked: boolean; username?: string; chatId?: string }>({ linked: false });
+  const [telegramBusy, setTelegramBusy] = useState(false);
   const disconnectModalRef = useRef<HTMLDivElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
+  const { confirmPassword, PasswordConfirmModal } = usePasswordConfirmation();
 
   useEffect(() => {
     void loadSecrets();
+    void loadTelegram();
   }, []);
 
   useEffect(() => {
@@ -77,12 +84,151 @@ export default function SecretsPage() {
     }
   }
 
+  async function loadTelegram() {
+    const response = await fetch("/api/telegram/verify", { cache: "no-store" }).catch(() => null);
+    if (!response?.ok) return;
+    const json = await response.json();
+    setTelegramState({
+      linked: Boolean(json.linked),
+      username: json.telegram?.telegram_username ?? undefined,
+      chatId: json.telegram?.telegram_chat_id ? String(json.telegram.telegram_chat_id) : undefined
+    });
+  }
+
+  async function verifyTelegram() {
+    const reauthPassword = await confirmPassword({
+      title: "Confirm Telegram link",
+      description: "Enter your ShipBrain password before linking Telegram to your account."
+    });
+    if (!reauthPassword) return;
+    setTelegramBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/telegram/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: telegramCode, reauthPassword })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to link Telegram");
+      setTelegramCode("");
+      await loadTelegram();
+      setSyncMessage("Telegram chat linked successfully.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to link Telegram");
+    } finally {
+      setTelegramBusy(false);
+    }
+  }
+
+  async function testTelegram() {
+    const reauthPassword = await confirmPassword({
+      title: "Confirm Telegram test",
+      description: "Enter your ShipBrain password before sending a Telegram test message."
+    });
+    if (!reauthPassword) return;
+    setTelegramBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/telegram/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "test", reauthPassword })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to send Telegram test");
+      setSyncMessage("Telegram test message sent.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to send Telegram test");
+    } finally {
+      setTelegramBusy(false);
+    }
+  }
+
+  async function unlinkTelegram() {
+    const reauthPassword = await confirmPassword({
+      title: "Confirm Telegram unlink",
+      description: "Enter your ShipBrain password before removing Telegram access."
+    });
+    if (!reauthPassword) return;
+    setTelegramBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/telegram/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "unlink", reauthPassword })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to unlink Telegram");
+      await loadTelegram();
+      setSyncMessage("Telegram chat unlinked.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to unlink Telegram");
+    } finally {
+      setTelegramBusy(false);
+    }
+  }
+
+  async function setupTelegramWebhook() {
+    const reauthPassword = await confirmPassword({
+      title: "Confirm Telegram webhook",
+      description: "Enter your ShipBrain password before changing Telegram webhook configuration."
+    });
+    if (!reauthPassword) return;
+    setTelegramBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/telegram/setup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reauthPassword })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to set Telegram webhook");
+      setSyncMessage(`Telegram webhook set: ${json.webhookUrl}`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to set Telegram webhook");
+    } finally {
+      setTelegramBusy(false);
+    }
+  }
+
+  async function toggleTelegram(repo: RepoSecretState, enabled: boolean) {
+    const reauthPassword = await confirmPassword({
+      title: "Confirm Telegram alerts",
+      description: "Enter your ShipBrain password before changing Telegram delivery for this repo."
+    });
+    if (!reauthPassword) return;
+    setSavingRepoId(repo.id);
+    setError("");
+    try {
+      const response = await fetch("/api/settings/secrets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ repoId: repo.id, action: "toggle_telegram", enabled, reauthPassword })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to update Telegram notifications");
+      await loadSecrets();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to update Telegram notifications");
+    } finally {
+      setSavingRepoId(null);
+    }
+  }
+
   async function rotate(repoId: string) {
+    const reauthPassword = await confirmPassword({
+      title: "Confirm key rotation",
+      description: "Enter your ShipBrain password before rotating this repo's API key."
+    });
+    if (!reauthPassword) return;
     setError("");
     const response = await fetch("/api/settings/secrets", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ repoId, action: "rotate_api_key" })
+      body: JSON.stringify({ repoId, action: "rotate_api_key", reauthPassword })
     });
     const json = await response.json();
     if (!response.ok) {
@@ -94,6 +240,11 @@ export default function SecretsPage() {
   }
 
   async function syncToGitHub(repoId: string) {
+    const reauthPassword = await confirmPassword({
+      title: "Confirm GitHub secret sync",
+      description: "Enter your ShipBrain password before writing secrets to GitHub."
+    });
+    if (!reauthPassword) return;
     setSyncingRepoId(repoId);
     setError("");
     setSyncMessage("");
@@ -101,7 +252,7 @@ export default function SecretsPage() {
       const response = await fetch("/api/settings/secrets", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repoId, action: "sync_to_github" })
+        body: JSON.stringify({ repoId, action: "sync_to_github", reauthPassword })
       });
       const json = await response.json();
       if (!response.ok) {
@@ -163,13 +314,18 @@ export default function SecretsPage() {
       setError("Enter at least one changed secret value before saving.");
       return;
     }
+    const reauthPassword = await confirmPassword({
+      title: "Confirm secret update",
+      description: "Enter your ShipBrain password before replacing GitHub Actions secrets."
+    });
+    if (!reauthPassword) return;
     setSavingRepoId(repo.id);
     setError("");
     try {
       const response = await fetch("/api/settings/secrets", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repoId: repo.id, action: "update_secrets", secrets })
+        body: JSON.stringify({ repoId: repo.id, action: "update_secrets", secrets, reauthPassword })
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to save secrets");
@@ -192,13 +348,18 @@ export default function SecretsPage() {
 
   async function disconnect() {
     if (!disconnectRepo) return;
+    const reauthPassword = await confirmPassword({
+      title: "Confirm repo disconnect",
+      description: "Enter your ShipBrain password before removing this repo connection and GitHub secrets."
+    });
+    if (!reauthPassword) return;
     setDisconnecting(true);
     setError("");
     try {
       const response = await fetch("/api/settings/secrets", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repoId: disconnectRepo.id, action: "disconnect", confirmation })
+        body: JSON.stringify({ repoId: disconnectRepo.id, action: "disconnect", confirmation, reauthPassword })
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to disconnect repository");
@@ -234,6 +395,36 @@ export default function SecretsPage() {
           </div>
         </div>
       ) : null}
+
+      <article className="panel" style={{ marginBottom: 18 }}>
+        <div className="toolbar" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div className="eyebrow">Telegram</div>
+            <h2 style={{ marginBottom: 4 }}>Bot notifications</h2>
+            <p style={{ marginBottom: 0 }}>Link your Telegram chat to receive ShipBrain release, incident, secret, and merged PR notifications.</p>
+          </div>
+          <span className={`status ${telegramState.linked ? "green" : "amber"}`}>
+            {telegramState.linked ? "Linked" : "Not linked"}
+          </span>
+        </div>
+        <div className="info-callout compact" style={{ marginTop: 12 }}>
+          <strong>How to link</strong>
+          <p>Open your Telegram bot, send <code>/start</code>, copy the verification code, then paste it below.</p>
+        </div>
+        <div className="toolbar" style={{ marginTop: 12, alignItems: "flex-end" }}>
+          <div style={{ flex: "1 1 260px" }}>
+            <label className="field-label">Verification code</label>
+            <input className="input compact-input" value={telegramCode} onChange={(event) => setTelegramCode(event.target.value.toUpperCase())} placeholder="TG-ABCD-EFGH" />
+          </div>
+          <button className="button primary compact" disabled={telegramBusy || !telegramCode.trim()} onClick={verifyTelegram}>
+            {telegramBusy ? "Linking..." : "Link Telegram"}
+          </button>
+          <button className="button secondary compact" disabled={telegramBusy} onClick={setupTelegramWebhook}>Set webhook</button>
+          <button className="button secondary compact" disabled={telegramBusy || !telegramState.linked} onClick={testTelegram}>Send test</button>
+          {telegramState.linked ? <button className="button secondary compact danger-icon" disabled={telegramBusy} onClick={unlinkTelegram}>Unlink</button> : null}
+        </div>
+        {telegramState.linked ? <p className="secret-helper">Linked chat {telegramState.username ? `@${telegramState.username}` : telegramState.chatId}. Enable per-repo delivery below.</p> : null}
+      </article>
 
       <div className="split-list">
         {loading ? (
@@ -319,6 +510,18 @@ export default function SecretsPage() {
                 <ShieldCheck size={14} />
                 Cloudflare {repo.setup_metadata?.cloudflareProjectName ? "configured" : "pending"}
               </span>
+              <label className="check-row" style={{ marginTop: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(repo.telegram_notifications_enabled)}
+                  disabled={savingRepoId === repo.id}
+                  onChange={(event) => toggleTelegram(repo, event.target.checked)}
+                />
+                <span>
+                  Telegram alerts
+                  <small>Route notifications for this repo to your linked chat.</small>
+                </span>
+              </label>
               <button className="button secondary compact danger-icon" onClick={() => setDisconnectRepo(repo)}>
                 <Trash2 size={14} />
                 Disconnect repo
@@ -359,6 +562,7 @@ export default function SecretsPage() {
           </div>
         </div>
       ) : null}
+      <PasswordConfirmModal />
     </>
   );
 }

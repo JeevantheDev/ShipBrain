@@ -2,6 +2,7 @@
 
 import { Edit2, Loader2, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { usePasswordConfirmation } from "@/components/ui/usePasswordConfirmation";
 
 type EnvVar = {
   key: string;
@@ -13,8 +14,6 @@ type EditingVar = {
   key: string;
   newValue: string;
 };
-
-const selectedRepoKey = "shipbrain:selectedRepo";
 
 export function EnvVarsWidget() {
   const [repo, setRepo] = useState("");
@@ -32,21 +31,35 @@ export function EnvVarsWidget() {
   const [activeTab, setActiveTab] = useState<"preview" | "production">("preview");
   const [newVars, setNewVars] = useState<{ key: string; value: string }[]>([]);
   const [editingVar, setEditingVar] = useState<EditingVar | null>(null);
+  const { confirmPassword, PasswordConfirmModal } = usePasswordConfirmation();
 
   useEffect(() => {
-    const savedRepo = window.localStorage.getItem(selectedRepoKey);
-    if (savedRepo) {
-      setRepo(savedRepo);
+    let cancelled = false;
+
+    async function loadActiveRepo() {
+      const response = await fetch("/api/github/active-repo", { cache: "no-store" }).catch(() => null);
+      if (!response?.ok) {
+        setLoading(false);
+        return;
+      }
+      const json = await response.json();
+      if (!cancelled) {
+        setRepo(json.activeRepoFullName ?? "");
+        if (!json.activeRepoFullName) setLoading(false);
+      }
     }
 
-    // Listen for storage changes (when repo is changed in another component)
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === selectedRepoKey && e.newValue) {
-        setRepo(e.newValue);
-      }
+    function handleActiveRepo(event: Event) {
+      const nextRepo = (event as CustomEvent<string>).detail;
+      setRepo(nextRepo ?? "");
+    }
+
+    void loadActiveRepo();
+    window.addEventListener("shipbrain:active-repo", handleActiveRepo);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("shipbrain:active-repo", handleActiveRepo);
     };
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
   useEffect(() => {
@@ -123,6 +136,11 @@ export function EnvVarsWidget() {
       setError("Please enter a new value");
       return;
     }
+    const reauthPassword = await confirmPassword({
+      title: "Confirm environment change",
+      description: "Enter your ShipBrain password before updating environment variables."
+    });
+    if (!reauthPassword) return;
 
     setSaving(true);
     setError("");
@@ -135,7 +153,8 @@ export function EnvVarsWidget() {
         body: JSON.stringify({
           repo,
           envVars: { [editingVar.key]: editingVar.newValue },
-          environment: activeTab
+          environment: activeTab,
+          reauthPassword
         })
       });
 
@@ -163,6 +182,11 @@ export function EnvVarsWidget() {
       setError("Add at least one environment variable with both key and value");
       return;
     }
+    const reauthPassword = await confirmPassword({
+      title: "Confirm environment change",
+      description: "Enter your ShipBrain password before adding environment variables."
+    });
+    if (!reauthPassword) return;
 
     setSaving(true);
     setError("");
@@ -180,7 +204,8 @@ export function EnvVarsWidget() {
         body: JSON.stringify({
           repo,
           envVars: envVarsObj,
-          environment: activeTab
+          environment: activeTab,
+          reauthPassword
         })
       });
 
@@ -273,6 +298,7 @@ export function EnvVarsWidget() {
   }
 
   return (
+    <>
     <div className="panel">
       <header className="panel-head">
         <h2>
@@ -578,5 +604,7 @@ export function EnvVarsWidget() {
         </div>
       </div>
     </div>
+    <PasswordConfirmModal />
+    </>
   );
 }

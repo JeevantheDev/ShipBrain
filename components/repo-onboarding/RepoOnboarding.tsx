@@ -3,6 +3,7 @@
 import { Check, ChevronDown, Copy, ExternalLink, Github, Lock, RefreshCw, Search, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { usePasswordConfirmation } from "@/components/ui/usePasswordConfirmation";
 
 type Repo = {
   id: number;
@@ -29,8 +30,7 @@ type RepoScan = {
 
 type SetupEvent = { label: string; status: "running" | "done" | "error"; detail?: string };
 
-const selectedRepoKey = "shipbrain:selectedRepo";
-const connectedReposKey = "shipbrain:connectedRepos";
+const activeRepoEvent = "shipbrain:active-repo";
 
 export function RepoOnboarding() {
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -46,7 +46,9 @@ export function RepoOnboarding() {
   const [scan, setScan] = useState<RepoScan | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [skipIncidents, setSkipIncidents] = useState(false);
+  const [enableTelegram, setEnableTelegram] = useState(false);
   const [buildOutputDir, setBuildOutputDir] = useState("dist");
+  const [buildCommand, setBuildCommand] = useState("npm run build");
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupDone, setSetupDone] = useState<any>(null);
   const [setupEvents, setSetupEvents] = useState<SetupEvent[]>([]);
@@ -61,6 +63,7 @@ export function RepoOnboarding() {
   const modalRef = useRef<HTMLDivElement>(null);
   const repoSearchRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { confirmPassword, PasswordConfirmModal } = usePasswordConfirmation();
 
   const connectedRepos = useMemo(
     () => repos.filter((repo) => selectedRepos.includes(repo.full_name)),
@@ -86,11 +89,7 @@ export function RepoOnboarding() {
 
   useEffect(() => {
     setMounted(true);
-    const savedRepo = window.localStorage.getItem(selectedRepoKey);
-    const savedRepos = safeParseRepos(window.localStorage.getItem(connectedReposKey));
-    setSelectedRepo(savedRepo ?? savedRepos[0] ?? "");
-    setSelectedRepos(savedRepos);
-    void bootstrap(savedRepo, savedRepos);
+    void bootstrap();
   }, []);
 
   useEffect(() => {
@@ -102,19 +101,10 @@ export function RepoOnboarding() {
     }, 0);
   }, [modalOpen, setupDone, githubConnected]);
 
-  function safeParseRepos(value: string | null) {
-    if (!value) return [];
-    try {
-      return JSON.parse(value) as string[];
-    } catch {
-      return [];
-    }
-  }
-
-  async function bootstrap(savedRepo?: string | null, savedRepos: string[] = []) {
+  async function bootstrap() {
     const connected = await loadConnection();
     if (connected) {
-      await loadRepos(savedRepo, savedRepos);
+      await loadRepos();
     } else {
       setLoading(false);
       setModalOpen(true);
@@ -151,25 +141,37 @@ export function RepoOnboarding() {
     }
   }
 
-  async function loadRepos(savedRepo?: string | null, savedRepos: string[] = selectedRepos) {
+  async function loadRepos(preferredRepo?: string | null) {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/github/repos", { cache: "no-store" });
+      const [response, activeResponse] = await Promise.all([
+        fetch("/api/github/repos", { cache: "no-store" }),
+        fetch("/api/github/active-repo", { cache: "no-store" })
+      ]);
       const json = await response.json();
       if (!response.ok) {
         if (json.requiresGithub) setGithubConnected(false);
         throw new Error(json.error ?? "Unable to load repositories");
       }
+      const activeJson = activeResponse.ok ? await activeResponse.json() : {};
       setRepos(json);
       const connected = json.filter((repo: Repo) => repo.connected).map((repo: Repo) => repo.full_name);
-      const nextSelectedRepos = connected.length ? connected : savedRepos;
-      const nextSelectedRepo = savedRepo ?? nextSelectedRepos[0] ?? json.find((repo: Repo) => repo.full_name.endsWith("/shipbrain_sandbox"))?.full_name ?? json[0]?.full_name ?? "";
-      setSelectedRepos(nextSelectedRepos);
+      const activeFromDb = typeof activeJson.activeRepoFullName === "string" ? activeJson.activeRepoFullName : "";
+      const connectedSet = new Set(connected);
+      const activeConnectedRepo = preferredRepo && connectedSet.has(preferredRepo)
+        ? preferredRepo
+        : activeFromDb && connectedSet.has(activeFromDb)
+          ? activeFromDb
+          : connected[0] ?? "";
+      const fallbackRepo = json.find((repo: Repo) => repo.full_name.endsWith("/shipbrain_sandbox"))?.full_name ?? json[0]?.full_name ?? "";
+      const nextSelectedRepo = activeConnectedRepo || fallbackRepo;
+      setSelectedRepos(connected);
       setSelectedRepo(nextSelectedRepo);
-      window.localStorage.setItem(connectedReposKey, JSON.stringify(nextSelectedRepos));
-      window.localStorage.setItem(selectedRepoKey, nextSelectedRepo);
-      if (!nextSelectedRepos.length) setModalOpen(true);
+      if (activeConnectedRepo && activeConnectedRepo !== activeFromDb) {
+        await persistActiveRepo(activeConnectedRepo, false);
+      }
+      if (!connected.length) setModalOpen(true);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to load repositories");
     } finally {
@@ -181,7 +183,7 @@ export function RepoOnboarding() {
     setSelectedRepo(repo.full_name);
     setQuery(repo.full_name);
     setSetupDone(null);
-    window.localStorage.setItem(selectedRepoKey, repo.full_name);
+    if (repo.connected) await persistActiveRepo(repo.full_name);
     await scanRepo(repo.full_name);
   }
 
@@ -260,6 +262,11 @@ export function RepoOnboarding() {
 
   async function submitSetup() {
     if (!activeRepo) return;
+    const reauthPassword = await confirmPassword({
+      title: "Confirm repo connection",
+      description: "Enter your ShipBrain password before connecting a new repo, injecting secrets, and opening setup PRs."
+    });
+    if (!reauthPassword) return;
     setSetupBusy(true);
     setError("");
     setSetupDone(null);
@@ -272,7 +279,10 @@ export function RepoOnboarding() {
           stream: true,
           repo: activeRepo,
           skipIncidents,
+          enableTelegram,
           buildOutputDir: buildOutputDir.trim() || "dist",
+          buildCommand: buildCommand.trim() || "npm run build",
+          reauthPassword,
           productionBranch: customProdBranch.trim(),
           developmentBranch: customDevBranch.trim(),
           envVars: envVars.filter(e => e.key.trim()).reduce((acc, e) => ({ ...acc, [e.key.trim()]: e.value }), {} as Record<string, string>)
@@ -288,8 +298,8 @@ export function RepoOnboarding() {
       window.setTimeout(() => setApiKeyHidden(true), 60000);
       const nextConnectedRepos = Array.from(new Set([...selectedRepos, activeRepo.full_name]));
       setSelectedRepos(nextConnectedRepos);
-      window.localStorage.setItem(connectedReposKey, JSON.stringify(nextConnectedRepos));
-      await loadRepos(activeRepo.full_name, nextConnectedRepos);
+      await persistActiveRepo(activeRepo.full_name);
+      await loadRepos(activeRepo.full_name);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Repo setup failed");
     } finally {
@@ -339,9 +349,26 @@ export function RepoOnboarding() {
     window.setTimeout(() => setCopied(false), 2000);
   }
 
-  function changeActiveRepo(fullName: string) {
+  async function persistActiveRepo(fullName: string, notify = true) {
+    const response = await fetch("/api/github/active-repo", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoFullName: fullName || null })
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to save active repository");
+    if (notify) {
+      window.dispatchEvent(new CustomEvent(activeRepoEvent, { detail: fullName }));
+    }
+  }
+
+  async function changeActiveRepo(fullName: string) {
     setSelectedRepo(fullName);
-    window.localStorage.setItem(selectedRepoKey, fullName);
+    try {
+      await persistActiveRepo(fullName);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to save active repository");
+    }
   }
 
   function manageSecrets() {
@@ -364,13 +391,12 @@ export function RepoOnboarding() {
       }
       const nextSelectedRepos = selectedRepos.filter((name) => name !== fullName);
       setSelectedRepos(nextSelectedRepos);
-      window.localStorage.setItem(connectedReposKey, JSON.stringify(nextSelectedRepos));
       if (selectedRepo === fullName) {
         const nextRepo = nextSelectedRepos[0] ?? "";
         setSelectedRepo(nextRepo);
-        window.localStorage.setItem(selectedRepoKey, nextRepo);
+        await persistActiveRepo(nextRepo);
       }
-      await loadRepos(nextSelectedRepos[0], nextSelectedRepos);
+      await loadRepos(nextSelectedRepos[0]);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to disconnect repo");
     } finally {
@@ -579,7 +605,7 @@ export function RepoOnboarding() {
                       <div className="repo-option muted">No repositories found. Re-connect GitHub if a repo is missing.</div>
                     )}
                   </div>
-                  <button className="button secondary compact" onClick={() => loadRepos(selectedRepo, selectedRepos)} disabled={loading}>
+                  <button className="button secondary compact" onClick={() => loadRepos(selectedRepo)} disabled={loading}>
                     <RefreshCw size={14} />
                     Refresh repos
                   </button>
@@ -600,6 +626,13 @@ export function RepoOnboarding() {
                 <div className="repo-connect-group">
                   <div className="eyebrow">Build Settings</div>
                   <h3>Deployment configuration</h3>
+                  <div className="secret-field">
+                    <label className="field-label">Build Command</label>
+                    <div className="secret-input-row">
+                      <input type="text" value={buildCommand} onChange={(event) => setBuildCommand(event.target.value)} placeholder="npm run build" />
+                    </div>
+                    <p className="secret-helper">Default is <code>npm run build</code>. Change this if your repo uses a custom command such as <code>npm run pages:build</code> or <code>pnpm build</code>.</p>
+                  </div>
                   <div className="secret-field">
                     <label className="field-label">Build Output Directory</label>
                     <div className="secret-input-row">
@@ -689,6 +722,22 @@ export function RepoOnboarding() {
                   )}
                 </div>
 
+                <div className="repo-connect-group">
+                  <div className="eyebrow">Telegram</div>
+                  <h3>Bot notifications</h3>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={enableTelegram}
+                      onChange={(event) => setEnableTelegram(event.target.checked)}
+                    />
+                    <span>
+                      Send release, incident, secret, and merged PR notifications to my linked Telegram chat.
+                      <small>Link Telegram from Settings → Secrets after creating your bot with BotFather.</small>
+                    </span>
+                  </label>
+                </div>
+
                 {setupBusy || setupEvents.length ? <SetupProgress events={setupEvents} /> : null}
                 {error && !setupBusy ? (
                   <div className="setup-progress">
@@ -711,6 +760,7 @@ export function RepoOnboarding() {
           document.body
         )
         : null}
+      <PasswordConfirmModal />
     </>
   );
 }

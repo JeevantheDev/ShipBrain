@@ -88,13 +88,6 @@ type DeploymentAudit = {
   };
 };
 
-type ReleaseStep = {
-  label: string;
-  detail: string;
-  state: "done" | "active" | "pending" | "blocked";
-  href?: string;
-};
-
 type PendingDeploy = {
   id: string;
   queueType: "develop" | "production";
@@ -405,14 +398,6 @@ export default function CiPage() {
     }
   }
 
-  function auditLabel(audit: DeploymentAudit) {
-    if (audit.action === "deploy_rejected") return "Rejected";
-    if (audit.metadata.deploymentState === "develop_validated") return "Develop preview started";
-    if (audit.metadata.deploymentState === "dispatch_started") return "Production approved";
-    if (audit.metadata.deploymentState === "release_pr_open") return "Release PR opened";
-    return "Approved";
-  }
-
   function shouldShowDeploymentAudit(run: CiRun) {
     return (
       run.deploymentStatus === "develop_validated" ||
@@ -423,61 +408,6 @@ export default function CiPage() {
       run.releaseStatus === "deployed" ||
       run.releaseStatus === "failed"
     );
-  }
-
-  function releaseSteps(run: CiRun): ReleaseStep[] {
-    const source = run.sourceBranch ?? run.branch;
-    const destination = run.destinationBranch ?? (run.isReleasePromotionPr ? "main" : "develop");
-    const draftDone = Boolean(run.prNumber);
-    const developDone = run.specStatus === "merged" || run.releaseStatus === "ready_for_prod" || run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying" || run.releaseStatus === "deployed";
-    const releaseReady = run.isReleasePromotionPr || run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying" || run.releaseStatus === "deployed";
-    const prodDone = run.releaseStatus === "deployed";
-    const prodActive = run.releaseStatus === "deploying" || run.releaseStatus === "pending_deploy" || run.isReleasePromotionPr;
-
-    return [
-      {
-        label: "Draft PR",
-        detail: run.prNumber ? `PR #${run.prNumber} · ${source} → ${destination}` : "Waiting for ShipBrain Draft PR",
-        state: draftDone ? "done" : "pending",
-        href: run.prUrl
-      },
-      {
-        label: "Develop preview",
-        detail: run.previewUrl
-          ? "Vercel Preview is available for develop"
-          : run.previewStatus === "deploying"
-            ? "Vercel Preview deploy is running for develop"
-            : developDone
-              ? "Feature history is merged or validated on develop"
-              : "Developer review and develop CI are still in progress",
-        state: run.previewUrl || run.previewStatus === "deployed" ? "done" : run.previewStatus === "deploying" || run.branch === "develop" ? "active" : "pending",
-        href: run.previewUrl ?? run.htmlUrl
-      },
-      {
-        label: "Production promotion",
-        detail: run.releasePrNumber
-          ? `Release PR #${run.releasePrNumber} · develop → main`
-          : releaseReady
-            ? "Release gate is ready in CI Monitor"
-            : "Create a develop-to-main release PR when develop is ready",
-        state: run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying" || run.releaseStatus === "deployed"
-          ? "done"
-          : releaseReady
-            ? "active"
-            : "pending",
-        href: run.releasePrUrl
-      },
-      {
-        label: "Production deploy",
-        detail: run.productionUrl
-          ? `Live at production`
-          : run.releaseTag
-            ? `${run.releaseTag}${run.releaseStatus ? ` · ${run.releaseStatus}` : ""}`
-            : "Manager approval creates the unique release tag and dispatches production",
-        state: prodDone ? "done" : prodActive ? "active" : run.releaseStatus === "failed" ? "blocked" : "pending",
-        href: run.productionUrl ?? run.deploymentUrl
-      }
-    ];
   }
 
   async function recordDeploymentDecision(action: DeploymentAudit["action"], note: string) {
@@ -565,12 +495,9 @@ export default function CiPage() {
         </div>
       </header>
 
-{/* Cloudflare Pages handles environment variables automatically via ShipBrain setup */}
+      {/* Cloudflare Pages handles environment variables automatically via ShipBrain setup */}
 
-      {/* 2-Column Layout: Deployment Queue + Release Trace */}
-      <section className="grid two" style={{ marginBottom: 18 }}>
-        {/* Deployment Queue - Left Column */}
-        <div className="panel">
+      <section className="panel" style={{ marginBottom: 18 }}>
           <header className="panel-head">
             <h2>
               Deployment Queue
@@ -736,75 +663,6 @@ export default function CiPage() {
               )}
             </div>
           )}
-        </div>
-
-        {/* Release Trace - Right Column */}
-        <div className="panel">
-          <header className="panel-head">
-            <h2>Release Trace</h2>
-            {selected && (
-              <span className="status-pill passed">
-                <span className="dot"></span>
-                {selected.releaseStatus ?? "tracking"}
-              </span>
-            )}
-          </header>
-          <div style={{ padding: 16 }}>
-            {selected ? (
-              <>
-                <div style={{ marginBottom: 12 }}>
-                  <strong style={{ fontSize: "14px" }}>{selected.specTitle ?? selected.title}</strong>
-                  <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Feature branch → develop → main → production</p>
-                </div>
-                <div className="release-path" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {releaseSteps(selected).map((step) => (
-                    <div className={`release-step ${step.state}`} key={step.label} style={{ display: "flex", gap: 12, position: "relative" }}>
-                      <span className="release-step-marker" style={{
-                        width: 14, height: 14, borderRadius: "50%",
-                        background: step.state === "done" ? "var(--green)" : step.state === "active" ? "var(--brand)" : "var(--line)",
-                        flex: "0 0 14px", marginTop: 2
-                      }} />
-                      <div>
-                        <strong style={{ fontSize: 13, color: step.state === "pending" ? "var(--text-muted)" : "var(--text)" }}>{step.label}</strong>
-                        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "2px 0 4px" }}>{step.detail}</p>
-                        {step.href ? (
-                          <a href={step.href} target="_blank" rel="noreferrer" className="text-link" style={{ fontSize: 11 }}>
-                            Open reference <ExternalLink size={10} style={{ marginLeft: 2 }} />
-                          </a>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {shouldShowDeploymentAudit(selected) ? (
-                  <div className="release-audit-strip" style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--line-muted)" }}>
-                    <strong style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
-                      {selected.deploymentStatus === "develop_validated" || selected.releaseStatus === "ready_for_prod" ? "Develop audit" : "Production audit"}
-                    </strong>
-                    {audits.length ? (
-                      <div className="release-audit-list" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        {audits.slice(0, 3).map((audit) => (
-                          <div className="release-audit-pill" key={audit.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-                            <span className={`dot ${audit.action === "deploy_approved" ? "green" : "red"}`} style={{ width: 6, height: 6, borderRadius: "50%", background: audit.action === "deploy_approved" ? "var(--green)" : "var(--red)" }} />
-                            <span>{auditLabel(audit)}</span>
-                            <small style={{ color: "var(--text-muted)", marginLeft: "auto" }}>{new Date(audit.createdAt).toLocaleString()}</small>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p style={{ fontSize: 12, color: "var(--text-muted)" }}>No deployment decisions recorded yet.</p>
-                    )}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
-                <strong>Select a workflow run</strong>
-                <p style={{ fontSize: 12, marginTop: 4 }}>Click a workflow run below to view its release trace and deployment path.</p>
-              </div>
-            )}
-          </div>
-        </div>
       </section>
 
       <section className="grid two">
