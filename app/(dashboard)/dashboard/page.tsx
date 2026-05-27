@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { DashboardPrOverview } from "@/components/dashboard/DashboardPrOverview";
 import { EnvironmentsWidget } from "@/components/dashboard/EnvironmentsWidget";
+import { EnvVarsWidget } from "@/components/dashboard/EnvVarsWidget";
 import { PendingDeployQueue } from "@/components/dashboard/PendingDeployQueue";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 
@@ -20,10 +21,10 @@ export default function DashboardPage() {
         </div>
         <div className="head-meta">
           <span className="mono" style={{ fontSize: "12px", color: "var(--text-muted)" }}>ID: SB-CC-2026</span>
-          <button className="toggle" type="button" style={{ cursor: "pointer" }}>
-            <span className="label-mono">Approval: <span className="ok">Armed</span></span>
-            <span className="switch"></span>
-          </button>
+          <span className="pill" style={{ borderColor: "rgba(63,185,80,0.3)", color: "var(--green)", cursor: "default", height: "28px" }}>
+            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--green)", marginRight: 6 }}></span>
+            approval: armed
+          </span>
         </div>
       </header>
 
@@ -33,6 +34,7 @@ export default function DashboardPage() {
         {/* Left Column */}
         <div className="stack">
           <PendingDeployQueue />
+          <EnvVarsWidget />
         </div>
 
         {/* Right Column */}

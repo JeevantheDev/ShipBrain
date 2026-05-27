@@ -255,7 +255,7 @@ export default function CiPage() {
     switch (item.stage) {
       case "awaiting_preview":
       case "awaiting_validation":
-        return "Feature merged to develop. Click Start Preview to deploy to Vercel Preview environment.";
+        return "Feature merged to develop. Click Start Preview to deploy to Cloudflare Pages.";
       case "preview_deploying":
         return "Preview deployment is in progress. The URL will appear when ready.";
       case "preview_ready":
@@ -344,8 +344,9 @@ export default function CiPage() {
   }
 
   function envClass(env: "PROD" | "DEV" | "CI" | null) {
-    if (env === "PROD") return "danger";
-    if (env === "DEV") return "";
+    if (env === "PROD") return "prod-env";
+    if (env === "DEV") return "dev-env";
+    if (env === "CI") return "ci-env";
     return "";
   }
 
@@ -564,20 +565,7 @@ export default function CiPage() {
         </div>
       </header>
 
-      {previewRepo && !previewDismissed ? (
-        <div className="info-callout" style={{ marginBottom: 18 }}>
-          <strong>Preview deploys may fail until Vercel Preview environment variables are set.</strong>
-          <p style={{ margin: "4px 0 10px" }}>Set dev variables in Vercel under Settings &gt; Environment Variables &gt; Preview. Production variables are not used for preview builds.</p>
-          <div className="toolbar" style={{ gap: 8 }}>
-            <a className="btn subtle" href={safeVercelSettingsUrl(previewRepo.setup_metadata?.vercelSettingsUrl)} target="_blank" rel="noreferrer">
-              Set up now
-              <ExternalLink size={12} style={{ marginLeft: 4 }} />
-            </a>
-            <button className="btn subtle" onClick={() => confirmPreviewEnv(previewRepo.id)}>I&apos;ve done this</button>
-            <button className="btn subtle" onClick={() => setPreviewDismissed(true)}>Dismiss</button>
-          </div>
-        </div>
-      ) : null}
+{/* Cloudflare Pages handles environment variables automatically via ShipBrain setup */}
 
       {/* 2-Column Layout: Deployment Queue + Release Trace */}
       <section className="grid two" style={{ marginBottom: 18 }}>
@@ -869,7 +857,7 @@ export default function CiPage() {
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <strong style={{ fontSize: 13.5 }}>{run.title}</strong>
+                            <strong style={{ fontSize: 13.5, color: "var(--text)" }}>{run.title}</strong>
                             {env && (
                               <span className={`status-pill ${envClass(env)}`} style={{ fontSize: 10, padding: "1px 5px" }}>
                                 {env}
@@ -882,9 +870,9 @@ export default function CiPage() {
                           </span>
                         </div>
                         <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
-                          {run.repo ?? "GitHub"} · {run.branch}
-                          {run.prNumber ? ` · PR #${run.prNumber}` : ""}
-                          {run.updatedAt ? ` · ${new Date(run.updatedAt).toLocaleTimeString()}` : ""}
+                          <span style={{ color: "var(--text-secondary)" }}>{run.repo ?? "GitHub"}</span> · <span style={{ color: "var(--brand)" }}>{run.branch}</span>
+                          {run.prNumber ? <> · <span style={{ color: "var(--text-secondary)" }}>PR #{run.prNumber}</span></> : ""}
+                          {run.updatedAt ? <> · <span style={{ color: "var(--text-muted)" }}>{new Date(run.updatedAt).toLocaleTimeString()}</span></> : ""}
                         </p>
                         {hasFailed && (
                           <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, color: "var(--red)", fontSize: 11 }}>
@@ -1107,12 +1095,12 @@ export default function CiPage() {
 
                 {selected.previewUrl || selected.previewStatus ? (
                   <div className="info-callout" style={{ marginTop: 14 }}>
-                    <strong>Vercel Preview {selected.previewStatus === "deploying" ? "deploying" : selected.previewUrl ? "ready" : "pending"}</strong>
+                    <strong>Preview {selected.previewStatus === "deploying" ? "deploying" : selected.previewUrl ? "ready" : "pending"}</strong>
                     <p style={{ margin: "4px 0" }}>
-                      {selected.previewUrl ? <>URL <a href={selected.previewUrl} target="_blank" rel="noreferrer">{selected.previewUrl}</a></> : "ShipBrain started the develop preview deploy. The URL will appear here after GitHub Actions reports it."}
+                      {selected.previewUrl ? <>URL <a href={selected.previewUrl} target="_blank" rel="noreferrer">{selected.previewUrl}</a></> : "ShipBrain started the preview deploy. The URL will appear here after GitHub Actions reports it."}
                       {selected.previewBranchAlias ? <> · Branch alias <a href={selected.previewBranchAlias.startsWith("http") ? selected.previewBranchAlias : `https://${selected.previewBranchAlias}`} target="_blank" rel="noreferrer">{selected.previewBranchAlias}</a></> : null}
                     </p>
-                    <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 11 }}>Uses Vercel Preview environment variables.</p>
+                    <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 11 }}>Deployed to Cloudflare Pages.</p>
                   </div>
                 ) : null}
 

@@ -99,7 +99,10 @@ export async function dispatchDevelopPreviewDeploy(input: DispatchDevelopPreview
 
   for (const workflowId of workflowCandidates) {
     try {
-      const dispatchRef = ref;
+      // IMPORTANT: Use defaultBranch for dispatch ref because workflow files
+      // may only exist on main/master after the setup PR is merged.
+      // The workflow itself will checkout the correct branch to deploy.
+      const dispatchRef = defaultBranch;
 
       // Different inputs for new vs old workflow
       const inputs = workflowId === "shipbrain-preview.yml"

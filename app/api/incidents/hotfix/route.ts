@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { dispatchVercelProductionDeploy } from "@/lib/github/deployments";
+import { dispatchDevelopPreviewDeploy, dispatchVercelProductionDeploy } from "@/lib/github/deployments";
 import { listPullRequestCommits } from "@/lib/github/commits";
 import { createDraftPR, createReverseSyncPR, mergePullRequest, tagCommitForRelease } from "@/lib/github/pr";
 import { resolvePagerDutyIncident } from "@/lib/pagerduty/incidents";
@@ -257,25 +257,43 @@ export async function POST(request: Request) {
       pullNumber: incident.hotfix_pr_number,
       commitTitle: `hotfix: resolve ${incident.title ?? incident.id}`
     });
+    const isProdDeploy = merge.baseBranch === "main";
     const releaseTag = hotfixReleaseTag(incident.id);
-    let deployment: Awaited<ReturnType<typeof dispatchVercelProductionDeploy>> | null = null;
+    let deployment: any = null;
     let deploymentError: string | null = null;
 
     try {
-      const release = await tagCommitForRelease({
-        owner,
-        repo,
-        sha: merge.sha,
-        releaseTag
-      });
-      deployment = await dispatchVercelProductionDeploy({
-        owner,
-        repo,
-        releaseTag: release.releaseTag,
-        releaseSha: release.sha
-      });
+      if (isProdDeploy) {
+        const release = await tagCommitForRelease({
+          owner,
+          repo,
+          sha: merge.sha,
+          releaseTag
+        });
+        deployment = await dispatchVercelProductionDeploy({
+          owner,
+          repo,
+          releaseTag: release.releaseTag,
+          releaseSha: release.sha
+        });
+      } else {
+        const { data: repoRow } = await supabase
+          .from("repos")
+          .select("default_branch")
+          .eq("full_name", incident.repo_full_name)
+          .single();
+        const defaultBranch = repoRow?.default_branch || "main";
+
+        deployment = await dispatchDevelopPreviewDeploy({
+          owner,
+          repo,
+          ref: merge.baseBranch,
+          defaultBranch,
+          sourcePrNumber: incident.hotfix_pr_number
+        });
+      }
     } catch (error) {
-      deploymentError = error instanceof Error ? error.message : "Hotfix production deployment dispatch failed.";
+      deploymentError = error instanceof Error ? error.message : "Hotfix deployment dispatch failed.";
     }
 
     let pagerDutySyncStatus: string | null = incident.pagerduty_sync_status ?? null;
@@ -339,7 +357,7 @@ export async function POST(request: Request) {
         hotfixBranch: merge.headBranch,
         hotfixBaseBranch: merge.baseBranch,
         mergeSha: merge.sha,
-        releaseTag,
+        releaseTag: isProdDeploy ? releaseTag : null,
         pagerDutySyncStatus,
         reverseSyncPrNumber: reverseSyncPr?.number ?? null,
         reverseSyncPrUrl: reverseSyncPr?.html_url ?? null,
@@ -357,7 +375,7 @@ export async function POST(request: Request) {
         hotfix_base_branch: merge.baseBranch,
         hotfix_merge_sha: merge.sha,
         hotfix_commits: commits,
-        release_version: releaseTag,
+        release_version: isProdDeploy ? releaseTag : null,
         fix_approved_at: new Date().toISOString(),
         pagerduty_sync_status: pagerDutySyncStatus,
         pagerduty_sync_error: pagerDutySyncError,
@@ -376,23 +394,31 @@ export async function POST(request: Request) {
 
     if (error) return NextResponse.json({ error: "Hotfix merged, but incident update failed.", detail: error.message }, { status: 500 });
 
+    const specUpdate: Record<string, any> = {
+      status: "merged",
+      branch_name: merge.headBranch,
+      base_branch: merge.baseBranch,
+      merge_sha: merge.sha,
+      feature_head_sha: merge.destinationSha,
+      deployment_url: deployment?.workflowUrl ?? null,
+      error_message: deploymentError,
+      merged_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    if (isProdDeploy) {
+      specUpdate.deployment_status = deployment ? "approved" : "not_requested";
+      specUpdate.release_tag = releaseTag;
+      specUpdate.release_sha = deployment ? merge.sha : null;
+      specUpdate.release_status = deployment ? "deploying" : "failed";
+    } else {
+      specUpdate.deployment_status = deployment ? "develop_validated" : "not_requested";
+      specUpdate.preview_status = deployment ? "deploying" : "failed";
+    }
+
     await supabase
       .from("specs")
-      .update({
-        status: "merged",
-        branch_name: merge.headBranch,
-        base_branch: merge.baseBranch,
-        merge_sha: merge.sha,
-        feature_head_sha: merge.destinationSha,
-        deployment_status: deployment ? "approved" : "not_requested",
-        release_tag: releaseTag,
-        release_sha: deployment ? merge.sha : null,
-        release_status: deployment ? "deploying" : "failed",
-        deployment_url: deployment?.workflowUrl ?? null,
-        error_message: deploymentError,
-        merged_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
+      .update(specUpdate)
       .eq("incident_id", incident.id);
 
     return NextResponse.json({
@@ -401,7 +427,7 @@ export async function POST(request: Request) {
       commits,
       deployment,
       deploymentError: merge.mergedIntoDestination ? deploymentError : deploymentError ?? `GitHub merged the PR, but ${merge.baseBranch} is at ${merge.destinationSha} instead of ${merge.sha}.`,
-      releaseTag,
+      releaseTag: isProdDeploy ? releaseTag : null,
       reverseSync: reverseSyncPr ? {
         prNumber: reverseSyncPr.number,
         prUrl: reverseSyncPr.html_url,

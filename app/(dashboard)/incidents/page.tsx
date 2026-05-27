@@ -398,16 +398,25 @@ export default function IncidentsPage() {
       setSelected(json.incident);
       setIncidents((items) => items.map((item) => (item.id === json.incident.id ? json.incident : item)));
       setGateOpen(false);
-      const reverseSyncMsg = json.reverseSync
-        ? ` Reverse sync PR #${json.reverseSync.prNumber} ${json.reverseSync.created ? "created" : "found"} to sync changes to ${json.reverseSync.targetBranch}.`
-        : json.reverseSyncError
-          ? ` Reverse sync failed: ${json.reverseSyncError}`
-          : "";
-      setActionMessage(
-        json.deployment
-          ? `Hotfix PR #${json.incident.hotfixPrNumber} merged, release ${json.releaseTag} tagged, and production deployment was dispatched.${reverseSyncMsg}`
-          : `Hotfix PR #${json.incident.hotfixPrNumber} merged, but production deployment dispatch needs attention: ${json.deploymentError ?? "unknown deployment error"}${reverseSyncMsg}`
-      );
+      const isProd = json.incident.hotfixBaseBranch === "main";
+      if (isProd) {
+        const reverseSyncMsg = json.reverseSync
+          ? ` Reverse sync PR #${json.reverseSync.prNumber} ${json.reverseSync.created ? "created" : "found"} to sync changes to ${json.reverseSync.targetBranch}.`
+          : json.reverseSyncError
+            ? ` Reverse sync failed: ${json.reverseSyncError}`
+            : "";
+        setActionMessage(
+          json.deployment
+            ? `Hotfix PR #${json.incident.hotfixPrNumber} merged, release ${json.releaseTag} tagged, and production deployment was dispatched.${reverseSyncMsg}`
+            : `Hotfix PR #${json.incident.hotfixPrNumber} merged, but production deployment dispatch needs attention: ${json.deploymentError ?? "unknown deployment error"}${reverseSyncMsg}`
+        );
+      } else {
+        setActionMessage(
+          json.deployment
+            ? `Hotfix PR #${json.incident.hotfixPrNumber} merged and preview deployment was dispatched.`
+            : `Hotfix PR #${json.incident.hotfixPrNumber} merged, but preview deployment dispatch failed: ${json.deploymentError ?? "unknown deployment error"}`
+        );
+      }
     } catch (nextError) {
       setGateOpen(false);
       setError(nextError instanceof Error ? nextError.message : "Unable to approve and merge incident hotfix");
@@ -533,7 +542,7 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
                       }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <strong style={{ fontSize: 13.5 }}>{incident.title}</strong>
+                        <strong style={{ fontSize: 13.5, color: "#fff" }}>{incident.title}</strong>
                         <span className={`status-pill ${isResol ? "passed" : isRejec ? "" : isInvest ? "" : "danger"}`}>
                           <span className="dot"></span>
                           {incident.status}
@@ -678,10 +687,12 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
                     <Wand2 size={12} />
                     {analyzing ? "Analyzing logs..." : "Analyze with AI"}
                   </button>
-                  <button className="btn subtle" disabled={!analysis || analyzing || !selected.hotfixPrNumber || hotfixBusy} onClick={openApprovalGate} style={{ flex: 1, justifyContent: "center" }}>
-                    <ShieldCheck size={12} />
-                    {hotfixBusy ? "Syncing..." : "Approve fix"}
-                  </button>
+                  {selected.status !== "resolved" && (
+                    <button className="btn subtle" disabled={!analysis || analyzing || !selected.hotfixPrNumber || hotfixBusy} onClick={openApprovalGate} style={{ flex: 1, justifyContent: "center" }}>
+                      <ShieldCheck size={12} />
+                      {hotfixBusy ? "Syncing..." : "Approve fix"}
+                    </button>
+                  )}
                   <button className="btn subtle" disabled={!analysis || analyzing} onClick={generatePostmortem} style={{ flex: 1, justifyContent: "center" }}>
                     <Download size={12} />
                     Draft post-mortem

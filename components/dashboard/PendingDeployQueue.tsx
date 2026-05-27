@@ -38,6 +38,7 @@ export function PendingDeployQueue() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [redeployLoading, setRedeployLoading] = useState<string | null>(null);
 
   useEffect(() => {
     void loadPending();
@@ -133,6 +134,50 @@ export function PendingDeployQueue() {
     }
   }
 
+  async function redeployPreview(item: PendingDeploy) {
+    setRedeployLoading(item.id);
+    setActionErrors((prev) => ({ ...prev, [item.id]: "" }));
+    try {
+      const response = await fetch("/api/deployments/redeploy-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specId: item.id })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to redeploy preview");
+      await loadPending();
+    } catch (nextError) {
+      setActionErrors((prev) => ({
+        ...prev,
+        [item.id]: nextError instanceof Error ? nextError.message : "Unable to redeploy preview"
+      }));
+    } finally {
+      setRedeployLoading(null);
+    }
+  }
+
+  async function redeployProduction(item: PendingDeploy) {
+    setRedeployLoading(item.id);
+    setActionErrors((prev) => ({ ...prev, [item.id]: "" }));
+    try {
+      const response = await fetch("/api/deployments/redeploy-production", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specId: item.id })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to redeploy production");
+      await loadPending();
+    } catch (nextError) {
+      setActionErrors((prev) => ({
+        ...prev,
+        [item.id]: nextError instanceof Error ? nextError.message : "Unable to redeploy production"
+      }));
+    } finally {
+      setRedeployLoading(null);
+    }
+  }
+
   function stageLabel(item: PendingDeploy) {
     switch (item.stage) {
       case "awaiting_preview": return "awaiting preview";
@@ -153,7 +198,7 @@ export function PendingDeployQueue() {
   function stageCopy(item: PendingDeploy) {
     switch (item.stage) {
       case "awaiting_preview":
-        return "Feature merged to develop. Click Start Preview to deploy to Vercel Preview environment.";
+        return "Feature merged to develop. Click Start Preview to deploy to Cloudflare Pages.";
       case "preview_deploying":
         return "Preview deployment is in progress. The URL will appear when ready.";
       case "preview_ready":
@@ -238,9 +283,11 @@ export function PendingDeployQueue() {
                       {stageLabel(item)}
                     </span>
                   </div>
-                  <div className="vercel-pill">
-                    <span className="triangle" aria-hidden="true"></span>
-                    Vercel
+                  <div className="cloudflare-pill">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style={{ marginRight: 4 }}>
+                      <path d="M16.5 6.4l-3.5 2.1L9.5 6.4 6 8.5v7l3.5 2.1 3.5-2.1 3.5 2.1 3.5-2.1v-7l-3.5-2.1z"/>
+                    </svg>
+                    Cloudflare
                   </div>
                 </div>
 
@@ -293,6 +340,16 @@ export function PendingDeployQueue() {
                       <a className="btn" href={item.previewUrl} target="_blank" rel="noreferrer">
                         Open Preview
                       </a>
+                      <button
+                        className="btn"
+                        onClick={() => redeployPreview(item)}
+                        disabled={redeployLoading === item.id}
+                        title="Redeploy preview from develop branch"
+                      >
+                        {redeployLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
+                        <RefreshCw size={12} style={{ marginRight: 4 }} />
+                        Redeploy
+                      </button>
                       <Link className="btn primary" href="/spec-to-pr?template=develop-to-prod">
                         <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
                           <path d="M2 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
@@ -314,6 +371,18 @@ export function PendingDeployQueue() {
                     >
                       {actionLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
                       Deploy to Production
+                    </button>
+                  )}
+                  {item.stage === "deploy_failed" && item.releaseTag && (
+                    <button
+                      className="btn primary"
+                      onClick={() => redeployProduction(item)}
+                      disabled={redeployLoading === item.id}
+                      title="Retry production deployment"
+                    >
+                      {redeployLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
+                      <RefreshCw size={12} style={{ marginRight: 4 }} />
+                      Retry Deploy
                     </button>
                   )}
                   <button

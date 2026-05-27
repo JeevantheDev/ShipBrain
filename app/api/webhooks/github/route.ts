@@ -218,6 +218,18 @@ export async function POST(request: Request) {
         }
       }
 
+      if (isReleasePromotionPr && (nextStatus === "merged" || nextStatus === "closed")) {
+        await supabase
+          .from("specs")
+          .update({
+            status: nextStatus,
+            ...(nextStatus === "merged" ? { merged_at: pullRequest.merged_at ?? new Date().toISOString() } : {}),
+            updated_at: new Date().toISOString()
+          })
+          .eq("repo_full_name", repoFullName)
+          .eq("pr_number", pullRequest.number);
+      }
+
       const prUpdate =
         nextStatus === "merged"
           ? isReleasePromotionPr

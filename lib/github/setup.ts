@@ -686,13 +686,31 @@ export async function openSetupPullRequest(input: {
   await octokit.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: baseRef.object.sha });
 
   for (const [path, content] of Object.entries(input.files)) {
+    let sha: string | undefined;
+    try {
+      const { data } = (await octokit.repos.getContent({
+        owner,
+        repo,
+        path,
+        ref: branch
+      })) as any;
+      if (data && !Array.isArray(data) && data.sha) {
+        sha = data.sha;
+      }
+    } catch (error: any) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
     await octokit.repos.createOrUpdateFileContents({
       owner,
       repo,
       path,
       branch,
       message: `chore: add ${path}`,
-      content: Buffer.from(content).toString("base64")
+      content: Buffer.from(content).toString("base64"),
+      ...(sha ? { sha } : {})
     });
   }
 

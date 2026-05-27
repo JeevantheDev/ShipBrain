@@ -3,8 +3,12 @@
 import { Copy, ExternalLink, FileText, GitPullRequest, Loader2, Play, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
 import { CloseDraftPrModal } from "@/components/pr-sync/CloseDraftPrModal";
+import { RichTextEditor } from "@/components/spec-editor/RichTextEditor";
+import { InputModal } from "@/components/ui/InputModal";
+import { Toast, useToast } from "@/components/ui/Toast";
 
 type SpecResult = {
   tasks: Array<{ title: string; description: string; files: string[]; estimatedLines?: number }>;
@@ -276,6 +280,10 @@ export default function SpecToPrPage() {
   const [repo, setRepo] = useState("JeevantheDev/shipbrain_sandbox");
   const [result, setResult] = useState<SpecResult | null>(null);
   const [status, setStatus] = useState("Idle");
+  const [isConfirmingPr, setIsConfirmingPr] = useState(false);
+  const [gateCountdown, setGateCountdown] = useState(3.0);
+  const [prTitle, setPrTitle] = useState("");
+  const [reviewers, setReviewers] = useState<string[]>([]);
   const [gateOpen, setGateOpen] = useState(false);
   const [successOpen, setSuccessOpen] = useState(false);
   const [error, setError] = useState("");
@@ -296,6 +304,14 @@ export default function SpecToPrPage() {
   const [closeError, setCloseError] = useState("");
   const [quickTemplateId, setQuickTemplateId] = useState("");
   const [retryCountdown, setRetryCountdown] = useState(0);
+
+  // Modal states for styled prompts
+  const [branchModal, setBranchModal] = useState<{ open: boolean; defaultValue: string }>({ open: false, defaultValue: "" });
+  const [baseModal, setBaseModal] = useState<{ open: boolean; defaultValue: string }>({ open: false, defaultValue: "" });
+  const [taskEditModal, setTaskEditModal] = useState<{ open: boolean; taskIndex: number; defaultValue: string }>({ open: false, taskIndex: -1, defaultValue: "" });
+
+  // Toast notifications
+  const { toast, showToast, hideToast } = useToast();
 
   // Compute stats for editor
   const lineCount = useMemo(() => {
@@ -440,6 +456,9 @@ export default function SpecToPrPage() {
   function loadRecentRun(run: RecentPrRun) {
     setSpec(run.spec);
     setResult(run.result);
+    setPrTitle(run.result.prTitle);
+    setReviewers(run.result.suggestedReviewers);
+    setIsConfirmingPr(false);
     setBranchName(run.branchName);
     setBaseBranch(run.baseBranch ?? "develop");
     setCurrentRunId(run.id);
@@ -541,6 +560,45 @@ export default function SpecToPrPage() {
     const timeout = window.setTimeout(() => setRetryCountdown((current) => Math.max(0, current - 1)), 1000);
     return () => window.clearTimeout(timeout);
   }, [retryCountdown]);
+
+  // Countdown timer for inline approval gate
+  useEffect(() => {
+    if (!isConfirmingPr) return;
+    if (gateCountdown <= 0) {
+      setIsConfirmingPr(false);
+      void approvePr("");
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setGateCountdown((current) => {
+        const next = Math.max(0, parseFloat((current - 0.1).toFixed(1)));
+        return next;
+      });
+    }, 100);
+    return () => window.clearInterval(interval);
+  }, [isConfirmingPr, gateCountdown]);
+
+  // Keyboard shortcuts: ⌘⏎ (Generate PR) and ⌘Z/Esc (Cancel approval)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (spec.trim() && flowStage !== "planning" && flowStage !== "creating_pr" && !isConfirmingPr) {
+          void generate();
+        }
+      }
+      if (((e.metaKey || e.ctrlKey) && e.key === "z") || e.key === "Escape") {
+        if (isConfirmingPr) {
+          e.preventDefault();
+          setIsConfirmingPr(false);
+          setStatus("Cancelled");
+          setFlowStage("cancelled");
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [spec, flowStage, isConfirmingPr]);
 
   function retryDelay(error: ApiError) {
     return Math.max(5, Math.min(Number(error.retryAfterSeconds ?? 30), 90));
@@ -656,6 +714,8 @@ export default function SpecToPrPage() {
       return;
     }
     setResult(json);
+    setPrTitle(json.prTitle);
+    setReviewers(json.suggestedReviewers);
     const template = quickPrTemplates.find((item) => item.id === quickTemplateId);
     setBranchName(template?.sourceBranch ?? json.suggestedBranch);
     const runId = `pr-run-${Date.now()}`;
@@ -707,17 +767,27 @@ export default function SpecToPrPage() {
       return;
     }
     setError("");
-    setGateOpen(true);
+    setGateCountdown(3.0);
+    setIsConfirmingPr(true);
   }
 
   async function approvePr(note: string, retryAttempt = 0) {
     if (!result) return;
+    setIsConfirmingPr(false);
     setGateOpen(false);
     setPrRetryAvailable(false);
     setRetryCountdown(0);
     setStatus("Creating GitHub Draft PR...");
     setFlowStage("creating_pr");
     setLivePercent(72);
+    
+    // Use the modified prTitle and reviewers if they have changed from defaults
+    const finalPlan = {
+      ...result,
+      prTitle: prTitle.trim() || result.prTitle,
+      suggestedReviewers: reviewers.length > 0 ? reviewers : result.suggestedReviewers
+    };
+
     const response = await fetch("/api/ai/spec-to-pr", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -726,7 +796,7 @@ export default function SpecToPrPage() {
         repoFullName: repo,
         createPr: true,
         approvalNote: note,
-        plan: result,
+        plan: finalPlan,
         branchOverride: branchName.trim(),
         baseBranchOverride: baseBranch.trim(),
         useExistingSourceBranch
@@ -753,7 +823,7 @@ export default function SpecToPrPage() {
       setStatus("Failed");
       setPrRetryAvailable(true);
       setFlowStage("failed");
-      updateRecentRun("failed", result, [apiError.error ?? "Unable to create Draft PR.", apiError.detail].filter(Boolean).join(" "));
+      updateRecentRun("failed", finalPlan, [apiError.error ?? "Unable to create Draft PR.", apiError.detail].filter(Boolean).join(" "));
       return;
     }
     const nextResult = { ...json, suggestedBranch: branchName.trim() };
@@ -772,6 +842,9 @@ export default function SpecToPrPage() {
     setQuickTemplateId(templateId);
     setSpec(template.ticket);
     setResult(null);
+    setPrTitle("");
+    setReviewers([]);
+    setIsConfirmingPr(false);
     setBranchName(template.sourceBranch ?? "");
     setBaseBranch(template.baseBranch);
     setCurrentRunId("");
@@ -790,6 +863,23 @@ export default function SpecToPrPage() {
   const activeRecentRuns = recentRuns.filter((run) => run.status !== "closed" && run.status !== "merged").slice(0, 5);
   const syncedRecentRuns = recentRuns.filter((run) => run.status === "closed" || run.status === "merged").slice(0, 1);
 
+  const uniqueFilesCount = useMemo(() => {
+    if (!result) return 0;
+    const files = new Set<string>();
+    result.tasks.forEach((t) => t.files.forEach((f) => files.add(f)));
+    return files.size;
+  }, [result]);
+
+  const totalLoc = useMemo(() => {
+    if (!result) return 0;
+    return result.tasks.reduce((sum, t) => sum + (t.estimatedLines ?? t.files.length * 30 + 10), 0);
+  }, [result]);
+
+  const estMin = useMemo(() => {
+    if (!result) return 0;
+    return Math.max(2, Math.round(totalLoc / 12));
+  }, [result, totalLoc]);
+
   return (
     <>
       <header className="page-head">
@@ -799,17 +889,18 @@ export default function SpecToPrPage() {
             <span className="pillar-tag">Pillar 01</span>
             Spec-to-PR
           </div>
-          <h1>Convert specifications directly into reviewable Pull Requests.</h1>
-          <div className="sub">
-            Deploying changes to <span className="repo">{repo}</span>. Paste a ticket, feature spec, or choose a template below.
-          </div>
+          <h1>Spec-to-PR</h1>
+          <p className="sub">
+            Decompose a ticket, inspect the developer handoff, then approve Draft PR creation for{" "}
+            <span className="repo">{repo}</span>.
+          </p>
         </div>
         <div className="head-meta mono">
-          <span className={`status-pill ${flowStage === "ready" ? "passed" : flowStage === "failed" ? "danger" : ""}`}>
+          <span className={`status-pill ${flowStage === "ready" ? "passed" : flowStage === "failed" ? "failed" : flowStage === "planning" || flowStage === "creating_pr" ? "running" : flowStage === "review" ? "analyzing" : ""}`}>
             <span className="dot"></span>
-            {flowStage}
+            {isConfirmingPr ? "awaiting confirm" : flowStage === "idle" ? "idle" : flowStage === "sample" ? "recipe loaded" : flowStage === "planning" ? "decomposing" : flowStage === "review" ? "plan ready" : flowStage === "creating_pr" ? "creating pr" : flowStage === "ready" ? "pr ready" : flowStage === "failed" ? "failed" : "cancelled"}
           </span>
-          <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>{status}</span>
+          <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>{isConfirmingPr ? `${gateCountdown}s left` : status}</span>
         </div>
       </header>
 
@@ -826,49 +917,37 @@ export default function SpecToPrPage() {
         </div>
       ) : null}
 
-      {/* Editor toolbar */}
       <div className="editor-toolbar">
         <div className="toolbar-left">
-          <button className="select" type="button">
-            <span className="select-label">Repo</span>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M2.5 1.5h6L10 3v7.5H2.5v-9Z" stroke="currentColor" strokeWidth="1.2"/>
-              <path d="M8.5 1.5V3H10" stroke="currentColor" strokeWidth="1.2"/>
-            </svg>
-            {repo}
-          </button>
-          <span className="branch-chip">
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
-              <circle cx="3" cy="2.5" r="1.2" stroke="currentColor" strokeWidth="1.1"/>
-              <circle cx="3" cy="9.5" r="1.2" stroke="currentColor" strokeWidth="1.1"/>
-              <circle cx="9" cy="6" r="1.2" stroke="currentColor" strokeWidth="1.1"/>
-              <path d="M3 4v4M4.2 9.5C7 9.5 7.8 8 7.8 7" stroke="currentColor" strokeWidth="1.1"/>
-            </svg>
-            base: {baseBranch}
-          </span>
-          <span className="branch-chip" style={{ color: "var(--ai-purple)", borderColor: "rgba(163, 113, 247, 0.3)" }}>
-            <span style={{ color: "var(--ai-purple)", marginRight: 4 }}>◆</span>
-            google
-          </span>
         </div>
 
         <div className="toolbar-right">
-          <button className="ghost-btn" type="button" onClick={() => applyQuickTemplate("test-color-change")}>
+          <button className="ghost-btn" type="button" disabled={flowStage === "planning" || flowStage === "creating_pr" || isConfirmingPr} style={{ opacity: (flowStage === "planning" || flowStage === "creating_pr" || isConfirmingPr) ? 0.5 : 1 }} onClick={() => applyQuickTemplate("test-color-change")}>
             <span>Load sample ticket</span>
           </button>
-          <button className="btn-primary" type="button" disabled={!spec.trim() || flowStage === "planning" || flowStage === "creating_pr"} onClick={() => void generate()}>
-            {flowStage === "planning" ? <Loader2 size={12} className="spin" /> : <Play size={12} style={{ marginRight: 4 }} />}
-            Generate PR
-            <span className="kbd-inline">⌘⏎</span>
-          </button>
+          {isConfirmingPr || flowStage === "creating_pr" ? (
+            <button className="btn-locked" type="button" disabled>
+              <svg className="lock-ico" width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 6 }}>
+                <rect x="2.5" y="5.5" width="7" height="5" rx="1" stroke="currentColor" stroke-width="1.2"/>
+                <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" stroke="currentColor" stroke-width="1.2"/>
+              </svg>
+              <span className="running-label">
+                <span className="top">Generate PR</span>
+                <span className="bottom">{isConfirmingPr ? "awaiting gate confirm…" : "creating PR…"}</span>
+              </span>
+            </button>
+          ) : (
+            <button className="btn-primary" type="button" disabled={!spec.trim() || flowStage === "planning"} onClick={() => void generate()}>
+              {flowStage === "planning" ? <Loader2 size={12} className="spin" style={{ marginRight: 4 }} /> : <Play size={12} style={{ marginRight: 4 }} />}
+              Generate PR
+              <span className="kbd-inline" style={{ marginLeft: 6 }}>⌘⏎</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Workspace */}
       <section className="workspace">
-        {/* LEFT column */}
         <div className="stack">
-          {/* Recent AI PRs */}
           {(activeRecentRuns.length > 0 || syncedRecentRuns.length > 0) && (
             <div className="panel">
               <header className="panel-head">
@@ -883,19 +962,19 @@ export default function SpecToPrPage() {
                 <div className="resume-row" key={run.id}>
                   <div className="pr-icon" title={recentStatusLabel(run)}>
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <circle cx="3.5" cy="3.5" r="1.6" stroke="currentColor" strokeWidth="1.2"/>
+                      <circle cx="3.5" cy="3.5" r="1.6" stroke="currentColor" stroke-width="1.2"/>
                       <circle cx="3.5" cy="10.5" r="1.6" stroke="currentColor" stroke-width="1.2"/>
                       <circle cx="10.5" cy="10.5" r="1.6" stroke="currentColor" stroke-width="1.2"/>
-                      <path d="M3.5 5v4M5 10.5h4M8 3 10 5 8 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M3.5 5v4M5 10.5h4M8 3 10 5 8 7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                   </div>
                   <div>
                     <div className="resume-title">
-                      <span className="status-pill">
+                      <span className={`status-pill ${run.status === "draft_created" ? "passed" : ""}`}>
                         <span className="dot"></span>
                         {recentStatusLabel(run)}
                       </span>
-                      <span style={{ marginLeft: 6 }}>{run.result.prTitle}</span>
+                      <span style={{ marginLeft: 6 }}><strong>{run.result.prTitle}</strong></span>
                     </div>
                     <div className="resume-meta">{run.branchName} → {run.baseBranch ?? "develop"} · {ciLabel(run)}</div>
                   </div>
@@ -912,7 +991,7 @@ export default function SpecToPrPage() {
                 <div className="resume-row" key={run.id}>
                   <div className="pr-icon" style={{ color: "var(--success)", background: "rgba(63, 185, 80, 0.12)", borderColor: "rgba(63, 185, 80, 0.3)" }}>
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="m3 6.5 2 2 4-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="m3 6.5 2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                   </div>
                   <div>
@@ -938,7 +1017,6 @@ export default function SpecToPrPage() {
             </div>
           )}
 
-          {/* Code Editor Card */}
           <div className="editor-card">
             <div className="editor-tabs">
               <div className="editor-tab active">
@@ -946,80 +1024,37 @@ export default function SpecToPrPage() {
                   <path d="M3 1.5h4.5L9.5 3.5V10.5H3v-9Z" stroke="currentColor" strokeWidth="1.1"/>
                 </svg>
                 <span>ticket.md</span>
-                {spec.trim() && <span className="dot-unsaved"></span>}
+                {result ? (
+                  <span className="dot-saved" title="saved"></span>
+                ) : spec.trim() ? (
+                  <span className="dot-unsaved"></span>
+                ) : null}
               </div>
-              <div className="editor-tab add" title="New tab">+</div>
               <div className="editor-meta mono">
-                <span>markdown</span>
-                <span>·</span>
-                <span>utf-8</span>
-              </div>
-            </div>
-
-            <div className="editor-body">
-              <div className="gutter">
-                {Array.from({ length: Math.max(12, lineCount) }).map((_, i) => (
-                  <span className={`ln ${i === 0 ? "active" : ""}`} key={i}>{i + 1}</span>
-                ))}
-              </div>
-              <div className="editor-text" style={{ padding: 0 }}>
-                <textarea
-                  className="mono"
-                  value={spec}
-                  onChange={(e) => setSpec(e.target.value)}
-                  placeholder="Paste a Jira ticket, GitHub issue, or plain English spec…"
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    minHeight: "300px",
-                    background: "transparent",
-                    border: "none",
-                    outline: "none",
-                    color: "var(--text)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "13px",
-                    lineHeight: "20px",
-                    padding: "12px 16px",
-                    resize: "none"
-                  }}
-                />
-
-                {!spec.trim() && (
-                  <div className="examples">
-                    <span className="ex-label mono">try:</span>
-                    <button className="ex-chip" type="button" onClick={() => applyQuickTemplate("test-color-change")}>
-                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
-                        <path d="M2 2h8v8H2z" stroke="currentColor" strokeWidth="1.1"/>
-                        <path d="M4 5h4M4 7h3" stroke="currentColor" strokeWidth="1.1"/>
-                      </svg>
-                      test-color-change
-                    </button>
-                    <button className="ex-chip" type="button" onClick={() => applyQuickTemplate("feature")}>
-                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
-                        <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.1"/>
-                        <path d="M6 4v2.5l1.5 1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
-                      </svg>
-                      feature-template
-                    </button>
+                {result ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span className="ready-pill">
+                      <span className="dot"></span>
+                      plan ready · {result.tasks.length} tasks
+                    </span>
                   </div>
+                ) : (
+                  <>
+                    <span>rich text</span>
+                    <span>·</span>
+                    <span>utf-8</span>
+                  </>
                 )}
               </div>
             </div>
 
-            <div className="editor-foot mono">
-              <div className="left">
-                <span>ln {lineCount} · col 1</span>
-                <span>{wordCount} words</span>
-                <span>{tokenCount} tokens</span>
-              </div>
-              <div className="right">
-                <span>autosave on</span>
-                <span style={{ color: "var(--green)" }}>●</span>
-              </div>
-            </div>
+            <RichTextEditor
+              value={spec}
+              onChange={setSpec}
+              placeholder="Paste a Jira ticket, GitHub issue, or plain English spec…"
+            />
           </div>
 
-          {/* Quick PR templates */}
           <div className="panel">
             <header className="panel-head">
               <h2>
@@ -1042,7 +1077,7 @@ export default function SpecToPrPage() {
                   <span className={`tpl-icon ${template.prefix}`}>
                     {template.prefix === "test" && (
                       <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <path d="M5 1v3.5L1.5 11A1 1 0 0 0 2.4 12.5h9.2A1 1 0 0 0 12.5 11L9 4.5V1M4.5 1h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                        <path d="M5 1v3.5L1.5 11A1 1 0 0 0 2.4 12.5h9.2A1 1 0 0 0 12.5 11L9 4.5V1M4.5 1h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" stroke-linejoin="round"/>
                       </svg>
                     )}
                     {template.prefix === "feature" && (
@@ -1052,23 +1087,23 @@ export default function SpecToPrPage() {
                     )}
                     {template.prefix === "bug fix" && (
                       <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <rect x="4" y="4" width="6" height="7" rx="3" stroke="currentColor" strokeWidth="1.2"/>
-                        <path d="M5 3.5 4 2M9 3.5 10 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                        <rect x="4" y="4" width="6" height="7" rx="3" stroke="currentColor" stroke-width="1.2"/>
+                        <path d="M5 3.5 4 2M9 3.5 10 2" stroke="currentColor" stroke-width="1.2" strokeLinecap="round"/>
                       </svg>
                     )}
                     {template.prefix === "refactor" && (
                       <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <path d="M2 4h7l-2-2M12 10H5l2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                        <path d="M2 4h7l-2-2M12 10H5l2 2" stroke="currentColor" stroke-width="1.2" strokeLinecap="round" stroke-linejoin="round"/>
                       </svg>
                     )}
                     {template.prefix === "release" && (
                       <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <path d="M3 11.5 9.5 5l-1-1L2 10.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                        <path d="M3 11.5 9.5 5l-1-1L2 10.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
                     )}
                     {template.prefix === "docs" && (
                       <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <path d="M3 1.5h6L11.5 4v8.5H3v-11Z" stroke="currentColor" strokeWidth="1.2"/>
+                        <path d="M3 1.5h6L11.5 4v8.5H3v-11Z" stroke="currentColor" stroke-width="1.2"/>
                       </svg>
                     )}
                   </span>
@@ -1077,7 +1112,7 @@ export default function SpecToPrPage() {
                     <span className="tpl-title">{template.label}</span>
                   </span>
                   <svg className="tpl-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M3 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M3 6h6M6 3l3 3-3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </button>
               ))}
@@ -1085,187 +1120,316 @@ export default function SpecToPrPage() {
           </div>
         </div>
 
-        {/* RIGHT column — AI Plan status */}
         <div className="ai-plan">
           <header className="ai-plan-head">
-            <h2>AI Workspace Plan</h2>
-            {result?.pr ? (
-              <a className="btn primary compact" href={result.pr.html_url} target="_blank" rel="noreferrer">
-                <GitPullRequest size={12} style={{ marginRight: 4 }} />
-                PR #{result.pr.number}
-              </a>
-            ) : result ? (
-              <button className="btn primary compact" onClick={requestDraftPrApproval}>
-                <GitPullRequest size={12} style={{ marginRight: 4 }} />
-                Create Draft PR
-              </button>
-            ) : null}
+            <h2>AI Plan</h2>
+            <span className={`status-pill ${result ? "passed" : ""}`}>
+              <span className="dot"></span>
+              {result ? "plan ready" : "idle"}
+            </span>
           </header>
 
           <div className="progress-strip">
             <div className="progress-meta">
-              <span className={`progress-pct ${displayedPercent === 0 ? "zero" : ""}`}>
-                {displayedPercent}%
+              <span className={`progress-pct ${!result ? "zero" : ""}`}>
+                {result ? "100%" : `${displayedPercent}%`}
               </span>
-              <span className="progress-status">{flow.label}</span>
+              <span className="progress-status" style={{ color: result ? "var(--success)" : "var(--text-muted)" }}>
+                <span className="dot" style={{ background: result ? "var(--success)" : "var(--text-muted)" }}></span>
+                {result ? `${result.tasks.length} of ${result.tasks.length} steps generated` : flow.label}
+              </span>
             </div>
             <div className="progress-bar">
               <div
                 className="progress-fill"
                 style={{
-                  width: `${displayedPercent}%`,
+                  width: result ? "100%" : `${displayedPercent}%`,
                   height: "100%",
-                  background: flowStage === "failed" ? "var(--red)" : "var(--brand)",
+                  background: result ? "var(--success)" : flowStage === "failed" ? "var(--red)" : "var(--brand)",
                   transition: "width 0.4s ease"
                 }}
               />
             </div>
-            <div className="progress-label">{flow.note}</div>
+            <div className="progress-label">
+              {result ? (
+                <>
+                  <span className="stat-num">~{totalLoc}</span> lines · <span className="stat-num">{uniqueFilesCount}</span> files touched · est. <span className="stat-num">~{estMin} min</span> to scaffold
+                </>
+              ) : (
+                flow.note
+              )}
+            </div>
           </div>
 
           <div className="plan-body">
             {!result ? (
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", minHeight: "260px" }}>
-                <div className="status-pill" style={{ marginBottom: 12 }}>
-                  <span className="dot"></span>
-                  Awaiting Input
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", minHeight: "360px" }}>
+                <div className="plan-empty-title">Waiting for a ticket</div>
+                <div className="plan-empty-desc">Paste a ticket or load the sample ticket to begin.</div>
+
+                <div className="plan-stages" style={{ width: "100%", opacity: 0.4 }}>
+                  <div className="stage">
+                    <span className="stage-num">1</span>
+                    <span className="stage-name">Decompose into tasks</span>
+                    <span className="stage-meta">ai</span>
+                  </div>
+                  <div className="stage">
+                    <span className="stage-num">2</span>
+                    <span className="stage-name">Assign reviewer chips</span>
+                    <span className="stage-meta">ai</span>
+                  </div>
+                  <div className="stage">
+                    <span className="stage-num">3</span>
+                    <span className="stage-name">Developer handoff</span>
+                    <span className="stage-meta">human</span>
+                  </div>
+                  <div className="stage">
+                    <span className="stage-num">4</span>
+                    <span className="stage-name">Approve Draft PR</span>
+                    <span className="stage-meta">gated</span>
+                  </div>
                 </div>
-                <div style={{ maxWidth: "260px", textAlign: "center", color: "var(--text-muted)" }}>
-                  <strong style={{ color: "var(--text)", display: "block", marginBottom: "6px" }}>Ready to generate</strong>
-                  Provide a spec on the left and choose a recipe to start planning.
+
+                <div className="plan-handoff-title mono" style={{ fontSize: 11, alignSelf: "flex-start", width: "100%" }}>Developer handoff preview</div>
+                <div className="placeholder-skel" style={{ width: "100%" }}>
+                  <span className="skel-line s-90"></span>
+                  <span className="skel-line s-65"></span>
+                  <span className="skel-line s-80"></span>
+                  <span className="skel-line s-45"></span>
                 </div>
               </div>
             ) : (
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
+                
                 <div>
-                  <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase" }}>
-                    Proposed Branch Handoff
+                  <div className="section-label mono" style={{ fontSize: "11px", marginBottom: "6px" }}>
+                    <span>Pull request</span>
+                    <span className="count">editable</span>
                   </div>
-                  <div className="card" style={{ padding: "12px", border: "1px solid var(--line)" }}>
-                    <strong style={{ display: "block", fontSize: "13.5px", marginBottom: "8px" }}>
-                      {result.prTitle}
-                    </strong>
-
-                    <label className="field-label" htmlFor="base-branch" style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "10px", display: "block" }}>
-                      Destination branch
-                    </label>
-                    <input
-                      id="base-branch"
-                      className="input compact"
-                      value={baseBranch}
-                      onChange={(event) => setBaseBranch(event.target.value)}
-                      placeholder="develop"
-                      style={{ width: "100%", marginTop: "4px", fontSize: "12.5px" }}
-                    />
-                    {baseBranchMessage && (
-                      <p style={{ fontSize: "11px", color: baseBranchCheck === "exists" ? "var(--green)" : "var(--yellow)", marginTop: "4px", marginBottom: "12px" }}>
-                        {baseBranchMessage}
-                      </p>
-                    )}
-
-                    <label className="field-label" htmlFor="feature-branch" style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "10px", display: "block" }}>
-                      {useExistingSourceBranch ? "Source branch" : "Feature branch"}
-                    </label>
-                    <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
-                      <input
-                        id="feature-branch"
-                        className="input compact"
-                        value={branchName}
-                        onChange={(event) => setBranchName(event.target.value)}
-                        placeholder="feat/heading-color"
-                        style={{ flex: 1, fontSize: "12.5px" }}
+                  <div className="pr-form">
+                    <div className="pr-title-wrap">
+                      <span className="pr-title-prefix">title</span>
+                      <input 
+                        className="pr-title-input" 
+                        type="text" 
+                        value={prTitle} 
+                        onChange={(e) => setPrTitle(e.target.value)} 
+                        aria-label="PR title" 
                       />
-                      {!useExistingSourceBranch && (
-                        <button className="btn" type="button" onClick={() => setBranchName(`${result.suggestedBranch}-${Date.now().toString().slice(-4)}`)}>
-                          <RefreshCw size={12} />
-                        </button>
-                      )}
+                      <span className="pr-edit-ico" title="Edit title" aria-label="Edit title">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                          <path d="M2 9.5V10h.5l5-5L7 4.5 2 9.5ZM7.5 4l1 1L10 3.5 9 2.5 7.5 4Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
+                        </svg>
+                      </span>
                     </div>
-                    {branchMessage && (
-                      <p style={{ fontSize: "11px", color: branchCheck === "available" ? "var(--green)" : "var(--yellow)", marginTop: "4px", marginBottom: "0" }}>
-                        {branchMessage}
-                      </p>
-                    )}
-                  </div>
-                </div>
+                    <div className="pr-chips-row">
+                      <span className="pr-chip" onClick={() => setBranchModal({ open: true, defaultValue: branchName })}>
+                        <span className="chip-label">branch</span>
+                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                          <circle cx="3" cy="2.5" r="1.2" stroke="currentColor" strokeWidth="1.1"/>
+                          <circle cx="3" cy="9.5" r="1.2" stroke="currentColor" stroke-width="1.1"/>
+                          <circle cx="9" cy="6" r="1.2" stroke="currentColor" stroke-width="1.1"/>
+                          <path d="M3 4v4M4.2 9.5C7 9.5 7.8 8 7.8 7" stroke="currentColor" stroke-width="1.1"/>
+                        </svg>
+                        {branchName}
+                        <span className="x" style={{ fontSize: "12px", marginLeft: "4px" }}>⋯</span>
+                      </span>
 
-                <div>
-                  <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase" }}>
-                    Decomposed Tasks
-                  </div>
-                  <div className="plan-stages">
-                    {result.tasks.map((task, idx) => (
-                      <div className="stage" key={idx}>
-                        <div className="stage-num">{idx + 1}</div>
-                        <div className="stage-name">{task.title}</div>
-                        <div className="stage-meta">{task.files[0]}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                      <span className="pr-chip" onClick={() => setBaseModal({ open: true, defaultValue: baseBranch })}>
+                        <span className="chip-label">base</span>
+                        {baseBranch}
+                        <span className="x" style={{ fontSize: "12px", marginLeft: "4px" }}>⋯</span>
+                      </span>
 
-                {result.suggestedReviewers.length > 0 && (
-                  <div>
-                    <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase", marginBottom: "6px" }}>
-                      Suggested Reviewers
-                    </div>
-                    <div style={{ display: "flex", gap: "6px" }}>
-                      {result.suggestedReviewers.map((reviewer) => (
-                        <span className="status-pill passed" key={reviewer}>
+                      {reviewers.map((reviewer) => (
+                        <span className="pr-chip" key={reviewer}>
+                          <span className="chip-label">reviewer</span>
+                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                            <circle cx="6" cy="4.5" r="2" stroke="currentColor" stroke-width="1.1"/>
+                            <path d="M2.5 10.5c0-1.7 1.6-3 3.5-3s3.5 1.3 3.5 3" stroke="currentColor" stroke-width="1.1"/>
+                          </svg>
                           @{reviewer}
+                          <span className="x" title="Remove reviewer" onClick={(e) => {
+                            e.stopPropagation();
+                            setReviewers(reviewers.filter((r) => r !== reviewer));
+                          }}>×</span>
                         </span>
                       ))}
                     </div>
+
+                    {/* Branch validation status */}
+                    {!useExistingSourceBranch && branchCheck !== "idle" && (
+                      <div className="branch-validation-status" style={{
+                        marginTop: "8px",
+                        padding: "6px 10px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        background: branchCheck === "available" ? "rgba(63, 185, 80, 0.1)" : branchCheck === "exists" ? "rgba(248, 81, 73, 0.1)" : branchCheck === "checking" ? "rgba(47, 129, 247, 0.1)" : "rgba(139, 148, 158, 0.1)",
+                        color: branchCheck === "available" ? "var(--green)" : branchCheck === "exists" ? "var(--red)" : branchCheck === "checking" ? "var(--brand)" : "var(--text-muted)",
+                        border: `1px solid ${branchCheck === "available" ? "rgba(63, 185, 80, 0.3)" : branchCheck === "exists" ? "rgba(248, 81, 73, 0.3)" : branchCheck === "checking" ? "rgba(47, 129, 247, 0.3)" : "var(--line)"}`
+                      }}>
+                        {branchCheck === "checking" && <span style={{ marginRight: "6px" }}>⏳</span>}
+                        {branchCheck === "available" && <span style={{ marginRight: "6px" }}>✓</span>}
+                        {branchCheck === "exists" && <span style={{ marginRight: "6px" }}>✗</span>}
+                        {branchMessage}
+                      </div>
+                    )}
+
+                    {/* Base branch validation status */}
+                    {baseBranchCheck !== "idle" && baseBranchCheck !== "exists" && (
+                      <div className="branch-validation-status" style={{
+                        marginTop: "6px",
+                        padding: "6px 10px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        background: baseBranchCheck === "missing" ? "rgba(248, 81, 73, 0.1)" : baseBranchCheck === "checking" ? "rgba(47, 129, 247, 0.1)" : "rgba(139, 148, 158, 0.1)",
+                        color: baseBranchCheck === "missing" ? "var(--red)" : baseBranchCheck === "checking" ? "var(--brand)" : "var(--text-muted)",
+                        border: `1px solid ${baseBranchCheck === "missing" ? "rgba(248, 81, 73, 0.3)" : baseBranchCheck === "checking" ? "rgba(47, 129, 247, 0.3)" : "var(--line)"}`
+                      }}>
+                        {baseBranchCheck === "checking" && <span style={{ marginRight: "6px" }}>⏳</span>}
+                        {baseBranchCheck === "missing" && <span style={{ marginRight: "6px" }}>✗</span>}
+                        {baseBranchMessage}
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
+
+                <div>
+                  <div className="section-label mono" style={{ fontSize: "11px", marginBottom: "6px" }}>
+                    <span>Tasks</span>
+                    <span className="count">{result.tasks.length} · ~{totalLoc} LOC</span>
+                  </div>
+                  <div className="task-list">
+                    {result.tasks.map((task, idx) => {
+                      const fileCount = task.files.length;
+                      const estLines = task.estimatedLines ?? (fileCount * 30 + 10);
+                      return (
+                        <article className="task" key={idx}>
+                          <div className="task-row1">
+                            <span className="task-num">{idx + 1}</span>
+                            <span className="task-title">{task.title}</span>
+                            <span className="task-loc">~{estLines} lines</span>
+                            <button className="task-edit" type="button" aria-label="Edit task" onClick={() => {
+                              setTaskEditModal({ open: true, taskIndex: idx, defaultValue: task.title });
+                            }}>
+                              <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                                <path d="M2 9.5V10h.5l5-5L7 4.5 2 9.5ZM7.5 4l1 1L10 3.5 9 2.5 7.5 4Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
+                              </svg>
+                            </button>
+                          </div>
+                          <p className="task-desc">{task.description}</p>
+                          <div className="task-files">
+                            {task.files.map((file) => {
+                              const isNew = result.scaffold && result.scaffold[file] !== undefined;
+                              return (
+                                <span className={`task-file ${isNew ? "new" : "modify"}`} key={file}>
+                                  <span className="ftype">{isNew ? "new" : "mod"}</span>
+                                  {file}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 <div>
                   <div className="plan-handoff-title mono" style={{ fontSize: "11px", textTransform: "uppercase", marginBottom: "6px" }}>
-                    Developer Handoff Note
+                    Developer Handoff Preview
                   </div>
-                  <pre className="code-view" style={{ maxHeight: "160px", fontSize: "11.5px", padding: "10px", background: "var(--panel-2)", border: "1px solid var(--line)" }}>
+                  <pre className="code-view" style={{ maxHeight: "140px", overflowY: "auto", fontSize: "11.5px", padding: "10px", background: "var(--panel-2)", border: "1px solid var(--line)" }}>
                     {scaffoldText}
                   </pre>
+                  <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                    <button className="btn" style={{ flex: 1 }} onClick={() => {
+                      void navigator.clipboard.writeText(scaffoldText);
+                      showToast("Developer handoff note copied to clipboard!", "success");
+                    }}>
+                      <Copy size={12} style={{ marginRight: 6 }} />
+                      Copy Scaffold
+                    </button>
+                  </div>
                 </div>
 
-                <div style={{ marginTop: "auto", display: "flex", gap: "8px" }}>
-                  <button className="btn" style={{ flex: 1 }} onClick={() => navigator.clipboard.writeText(scaffoldText)}>
-                    <Copy size={12} style={{ marginRight: 6 }} />
-                    Copy Scaffold
-                  </button>
+                <div className="gate-zone">
+                  <div className="gate-zone-label mono">
+                    <span>Approval gate</span>
+                    <span className={`gate-state ${result.pr ? "passed" : ""}`}>
+                      {result.pr ? (
+                        <>✓ created</>
+                      ) : isConfirmingPr ? (
+                        <>
+                          <span className="live-dot"></span>reviewing · {gateCountdown}s left
+                        </>
+                      ) : (
+                        <>idle</>
+                      )}
+                    </span>
+                  </div>
+
                   {result.pr ? (
-                    <a className="btn primary" style={{ flex: 1, justifyContent: "center" }} href={result.pr.html_url} target="_blank" rel="noreferrer">
-                      <GitPullRequest size={12} style={{ marginRight: 6 }} />
-                      Open Draft PR
-                    </a>
+                    <div className="gate-done" style={{ borderRadius: "4px" }}>
+                      <div className="gate-done-left">
+                        <span className="gate-check" aria-hidden="true">
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                            <path d="M2.5 6.5l2.2 2.2L9.5 3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </span>
+                        <span>PR #{result.pr.number} created on <span style={{ fontFamily: "monospace", fontSize: "12.5px" }}>{repo}</span></span>
+                      </div>
+                      <a href={result.pr.html_url || `https://github.com/${repo}/pull/${result.pr.number}`} target="_blank" rel="noreferrer" className="link">
+                        view on GitHub →
+                      </a>
+                    </div>
+                  ) : isConfirmingPr ? (
+                    <div className="gate" role="group" aria-label="Approval gate">
+                      <div className="gate-summary-row">
+                        <span className="gate-summary">
+                          <span className="muted">Will open Draft PR to</span>{" "}
+                          <span className="repo">{repo}</span>
+                          <span className="muted">:</span>
+                          <span className="repo">{baseBranch}</span>
+                        </span>
+                        <div className="gate-btns">
+                          <button className="gate-btn ghost" type="button" onClick={() => setIsConfirmingPr(false)}>Cancel</button>
+                          <button className="gate-btn primary" type="button" onClick={() => {
+                            setIsConfirmingPr(false);
+                            void approvePr("");
+                          }}>
+                            Confirm
+                            <span className="countdown">{gateCountdown}s</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="gate-progress" aria-hidden="true">
+                        <div style={{
+                          height: "100%",
+                          width: `${((3.0 - gateCountdown) / 3.0) * 100}%`,
+                          background: "var(--brand)",
+                          transition: "width 0.1s linear"
+                        }} />
+                      </div>
+                      <div className="gate-foot">
+                        <span className="what-happens">opens · drafts only · reviewers not tagged yet</span>
+                        <span className="undo-hint mono" style={{ fontSize: "10.5px", letterSpacing: "0.04em", textTransform: "uppercase" }}>⌘Z to cancel</span>
+                      </div>
+                    </div>
                   ) : (
-                    <button className="btn primary" style={{ flex: 1, justifyContent: "center" }} onClick={requestDraftPrApproval}>
-                      <GitPullRequest size={12} style={{ marginRight: 6 }} />
+                    <button className="gate-default" type="button" onClick={requestDraftPrApproval}>
                       Create Draft PR
                     </button>
                   )}
                 </div>
+
               </div>
             )}
           </div>
         </div>
       </section>
-
-      <ApprovalGate
-        open={gateOpen}
-        title="Approve Draft PR creation"
-        description={useExistingSourceBranch ? `ShipBrain will open a GitHub Draft PR from existing source branch ${branchName || "develop"} into ${baseBranch || "main"}. No intermediate feature branch or handoff commit will be created for this promotion.` : `ShipBrain will create feature branch ${branchName || result?.suggestedBranch || "pending"}, commit a developer handoff note, and open a GitHub Draft PR into ${baseBranch || "develop"}. The developer should continue work on that same branch so PR history stays intact.`}
-        entityType="spec"
-        entityId={branchName || result?.suggestedBranch || "pending"}
-        onApprove={approvePr}
-        onReject={() => {
-          setGateOpen(false);
-          setStatus("Cancelled");
-          setFlowStage("cancelled");
-          updateRecentRun("rejected", result, "Draft PR creation was rejected by the user.");
-        }}
-        onClose={() => setGateOpen(false)}
-      />
 
       {successOpen && result?.pr ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setSuccessOpen(false)}>
@@ -1276,7 +1440,7 @@ export default function SpecToPrPage() {
             </p>
             <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 16 }}>
               <button className="button secondary" onClick={() => setSuccessOpen(false)}>Close</button>
-              <a className="button primary" href={result.pr.html_url} target="_blank" rel="noreferrer">
+              <a className="button primary" href={result.pr.html_url || `https://github.com/${repo}/pull/${result.pr.number}`} target="_blank" rel="noreferrer">
                 <GitPullRequest size={16} />
                 Open Draft PR
                 <ExternalLink size={16} />
@@ -1300,6 +1464,129 @@ export default function SpecToPrPage() {
         }}
         onConfirm={closeDraftPrRun}
       />
+
+      {/* Branch name input modal */}
+      <InputModal
+        open={branchModal.open}
+        title="Edit Branch Name"
+        label="Feature branch name"
+        placeholder="feature/my-feature"
+        defaultValue={branchModal.defaultValue}
+        confirmLabel="Update"
+        onClose={() => setBranchModal({ open: false, defaultValue: "" })}
+        onConfirm={(value) => {
+          if (value.trim()) setBranchName(value.trim());
+          setBranchModal({ open: false, defaultValue: "" });
+        }}
+      />
+
+      {/* Base branch input modal */}
+      <InputModal
+        open={baseModal.open}
+        title="Edit Destination Branch"
+        label="Destination branch"
+        placeholder="develop"
+        defaultValue={baseModal.defaultValue}
+        confirmLabel="Update"
+        onClose={() => setBaseModal({ open: false, defaultValue: "" })}
+        onConfirm={(value) => {
+          if (value.trim()) setBaseBranch(value.trim());
+          setBaseModal({ open: false, defaultValue: "" });
+        }}
+      />
+
+      {/* Task title edit modal */}
+      <InputModal
+        open={taskEditModal.open}
+        title="Edit Task Title"
+        label="Task title"
+        placeholder="Enter task title"
+        defaultValue={taskEditModal.defaultValue}
+        confirmLabel="Save"
+        onClose={() => setTaskEditModal({ open: false, taskIndex: -1, defaultValue: "" })}
+        onConfirm={(value) => {
+          if (result && taskEditModal.taskIndex >= 0) {
+            const updatedTasks = [...result.tasks];
+            updatedTasks[taskEditModal.taskIndex] = { ...updatedTasks[taskEditModal.taskIndex], title: value };
+            setResult({ ...result, tasks: updatedTasks });
+          }
+          setTaskEditModal({ open: false, taskIndex: -1, defaultValue: "" });
+        }}
+      />
+
+      {/* Toast notifications */}
+      <Toast
+        open={toast.open}
+        message={toast.message}
+        type={toast.type}
+        onClose={hideToast}
+      />
     </>
   );
+}
+
+function renderFormattedSpec(text: string) {
+  return text.split("\n").map((line, idx) => {
+    let content: ReactNode = line;
+
+    if (line.startsWith("# ")) {
+      content = <span className="h1">{line}</span>;
+    } else if (line.startsWith("## ")) {
+      content = <span className="h2">{line}</span>;
+    } else if (line.startsWith("- ") || line.startsWith("* ")) {
+      const rest = line.substring(2);
+      content = (
+        <>
+          <span className="bullet">- </span>
+          {renderInlineCode(rest)}
+        </>
+      );
+    } else {
+      content = renderInlineCode(line);
+    }
+
+    return (
+      <div key={idx} style={{ minHeight: "1.45em" }}>
+        {content}
+      </div>
+    );
+  });
+}
+
+function renderInlineCode(text: string) {
+  const parts = text.split("`");
+  return parts.map((part, idx) => {
+    if (idx % 2 === 1) {
+      return (
+        <span key={idx} className="code-inline">
+          {part}
+        </span>
+      );
+    }
+    return renderSpecMeta(part);
+  });
+}
+
+function renderSpecMeta(text: string) {
+  const tokens = text.split(/(\bType:\s*\w+|\bPriority:\s*\w+|\bReporter:\s*\S+@\S+|\b\d+\b)/gi);
+  return tokens.map((token, idx) => {
+    if (/^Type:\s*/i.test(token) || /^Priority:\s*/i.test(token)) {
+      return <span key={idx} className="label-key">{token}</span>;
+    }
+    if (/^Reporter:\s*/i.test(token)) {
+      return (
+        <span key={idx}>
+          <span className="label-key">Reporter: </span>
+          <span className="muted">{token.replace(/^Reporter:\s*/i, "")}</span>
+        </span>
+      );
+    }
+    if (/^\d+$/.test(token)) {
+      return <span key={idx} className="num">{token}</span>;
+    }
+    if (token === "·") {
+      return <span key={idx} className="muted"> · </span>;
+    }
+    return token;
+  });
 }

@@ -125,6 +125,7 @@ async function runSetup({
   const buildOutputDir = String(body.buildOutputDir ?? "dist").trim() || "dist";
   const customProdBranch = String(body.productionBranch ?? "").trim();
   const customDevBranch = String(body.developmentBranch ?? "").trim();
+  const userEnvVars = (body.envVars ?? {}) as Record<string, string>;
 
   // Scan repository first
   await emit?.({ type: "step", label: "Scanning repository", status: "running" });
@@ -157,6 +158,7 @@ async function runSetup({
       repoFullName,
       productionBranch: prodBranch,
       envVars: {
+        ...userEnvVars,
         SHIPBRAIN_API_KEY: shipbrainApiKey,
         SHIPBRAIN_API_URL: apiUrl
       }
@@ -262,6 +264,7 @@ async function runSetup({
   return {
     ok: true,
     repo: savedRepo,
+    repoFullName,
     scan,
     pr,
     injectedSecrets: secretSteps,

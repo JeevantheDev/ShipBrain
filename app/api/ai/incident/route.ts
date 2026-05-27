@@ -88,10 +88,42 @@ export async function POST(request: Request) {
     const releaseContext = body.releaseContext ?? await getIncidentReleaseContext(body.incident);
 
     if (body.action === "postmortem") {
+      const supabase = getSupabaseServerClient();
+      const {
+        data: { user }
+      } = await supabase.auth.getUser();
+
+      let pastIncidents: any[] = [];
+      let currentFixCommits: any[] = [];
+
+      if (user && body.incident?.repo) {
+        const { data } = await supabase
+          .from("incidents")
+          .select("id, title, root_cause, ai_fix_proposal, postmortem_draft, created_at")
+          .eq("user_id", user.id)
+          .eq("repo_full_name", body.incident.repo)
+          .eq("status", "resolved")
+          .neq("id", body.incident.id)
+          .order("created_at", { ascending: false });
+        if (data) pastIncidents = data;
+
+        const { data: incidentRow } = await supabase
+          .from("incidents")
+          .select("hotfix_commits")
+          .eq("id", body.incident.id)
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (incidentRow?.hotfix_commits) {
+          currentFixCommits = incidentRow.hotfix_commits;
+        }
+      }
+
       const postmortem = await generatePostmortem({
         incident: body.incident,
         analysis: body.analysis ?? null,
-        releaseContext
+        releaseContext,
+        pastIncidents,
+        currentFixCommits
       });
       return NextResponse.json({ postmortem });
     }

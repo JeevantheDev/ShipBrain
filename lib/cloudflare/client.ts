@@ -117,7 +117,8 @@ export async function createCloudflareProject(options: {
   }
 
   const project = data.result as CloudflareProject;
-  const projectUrl = `https://${project.subdomain}.pages.dev`;
+  const subdomain = project.subdomain.endsWith(".pages.dev") ? project.subdomain : `${project.subdomain}.pages.dev`;
+  const projectUrl = `https://${subdomain}`;
 
   return { success: true, project, projectUrl };
 }
@@ -155,7 +156,8 @@ export async function getCloudflareProject(options: {
   }
 
   const project = data.result as CloudflareProject;
-  const projectUrl = `https://${project.subdomain}.pages.dev`;
+  const subdomain = project.subdomain.endsWith(".pages.dev") ? project.subdomain : `${project.subdomain}.pages.dev`;
+  const projectUrl = `https://${subdomain}`;
 
   return { success: true, project, projectUrl };
 }

@@ -33,6 +33,20 @@ export async function GET() {
     .order("updated_at", { ascending: false })
     .limit(20);
 
+  // Fetch repos to map repository name to production URL
+  const { data: repos } = await supabase
+    .from("repos")
+    .select("full_name, setup_metadata")
+    .eq("user_id", user.id);
+
+  const repoMap: Record<string, string> = {};
+  for (const r of repos ?? []) {
+    const metadata = r.setup_metadata as any;
+    if (metadata?.cloudflareProjectUrl) {
+      repoMap[r.full_name] = metadata.cloudflareProjectUrl;
+    }
+  }
+
   // Deduplicate: keep only the latest preview per repo
   const seenPreviewRepos = new Set<string>();
   const latestPreviews = (previews ?? []).filter((spec) => {
@@ -64,7 +78,7 @@ export async function GET() {
       id: `prod-${spec.repo_full_name}`,
       repo: spec.repo_full_name,
       type: "production" as const,
-      url: spec.production_url ?? spec.deployment_url ?? "#",
+      url: spec.production_url ?? repoMap[spec.repo_full_name] ?? spec.deployment_url ?? "#",
       branch: spec.base_branch === "main" ? "main" : "main",
       releaseTag: spec.release_tag ?? null,
       commitSha: spec.release_sha ? (spec.release_sha as string).slice(0, 7) : null,

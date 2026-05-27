@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { SidebarNav } from "@/components/app-shell/SidebarNav";
 import { UserMenu } from "@/components/app-shell/UserMenu";
 import { RepoOnboarding } from "@/components/repo-onboarding/RepoOnboarding";
+import { Crumbs } from "@/components/app-shell/Crumbs";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -58,16 +59,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </aside>
       <main className="main">
         <header className="topbar">
-          <RepoOnboarding />
-          <div className="toolbar">
-            <button className="status green" style={{ cursor: "pointer", border: "1px solid rgba(63,185,80,0.3)", borderRadius: 4, padding: "2px 8px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", background: "transparent" }}>
-              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--green)", marginRight: 6 }}></span>
-              all gates armed
-            </button>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11px", color: "var(--text-muted)", letterSpacing: "0.04em" }}>
-              ◆ {provider}
+          <Crumbs />
+          <div className="topbar-right">
+            <RepoOnboarding />
+            <span className="pill ai-pill">
+              <span className="ai-diamond">◆</span> {provider}
             </span>
-            <UserMenu name={displayName} email={user.email} avatarUrl={avatarUrl} />
+            <span className="pill" style={{ borderColor: "rgba(63,185,80,0.3)", color: "var(--green)", cursor: "default" }}>
+              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--green)", marginRight: 6 }}></span>
+              gates armed
+            </span>
+            <button className="icon-btn" aria-label="Notifications" type="button">
+              <svg viewBox="0 0 16 16" fill="none" width="14" height="14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 12V8a4.5 4.5 0 0 1 9 0v4M2.5 12h11M7 14h2" /></svg>
+            </button>
           </div>
         </header>
         <div className="content">{children}</div>

@@ -8,18 +8,39 @@ type UserMenuProps = {
   name: string;
   email?: string;
   avatarUrl?: string;
+  variant?: "sidebar" | "topbar";
 };
 
-export function UserMenu({ name, email, avatarUrl }: UserMenuProps) {
+export function UserMenu({ name, email, avatarUrl, variant = "sidebar" }: UserMenuProps) {
   const router = useRouter();
 
   async function logout() {
+    if (variant === "topbar") {
+      if (!confirm("Log out of ShipBrain?")) return;
+    }
     const supabase = getSupabaseBrowserClient();
     await supabase.auth.signOut();
     window.localStorage.removeItem("shipbrain:selectedRepo");
     window.localStorage.removeItem("shipbrain:connectedRepos");
     router.replace("/login");
     router.refresh();
+  }
+
+  if (variant === "topbar") {
+    return (
+      <div
+        className="avatar avatar-top"
+        title={`${name} ${email ? `(${email})` : ""} - Click to Log Out`}
+        onClick={logout}
+        style={{ display: "grid", placeItems: "center" }}
+      >
+        {avatarUrl ? (
+          <img src={avatarUrl} alt="" style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />
+        ) : (
+          name.slice(0, 2).toUpperCase()
+        )}
+      </div>
+    );
   }
 
   return (

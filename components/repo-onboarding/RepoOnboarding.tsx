@@ -55,8 +55,12 @@ export function RepoOnboarding() {
   const [customDevBranch, setCustomDevBranch] = useState("");
   const [branchError, setBranchError] = useState("");
   const [apiKeyHidden, setApiKeyHidden] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
+  const [showEnvVars, setShowEnvVars] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
   const repoSearchRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const connectedRepos = useMemo(
     () => repos.filter((repo) => selectedRepos.includes(repo.full_name)),
@@ -67,6 +71,18 @@ export function RepoOnboarding() {
   const needsCustomBranches = scan?.branches.scenario === "custom_required";
   const customBranchesReady = !needsCustomBranches || Boolean(customProdBranch.trim());
   const canSubmit = Boolean(activeRepo && scan && customBranchesReady && !setupBusy);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     setMounted(true);
@@ -258,7 +274,8 @@ export function RepoOnboarding() {
           skipIncidents,
           buildOutputDir: buildOutputDir.trim() || "dist",
           productionBranch: customProdBranch.trim(),
-          developmentBranch: customDevBranch.trim()
+          developmentBranch: customDevBranch.trim(),
+          envVars: envVars.filter(e => e.key.trim()).reduce((acc, e) => ({ ...acc, [e.key.trim()]: e.value }), {} as Record<string, string>)
         })
       });
       if (!response.ok || !response.body) {
@@ -384,27 +401,102 @@ export function RepoOnboarding() {
 
   return (
     <>
-      <div className="toolbar">
-        <select
-          className="select"
-          style={{ maxWidth: 360 }}
-          value={selectedRepo}
-          onChange={(event) => changeActiveRepo(event.target.value)}
-          disabled={!connectedRepos.length}
+      <div className="repo-selector-container" ref={dropdownRef} style={{ position: "relative" }}>
+        <button
+          className="pill repo-pill"
+          type="button"
+          onClick={() => setDropdownOpen(!dropdownOpen)}
         >
-          {connectedRepos.length ? (
-            connectedRepos.map((repo) => (
-              <option key={repo.id} value={repo.full_name}>
-                {repo.full_name}
-              </option>
-            ))
-          ) : (
-            <option>{githubConnected ? "Connect repositories" : "Connect GitHub"}</option>
-          )}
-        </select>
-        <button className="button secondary compact" onClick={() => setModalOpen(true)}>
-          Manage
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ color: "var(--text-muted)" }}><path d="M2.5 1.5h6L10 3v7.5H2.5v-9Z" stroke="currentColor" strokeWidth={1.2}/><path d="M8.5 1.5V3H10" stroke="currentColor" strokeWidth={1.2}/></svg>
+          <span style={{ maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {selectedRepo || "Connect Repository"}
+          </span>
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" style={{ color: "var(--text-muted)" }}><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
+
+        {dropdownOpen && (
+          <div
+            className="dropdown-menu"
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              marginTop: 6,
+              background: "var(--panel)",
+              border: "1px solid var(--line)",
+              borderRadius: 6,
+              zIndex: 100,
+              minWidth: 260,
+              padding: 4,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.5)"
+            }}
+          >
+            {connectedRepos.length ? (
+              connectedRepos.map((repo) => (
+                <div
+                  key={repo.id}
+                  className="dropdown-item"
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    fontSize: "12.5px",
+                    color: repo.full_name === selectedRepo ? "var(--text)" : "var(--text-muted)",
+                    background: repo.full_name === selectedRepo ? "var(--panel-2)" : "transparent",
+                    transition: "background 100ms ease, color 100ms ease"
+                  }}
+                  onClick={() => {
+                    changeActiveRepo(repo.full_name);
+                    setDropdownOpen(false);
+                  }}
+                  onMouseEnter={(e) => {
+                    if (repo.full_name !== selectedRepo) {
+                      e.currentTarget.style.background = "var(--panel-3)";
+                      e.currentTarget.style.color = "var(--text)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (repo.full_name !== selectedRepo) {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.color = "var(--text-muted)";
+                    }
+                  }}
+                >
+                  {repo.full_name}
+                </div>
+              ))
+            ) : (
+              <div style={{ padding: "6px 10px", color: "var(--text-muted)", fontSize: "12.5px" }}>
+                {githubConnected ? "Connect repositories" : "Connect GitHub"}
+              </div>
+            )}
+            <div style={{ height: 1, background: "var(--line-muted)", margin: "4px 0" }} />
+            <div
+              className="dropdown-item"
+              style={{
+                padding: "6px 10px",
+                borderRadius: 4,
+                cursor: "pointer",
+                fontSize: "12.5px",
+                color: "var(--brand-dark)",
+                fontWeight: 500,
+                transition: "background 100ms ease"
+              }}
+              onClick={() => {
+                setModalOpen(true);
+                setDropdownOpen(false);
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--panel-3)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              Manage repositories...
+            </div>
+          </div>
+        )}
       </div>
 
       {mounted && modalOpen
@@ -519,6 +611,67 @@ export function RepoOnboarding() {
                     <strong>Automatic deployment</strong>
                     <p>ShipBrain automatically creates a Cloudflare Pages project and handles all deployments. Your app will be available at a <code>.pages.dev</code> domain.</p>
                   </div>
+                </div>
+
+                <div className="repo-connect-group">
+                  <div className="eyebrow">Environment Variables</div>
+                  <h3>Project Environment Variables</h3>
+                  <p className="secret-helper" style={{ marginTop: 0 }}>
+                    Add environment variables that your app needs at build time. These will be set on your Cloudflare Pages project.
+                  </p>
+                  {showEnvVars ? (
+                    <>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                        {envVars.map((env, index) => (
+                          <div key={index} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              type="text"
+                              placeholder="KEY"
+                              value={env.key}
+                              onChange={(e) => {
+                                const newEnvVars = [...envVars];
+                                newEnvVars[index].key = e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "");
+                                setEnvVars(newEnvVars);
+                              }}
+                              style={{ flex: 1, fontFamily: "monospace", fontSize: 12 }}
+                              className="input compact"
+                            />
+                            <input
+                              type="text"
+                              placeholder="value"
+                              value={env.value}
+                              onChange={(e) => {
+                                const newEnvVars = [...envVars];
+                                newEnvVars[index].value = e.target.value;
+                                setEnvVars(newEnvVars);
+                              }}
+                              style={{ flex: 2, fontSize: 12 }}
+                              className="input compact"
+                            />
+                            <button
+                              className="btn subtle compact"
+                              onClick={() => setEnvVars(envVars.filter((_, i) => i !== index))}
+                              style={{ padding: "4px 8px" }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <button className="button secondary compact" onClick={() => setEnvVars([...envVars, { key: "", value: "" }])}>
+                        + Add variable
+                      </button>
+                      {envVars.length === 0 && (
+                        <button className="text-link" style={{ marginLeft: 12 }} onClick={() => setShowEnvVars(false)}>
+                          Hide environment variables
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <button className="button secondary compact" onClick={() => { setShowEnvVars(true); setEnvVars([{ key: "", value: "" }]); }}>
+                      + Add environment variables
+                    </button>
+                  )}
                 </div>
 
                 <div className="repo-connect-group">
@@ -674,6 +827,32 @@ function SetupProgress({ events }: { events: SetupEvent[] }) {
 }
 
 function SetupSuccess({ setup, copied, hidden, onShow, onCopy }: { setup: any; copied: boolean; hidden: boolean; onShow: () => void; onCopy: () => void }) {
+  const [deployStarted, setDeployStarted] = useState(false);
+  const [deployLoading, setDeployLoading] = useState(false);
+  const [deployError, setDeployError] = useState("");
+
+  async function startFirstDeploy() {
+    setDeployLoading(true);
+    setDeployError("");
+    try {
+      const response = await fetch("/api/deployments/start-initial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repoFullName: setup.repoFullName || setup.repo,
+          branch: "develop"
+        })
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to start deployment");
+      setDeployStarted(true);
+    } catch (err) {
+      setDeployError(err instanceof Error ? err.message : "Unable to start deployment");
+    } finally {
+      setDeployLoading(false);
+    }
+  }
+
   return (
     <div className="modal-scroll-area repo-connect-flow">
       <div className="success-panel">
@@ -684,13 +863,42 @@ function SetupSuccess({ setup, copied, hidden, onShow, onCopy }: { setup: any; c
 
       {setup.cloudflareProjectUrl ? (
         <div className="info-callout">
-          <strong>Your deployment URL</strong>
-          <p>Your app will be deployed to:</p>
-          <a href={setup.cloudflareProjectUrl} target="_blank" rel="noreferrer" className="deployment-url">
+          <strong>Cloudflare Pages Project Created</strong>
+          <p style={{ marginBottom: 8 }}>Your app will be available at:</p>
+          <code style={{ display: "block", padding: "8px 12px", background: "var(--panel-2)", borderRadius: 4, fontSize: 13, marginBottom: 12 }}>
             {setup.cloudflareProjectUrl}
-            <ExternalLink size={14} />
-          </a>
-          <p className="secret-helper" style={{ marginTop: 8 }}>Preview deployments will have unique URLs for each commit.</p>
+          </code>
+          {setup.pr?.html_url ? (
+            <p className="secret-helper" style={{ marginTop: 0, marginBottom: 0 }}>
+              Merge the setup PR above to activate workflows, then push to <code>develop</code> to trigger your first deployment.
+            </p>
+          ) : deployStarted ? (
+            <div className="success-panel" style={{ padding: "10px 14px" }}>
+              <strong style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <RefreshCw size={14} className="spin" />
+                Deployment started!
+              </strong>
+              <p style={{ margin: "4px 0 0", fontSize: 12 }}>
+                Check the <a href="/ci" style={{ color: "var(--brand)" }}>CI Monitor</a> to track progress.
+              </p>
+            </div>
+          ) : (
+            <>
+              <p className="secret-helper" style={{ marginTop: 0, marginBottom: 10 }}>
+                Workflows are ready. Start your first preview deployment:
+              </p>
+              <button
+                className="button primary"
+                onClick={startFirstDeploy}
+                disabled={deployLoading}
+                style={{ width: "100%" }}
+              >
+                {deployLoading ? <RefreshCw size={14} className="spin" style={{ marginRight: 6 }} /> : null}
+                {deployLoading ? "Starting deployment..." : "Start Preview Deployment"}
+              </button>
+              {deployError && <p style={{ color: "var(--red)", fontSize: 12, marginTop: 8 }}>{deployError}</p>}
+            </>
+          )}
         </div>
       ) : null}
 
