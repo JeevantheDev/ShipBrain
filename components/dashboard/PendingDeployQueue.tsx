@@ -16,6 +16,7 @@ type PendingDeploy = {
   baseBranch: string;
   deploymentStatus?: string;
   releaseStatus?: string;
+  linkedReleaseStatus?: string;
   releasePrNumber?: number;
   releasePrUrl?: string;
   releasePrStatus?: string;
@@ -184,6 +185,7 @@ export function PendingDeployQueue() {
       case "preview_deploying": return "preview deploying";
       case "preview_ready": return "preview ready";
       case "release_pr_open": return "release pr open";
+      case "hotfix_pr_open": return "hotfix pr open";
       case "pending_production_deploy": return "ready for production";
       case "deploying": return "deploying...";
       case "deploy_failed": return "deploy failed";
@@ -202,9 +204,17 @@ export function PendingDeployQueue() {
       case "preview_deploying":
         return "Preview deployment is in progress. The URL will appear when ready.";
       case "preview_ready":
+        if (item.releasePrNumber && item.releasePrStatus === "merged") {
+          return `Release PR #${item.releasePrNumber} is merged. Production deployment is waiting in the Production queue.`;
+        }
+        if (item.releasePrNumber) {
+          return `Preview is live and Release PR #${item.releasePrNumber} already exists. Review or merge it before production deploy.`;
+        }
         return "Preview is live! Test it, then create a Release PR to promote to production.";
       case "release_pr_open":
         return `Release PR #${item.releasePrNumber} is open. Merge it to proceed with production deployment.`;
+      case "hotfix_pr_open":
+        return `Hotfix PR #${item.prNumber} is open. Review and approve the fix from Incident Commander before production deployment.`;
       case "pending_production_deploy":
         return "Release PR is merged. Click Deploy to Production to create the release tag and deploy.";
       case "deploying":
@@ -350,12 +360,22 @@ export function PendingDeployQueue() {
                         <RefreshCw size={12} style={{ marginRight: 4 }} />
                         Redeploy
                       </button>
-                      <Link className="btn primary" href="/spec-to-pr?template=develop-to-prod">
-                        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
-                          <path d="M2 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                        Create Release PR
-                      </Link>
+                      {item.releasePrNumber && item.releasePrUrl ? (
+                        <a className="btn primary" href={item.releasePrUrl} target="_blank" rel="noreferrer">
+                          Review Release PR #{item.releasePrNumber}
+                        </a>
+                      ) : item.releasePrNumber ? (
+                        <button className="btn primary" disabled>
+                          Release PR #{item.releasePrNumber}
+                        </button>
+                      ) : (
+                        <Link className="btn primary" href="/spec-to-pr?template=develop-to-prod">
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
+                            <path d="M2 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          Create Release PR
+                        </Link>
+                      )}
                     </>
                   )}
                   {item.stage === "release_pr_open" && item.releasePrUrl && (
@@ -372,6 +392,11 @@ export function PendingDeployQueue() {
                       {actionLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
                       Deploy to Production
                     </button>
+                  )}
+                  {item.stage === "hotfix_pr_open" && item.prUrl && (
+                    <a className="btn primary" href={item.prUrl} target="_blank" rel="noreferrer">
+                      Review Hotfix PR #{item.prNumber}
+                    </a>
                   )}
                   {item.stage === "deploy_failed" && item.releaseTag && (
                     <button

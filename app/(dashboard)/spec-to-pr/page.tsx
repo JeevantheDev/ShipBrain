@@ -2,7 +2,7 @@
 
 import { Copy, ExternalLink, FileText, GitPullRequest, Loader2, Play, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
 import { CloseDraftPrModal } from "@/components/pr-sync/CloseDraftPrModal";
@@ -276,6 +276,7 @@ ShipBrain-codegen: handoff-only`
 ] as const;
 
 export default function SpecToPrPage() {
+  const aiPlanRef = useRef<HTMLDivElement | null>(null);
   const [spec, setSpec] = useState("");
   const [repo, setRepo] = useState("JeevantheDev/shipbrain_sandbox");
   const [result, setResult] = useState<SpecResult | null>(null);
@@ -481,6 +482,14 @@ export default function SpecToPrPage() {
     setPrRetryAvailable(run.status !== "draft_created" && run.status !== "merged" && run.status !== "closed");
     setStatus(statusLabel(run));
     setFlowStage(run.status === "draft_created" || run.status === "merged" ? "ready" : run.status === "failed" || run.status === "closed" ? "failed" : run.status === "rejected" ? "cancelled" : "review");
+  }
+
+  function viewSyncedRecord(run: RecentPrRun) {
+    loadRecentRun(run);
+    showToast(`${recentStatusLabel(run)} record loaded`, "success");
+    window.requestAnimationFrame(() => {
+      aiPlanRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function statusLabel(runOrStatus: RecentPrRun | RecentPrStatus) {
@@ -974,7 +983,7 @@ export default function SpecToPrPage() {
               <p className="panel-desc">Resume a saved plan or retry a Draft PR without rebuilding the ticket.</p>
 
               {activeRecentRuns.map((run) => (
-                <div className="resume-row" key={run.id}>
+                <div className="resume-row" key={run.id} style={{ borderColor: currentRunId === run.id ? "var(--brand)" : undefined }}>
                   <div className="pr-icon" title={recentStatusLabel(run)}>
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                       <circle cx="3.5" cy="3.5" r="1.6" stroke="currentColor" stroke-width="1.2"/>
@@ -1003,7 +1012,7 @@ export default function SpecToPrPage() {
               ))}
 
               {syncedRecentRuns.map((run) => (
-                <div className="resume-row" key={run.id}>
+                <div className="resume-row" key={run.id} style={{ borderColor: currentRunId === run.id ? "var(--brand)" : undefined }}>
                   <div className="pr-icon" style={{ color: "var(--success)", background: "rgba(63, 185, 80, 0.12)", borderColor: "rgba(63, 185, 80, 0.3)" }}>
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                       <path d="m3 6.5 2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1019,7 +1028,7 @@ export default function SpecToPrPage() {
                     </div>
                     <div className="resume-meta">PR #{run.result.pr?.number ?? "merged"}</div>
                   </div>
-                  <button className="btn subtle" type="button" onClick={() => loadRecentRun(run)}>View synced record</button>
+                  <button className="btn subtle" type="button" onClick={() => viewSyncedRecord(run)}>View synced record</button>
                 </div>
               ))}
             </div>
@@ -1135,7 +1144,7 @@ export default function SpecToPrPage() {
           </div>
         </div>
 
-        <div className="ai-plan">
+        <div className="ai-plan" ref={aiPlanRef}>
           <header className="ai-plan-head">
             <h2>AI Plan</h2>
             <span className={`status-pill ${result ? "passed" : ""}`}>

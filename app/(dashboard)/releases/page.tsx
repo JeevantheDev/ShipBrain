@@ -1,4 +1,4 @@
-import { TraceCard } from "@/components/releases/TraceCard";
+import { ReleaseTraceBoard } from "@/components/releases/ReleaseTraceBoard";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -18,9 +18,20 @@ export default async function ReleasesPage() {
         .limit(40)
     : { data: [] };
 
-  const pending = (traces ?? []).filter((trace) => trace.pending_action);
-  const active = (traces ?? []).filter((trace) => !["completed", "cancelled"].includes(trace.status));
-  const complete = (traces ?? []).filter((trace) => ["completed", "production_live"].includes(trace.status)).slice(0, 6);
+  const traceIds = (traces ?? []).map((trace) => trace.id);
+  const { data: events } = traceIds.length
+    ? await supabase
+        .from("trace_events")
+        .select("*")
+        .in("trace_id", traceIds)
+        .order("created_at", { ascending: false })
+    : { data: [] };
+
+  const eventsByTrace = (events ?? []).reduce<Record<string, any[]>>((acc, event) => {
+    if (!event.trace_id) return acc;
+    acc[event.trace_id] = [...(acc[event.trace_id] ?? []), event];
+    return acc;
+  }, {});
 
   return (
     <>
@@ -32,51 +43,13 @@ export default async function ReleasesPage() {
         </div>
       </div>
 
-      <section className="panel trace-section">
-        <div className="panel-head">
-          <div>
-            <span className="eyebrow mono">Pending actions</span>
-            <h2>{pending.length} release items need attention</h2>
-          </div>
-        </div>
-        {pending.length ? (
-          <div className="trace-grid">
-            {pending.slice(0, 6).map((trace) => <TraceCard key={trace.id} trace={trace as any} />)}
-          </div>
-        ) : (
-          <div className="empty-state compact">No pending release actions right now.</div>
-        )}
-      </section>
-
-      <section className="panel trace-section">
-        <div className="panel-head">
-          <div>
-            <span className="eyebrow mono">Active traces</span>
-            <h2>Current release flow</h2>
-          </div>
-        </div>
-        {active.length ? (
-          <div className="trace-grid">
-            {active.map((trace) => <TraceCard key={trace.id} trace={trace as any} />)}
-          </div>
-        ) : (
-          <div className="empty-state compact">No active traces yet. Create a Draft PR or connect GitHub webhooks.</div>
-        )}
-      </section>
-
-      {complete.length ? (
+      {traces?.length ? (
+        <ReleaseTraceBoard traces={traces as any} eventsByTrace={eventsByTrace} />
+      ) : (
         <section className="panel trace-section">
-          <div className="panel-head">
-            <div>
-              <span className="eyebrow mono">Recently live</span>
-              <h2>Completed production movement</h2>
-            </div>
-          </div>
-          <div className="trace-grid">
-            {complete.map((trace) => <TraceCard key={trace.id} trace={trace as any} />)}
-          </div>
+          <div className="empty-state compact">No release traces yet. Create a Draft PR or connect GitHub webhooks.</div>
         </section>
-      ) : null}
+      )}
     </>
   );
 }

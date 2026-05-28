@@ -2,6 +2,7 @@
 
 import { Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
+import { InputModal } from "@/components/ui/InputModal";
 
 type Environment = {
   id: string;
@@ -20,6 +21,7 @@ export function EnvironmentsWidget() {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [loading, setLoading] = useState(true);
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
+  const [redeployTarget, setRedeployTarget] = useState<Environment | null>(null);
   const [redeployError, setRedeployError] = useState<Record<string, string>>({});
   const [redeploySuccess, setRedeploySuccess] = useState<Record<string, string>>({});
 
@@ -43,7 +45,14 @@ export function EnvironmentsWidget() {
     }
   }
 
-  async function redeployEnvironment(env: Environment) {
+  function defaultReleaseTag() {
+    const now = new Date();
+    const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+    const time = now.toISOString().slice(11, 19).replace(/:/g, "");
+    return `release-v${date}-${time}`;
+  }
+
+  async function redeployEnvironment(env: Environment, releaseTag?: string) {
     setRedeployingId(env.id);
     setRedeployError({});
     setRedeploySuccess({});
@@ -63,7 +72,8 @@ export function EnvironmentsWidget() {
         body: JSON.stringify({
           repo: env.repo,
           environment: env.type,
-          branch: env.type === "preview" ? "develop" : "main"
+          branch: env.type === "preview" ? "develop" : "main",
+          releaseTag: releaseTag?.trim() || undefined
         })
       });
 
@@ -72,7 +82,9 @@ export function EnvironmentsWidget() {
         throw new Error(json.detail ?? json.error ?? "Failed to trigger redeploy");
       }
 
-      setRedeploySuccess({ [env.id]: `Redeployment started for ${env.type}` });
+      setRedeployTarget(null);
+      setRedeploySuccess({ [env.id]: json.releaseTag ? `Redeployment started for ${json.releaseTag}` : `Redeployment started for ${env.type}` });
+      await loadEnvironments();
 
       // Clear success message after 5 seconds
       setTimeout(() => {
@@ -118,6 +130,10 @@ export function EnvironmentsWidget() {
 
       {environments.map((env) => {
         const isLive = env.status === "deployed" || env.status === "ready";
+        const canOpen = env.type === "production"
+          ? env.status === "deployed" && Boolean(env.url) && env.url !== "#"
+          : isLive && Boolean(env.url) && env.url !== "#";
+        const canRedeploy = env.type === "production" ? canOpen : isLive;
         const isRedeploying = redeployingId === env.id;
 
         return (
@@ -166,23 +182,43 @@ export function EnvironmentsWidget() {
             )}
 
             <div style={{ display: "flex", gap: 8 }}>
-              <a
-                className="btn"
-                href={env.url}
-                target="_blank"
-                rel="noreferrer"
-                style={{ flex: 1, justifyContent: "center" }}
-              >
-                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 6 }}>
-                  <path d="M4 2h6v6M10 2 4 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-                Open
-              </a>
+              {canOpen ? (
+                <a
+                  className="btn"
+                  href={env.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ flex: 1, justifyContent: "center" }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 6 }}>
+                    <path d="M4 2h6v6M10 2 4 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  Open
+                </a>
+              ) : (
+                <button
+                  className="btn"
+                  disabled
+                  title={env.type === "production" ? "Production is not live yet. Deploy it first from CI Monitor." : "Preview URL is not available yet."}
+                  style={{ flex: 1, justifyContent: "center" }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 6 }}>
+                    <path d="M4 2h6v6M10 2 4 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  Open
+                </button>
+              )}
               <button
                 className="btn"
-                onClick={() => redeployEnvironment(env)}
-                disabled={isRedeploying}
-                title={`Redeploy ${env.type} from ${env.type === "preview" ? "develop" : "main"} branch`}
+                onClick={() => {
+                  if (env.type === "production") {
+                    setRedeployTarget(env);
+                  } else {
+                    void redeployEnvironment(env);
+                  }
+                }}
+                disabled={isRedeploying || !canRedeploy}
+                title={canRedeploy ? `Redeploy ${env.type} from ${env.type === "preview" ? "develop" : "main"} branch` : "Redeploy is available after the first successful deployment."}
                 style={{ flex: 1, justifyContent: "center" }}
               >
                 {isRedeploying ? (
@@ -196,6 +232,23 @@ export function EnvironmentsWidget() {
           </div>
         );
       })}
+      <InputModal
+        open={Boolean(redeployTarget)}
+        title="Redeploy production"
+        label="Release tag"
+        placeholder={defaultReleaseTag()}
+        defaultValue=""
+        confirmLabel={redeployingId === redeployTarget?.id ? "Redeploying..." : "Start Redeploy"}
+        cancelLabel="Cancel"
+        onClose={() => {
+          if (redeployingId) return;
+          setRedeployTarget(null);
+        }}
+        onConfirm={(value) => {
+          if (!redeployTarget || redeployingId) return;
+          void redeployEnvironment(redeployTarget, value);
+        }}
+      />
     </div>
   );
 }

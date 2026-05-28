@@ -29,6 +29,7 @@ export async function POST(request: Request) {
 
   const body = await request.json();
   const specId = String(body.specId ?? "");
+  const requestedReleaseTag = String(body.releaseTag ?? "").trim();
   if (!specId) {
     return NextResponse.json({ error: "specId is required" }, { status: 400 });
   }
@@ -44,14 +45,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Spec not found.", detail: specError?.message }, { status: 404 });
   }
 
-  if (spec.release_status !== "pending_deploy") {
+  const isMergedReleasePromotion = spec.status === "merged" && spec.branch_name === "develop" && spec.base_branch === "main";
+  const isPendingDeploy = spec.release_status === "pending_deploy" && spec.release_pr_status === "merged";
+
+  if (!isPendingDeploy && !isMergedReleasePromotion) {
     return NextResponse.json(
       { error: "Spec is not ready for production deployment.", detail: `Current release_status: ${spec.release_status}` },
       { status: 409 }
     );
   }
 
-  if (spec.release_pr_status !== "merged") {
+  if (!isMergedReleasePromotion && spec.release_pr_status !== "merged") {
     return NextResponse.json(
       { error: "Release PR must be merged before deploying to production.", detail: `Current release_pr_status: ${spec.release_pr_status}` },
       { status: 409 }
@@ -59,8 +63,36 @@ export async function POST(request: Request) {
   }
 
   const { owner, repo } = splitRepo(spec.repo_full_name);
-  const releaseTag = spec.release_tag || generateReleaseTag();
+  const releaseTag = requestedReleaseTag || spec.release_tag || generateReleaseTag();
   let releaseSha = spec.release_sha || spec.merge_sha;
+
+  if (!releaseSha && isMergedReleasePromotion && spec.pr_number) {
+    try {
+      const octokit = getOctokit();
+      const { data: pull } = await octokit.pulls.get({
+        owner,
+        repo,
+        pull_number: spec.pr_number
+      });
+      releaseSha = pull.merge_commit_sha ?? undefined;
+    } catch {
+      // Fall back to main HEAD below.
+    }
+  }
+
+  if (!releaseSha && isMergedReleasePromotion) {
+    try {
+      const octokit = getOctokit();
+      const { data: ref } = await octokit.git.getRef({
+        owner,
+        repo,
+        ref: "heads/main"
+      });
+      releaseSha = ref.object.sha;
+    } catch {
+      // Let the explicit missing-SHA response below explain the issue.
+    }
+  }
 
   if (!releaseSha) {
     return NextResponse.json(
@@ -111,8 +143,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Create release tag if not exists
-    if (!spec.release_tag) {
+    // Create the requested/default release tag when it differs from the stored tag.
+    // This keeps the DB, Git tag, and dispatched workflow ref aligned with the
+    // manager-confirmed release tag from CI Monitor.
+    if (!spec.release_tag || spec.release_tag !== releaseTag) {
       await createReleaseTag({
         owner,
         repo,
@@ -137,6 +171,7 @@ export async function POST(request: Request) {
         release_tag: releaseTag,
         release_sha: releaseSha,
         release_status: "deploying",
+        release_pr_status: "merged",
         deployment_status: "deploying",
         updated_at: new Date().toISOString()
       })

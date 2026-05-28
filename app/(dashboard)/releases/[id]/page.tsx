@@ -56,8 +56,8 @@ export default async function ReleaseTraceDetailPage({ params }: { params: { id:
         <div className="panel trace-section">
           <span className="eyebrow mono">Details</span>
           <div className="trace-detail-list">
-            <span>Draft PR</span><strong>{trace.draft_pr_number ? `#${trace.draft_pr_number}` : "n/a"}</strong>
-            <span>Release PR</span><strong>{trace.release_pr_number ? `#${trace.release_pr_number}` : "n/a"}</strong>
+            <span>{trace.type === "hotfix" ? "Hotfix PR" : "Draft PR"}</span><strong>{trace.draft_pr_number ? `#${trace.draft_pr_number}` : "n/a"}</strong>
+            <span>{trace.type === "hotfix" ? "Sync PR" : "Release PR"}</span><strong>{trace.type === "hotfix" ? (trace.reverse_sync_pr_number ? `#${trace.reverse_sync_pr_number}` : "n/a") : (trace.release_pr_number ? `#${trace.release_pr_number}` : "n/a")}</strong>
             <span>Phase</span><strong>{trace.current_phase}</strong>
             <span>Incident</span><strong>{trace.incident_id ? trace.incident_id.slice(0, 8) : "n/a"}</strong>
           </div>

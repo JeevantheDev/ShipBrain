@@ -44,6 +44,10 @@ export async function GET() {
   for (const spec of specs ?? []) {
     const plan = spec.decomposed_tasks as { prTitle?: string } | null;
     const title = plan?.prTitle ?? `PR #${spec.pr_number}`;
+    let linkedReleasePrNumber = spec.release_pr_number;
+    let linkedReleasePrUrl = spec.release_pr_url;
+    let linkedReleasePrStatus = spec.release_pr_status;
+    let linkedReleaseStatus = spec.release_status;
 
     // Skip if already fully deployed (double-check in case DB filter missed it)
     if (spec.release_status === "deployed") continue;
@@ -54,23 +58,35 @@ export async function GET() {
     // Determine the current stage
     let stage: string;
     let queueType: "develop" | "production";
+    const isReleasePromotionSpec = spec.branch_name === "develop" && spec.base_branch === "main";
 
     if (spec.base_branch === "develop") {
       queueType = "develop";
 
-      // Check release PR status if we have one
-      if (spec.release_pr_number && spec.release_pr_status === "merged") {
-        // Release PR is merged - check if already deployed
-        if (spec.release_status === "deployed") {
-          continue; // Already deployed, skip
+      if (!linkedReleasePrNumber) {
+        const { data: releaseSpec } = await supabase
+          .from("specs")
+          .select("pr_number, pr_url, status, release_status, release_pr_status")
+          .eq("user_id", user.id)
+          .eq("repo_full_name", spec.repo_full_name)
+          .eq("branch_name", "develop")
+          .eq("base_branch", "main")
+          .not("status", "eq", "closed")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (releaseSpec?.pr_number) {
+          linkedReleasePrNumber = releaseSpec.pr_number;
+          linkedReleasePrUrl = releaseSpec.pr_url;
+          linkedReleasePrStatus = releaseSpec.release_pr_status ?? (releaseSpec.status === "merged" ? "merged" : releaseSpec.status === "pending_pr" || releaseSpec.status === "draft_created" ? "open" : releaseSpec.status);
+          linkedReleaseStatus = releaseSpec.release_status ?? linkedReleaseStatus;
         }
-        queueType = "production";
-        stage = spec.release_status === "deploying" ? "deploying" : "pending_production_deploy";
-      } else if (spec.release_pr_number) {
-        // Release PR exists but not merged - remove from develop queue
-        continue;
-      } else if (spec.preview_url || spec.preview_status === "deployed") {
-        // Preview is ready - can create release PR
+      }
+
+      if (spec.preview_url || spec.preview_status === "deployed" || linkedReleasePrNumber) {
+        // Feature rows stay in the develop lane. Production deploy actions belong
+        // to the separate develop -> main release promotion spec.
         stage = "preview_ready";
       } else if (spec.preview_status === "deploying") {
         // Actively verify the preview run hasn't already completed — prevents stale badge
@@ -155,10 +171,20 @@ export async function GET() {
         continue;
       }
     } else if (spec.base_branch === "main") {
-      // Direct to main (hotfix flow)
       queueType = "production";
 
-      if (spec.status === "merged") {
+      if (spec.incident_id && spec.status !== "merged") {
+        stage = "hotfix_pr_open";
+      } else if (spec.status === "merged" && isReleasePromotionSpec) {
+        if (spec.release_status === "deploying") {
+          stage = "deploying";
+        } else if (spec.release_status === "deployed") {
+          continue;
+        } else {
+          stage = "pending_production_deploy";
+        }
+      } else if (spec.status === "merged") {
+        // Direct to main hotfix flow
         if (spec.release_status === "deploying") {
           stage = "deploying";
         } else if (spec.release_status === "deployed") {
@@ -173,8 +199,8 @@ export async function GET() {
       continue; // Unknown base branch
     }
 
-    // Also check: if release_status is pending_deploy, it's definitely production queue
-    if (spec.release_status === "pending_deploy") {
+    // Only real release promotion / direct-main rows enter the production lane.
+    if (spec.release_status === "pending_deploy" && spec.base_branch === "main") {
       queueType = "production";
       stage = "pending_production_deploy";
     }
@@ -273,9 +299,10 @@ export async function GET() {
       baseBranch: spec.base_branch,
       deploymentStatus: spec.deployment_status,
       releaseStatus: spec.release_status,
-      releasePrNumber: spec.release_pr_number,
-      releasePrUrl: spec.release_pr_url,
-      releasePrStatus: spec.release_pr_status,
+      linkedReleaseStatus,
+      releasePrNumber: linkedReleasePrNumber,
+      releasePrUrl: linkedReleasePrUrl,
+      releasePrStatus: linkedReleasePrStatus,
       releaseTag: spec.release_tag,
       releaseSha: spec.release_sha,
       previewUrl: spec.preview_url,

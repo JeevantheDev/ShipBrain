@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { dispatchDevelopPreviewDeploy, dispatchVercelProductionDeploy } from "@/lib/github/deployments";
+import { dispatchDevelopPreviewDeploy, dispatchHotfixDeploy } from "@/lib/github/deployments";
 import { listPullRequestCommits } from "@/lib/github/commits";
 import { createDraftPR, createReverseSyncPR, mergePullRequest, tagCommitForRelease } from "@/lib/github/pr";
+import { createOrUpdateTrace, updateTraceByIncident } from "@/lib/orchestrator";
 import { resolvePagerDutyIncident } from "@/lib/pagerduty/incidents";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -270,11 +271,12 @@ export async function POST(request: Request) {
           sha: merge.sha,
           releaseTag
         });
-        deployment = await dispatchVercelProductionDeploy({
+        deployment = await dispatchHotfixDeploy({
           owner,
           repo,
           releaseTag: release.releaseTag,
-          releaseSha: release.sha
+          releaseSha: release.sha,
+          reverseSync: true
         });
       } else {
         const { data: repoRow } = await supabase
@@ -420,6 +422,60 @@ export async function POST(request: Request) {
       .from("specs")
       .update(specUpdate)
       .eq("incident_id", incident.id);
+
+    try {
+      await createOrUpdateTrace({
+        userId: user.id,
+        repoFullName: incident.repo_full_name,
+        type: "hotfix",
+        title: incident.title ?? `Incident ${incident.id.slice(0, 8)} hotfix`,
+        description: incident.root_cause ?? incident.raw_logs ?? null,
+        status: isProdDeploy ? "merged_main" : "merged_develop",
+        sourceBranch: merge.headBranch,
+        targetBranch: merge.baseBranch,
+        draftPrNumber: incident.hotfix_pr_number,
+        draftPrUrl: incident.hotfix_pr_url,
+        incidentId: incident.id,
+        source: "system",
+        actor: user.email ?? "manager",
+        eventType: "pr_merged",
+        details: {
+          hotfixPrNumber: incident.hotfix_pr_number,
+          releaseTag: isProdDeploy ? releaseTag : null,
+          deploymentDispatched: Boolean(deployment),
+          deploymentWorkflowUrl: deployment?.workflowUrl ?? null
+        }
+      });
+
+      if (isProdDeploy) {
+        await updateTraceByIncident(incident.id, {
+          status: deployment ? "merged_main" : "failed",
+          production_deployment: {
+            status: deployment ? "deploying" : "failed",
+            tag: releaseTag,
+            sha: merge.sha,
+            workflowUrl: deployment?.workflowUrl ?? null,
+            error: deploymentError
+          },
+          reverse_sync_pr_number: reverseSyncPr?.number ?? null,
+          reverse_sync_pr_url: reverseSyncPr?.html_url ?? null,
+          reverse_sync_status: reverseSyncPr ? "open" : reverseSyncError ? "failed" : null
+        }, {
+          eventType: reverseSyncPr ? "reverse_sync_created" : "deployment_started",
+          source: "system",
+          actor: "ShipBrain",
+          details: {
+            releaseTag,
+            deploymentWorkflowUrl: deployment?.workflowUrl ?? null,
+            reverseSyncPrNumber: reverseSyncPr?.number ?? null,
+            reverseSyncPrUrl: reverseSyncPr?.html_url ?? null,
+            reverseSyncError
+          }
+        });
+      }
+    } catch (traceError) {
+      console.error("hotfix release trace update failed", traceError);
+    }
 
     return NextResponse.json({
       incident: toIncident(data),

@@ -248,6 +248,7 @@ export async function GET(request: Request) {
 
   // Parse pagination params
   const url = new URL(request.url);
+  const requestedRunId = url.searchParams.get("run");
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
   const limit = Math.min(50, Math.max(5, parseInt(url.searchParams.get("limit") ?? "10", 10)));
   const offset = (page - 1) * limit;
@@ -255,6 +256,33 @@ export async function GET(request: Request) {
   const admin = getSupabaseAdminClient();
   await reconcileProductionDeployments(admin, user.id);
   await reconcileOpenPrWorkflowRuns(admin, user.id);
+
+  if (requestedRunId) {
+    const numericRunId = Number(requestedRunId);
+    if (!Number.isFinite(numericRunId)) {
+      return NextResponse.json({ error: "Invalid CI run id." }, { status: 400 });
+    }
+
+    const { data, error } = await supabase
+      .from("ci_runs")
+      .select("id, github_run_id, spec_id, pr_number, repo_full_name, workflow_name, title, html_url, head_sha, event, branch, status, conclusion, environment, preview_url, branch_alias, created_at, updated_at, specs(status, incident_id, decomposed_tasks, branch_name, base_branch, pr_number, pr_url, deployment_status, release_tag, release_status, deployment_url, preview_url, preview_status, preview_branch_alias, release_pr_number, release_pr_url, release_pr_status, incidents(id, title, status, hotfix_pr_number, hotfix_pr_url))")
+      .eq("github_run_id", numericRunId)
+      .maybeSingle();
+
+    if (error) {
+      return NextResponse.json({ error: "Unable to load CI run.", detail: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      runs: data ? [toCiRun(data)] : [],
+      pagination: {
+        page: 1,
+        limit: 1,
+        total: data ? 1 : 0,
+        totalPages: data ? 1 : 0
+      }
+    });
+  }
 
   // Get total count
   const { count } = await supabase

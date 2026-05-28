@@ -2,8 +2,9 @@
 
 import { CheckCircle2, ChevronLeft, ChevronRight, Copy, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, SearchCode, XCircle } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ApprovalGate } from "@/components/approval-gate/ApprovalGate";
+import { InputModal } from "@/components/ui/InputModal";
 
 type CiRun = {
   id: string;
@@ -103,6 +104,7 @@ type PendingDeploy = {
   previewBranchAlias?: string;
   releaseTag?: string;
   releaseSha?: string;
+  linkedReleaseStatus?: string;
   releasePrNumber?: number;
   releasePrUrl?: string;
   releasePrStatus?: string;
@@ -125,6 +127,8 @@ function defaultReleaseTag() {
 }
 
 export default function CiPage() {
+  const searchParams = useSearchParams();
+  const requestedRunId = searchParams.get("run");
   const [runs, setRuns] = useState<CiRun[]>([]);
   const [selected, setSelected] = useState<CiRun | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -142,6 +146,8 @@ export default function CiPage() {
   const [previewDismissed, setPreviewDismissed] = useState(false);
   const [queueActionLoading, setQueueActionLoading] = useState<string | null>(null);
   const [queueActionErrors, setQueueActionErrors] = useState<Record<string, string>>({});
+  const [productionDeployTarget, setProductionDeployTarget] = useState<PendingDeploy | null>(null);
+  const [releasePrTarget, setReleasePrTarget] = useState<PendingDeploy | null>(null);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -163,7 +169,10 @@ export default function CiPage() {
 
   async function loadRuns(page = currentPage) {
     try {
-      const response = await fetch(`/api/ci-runs?page=${page}&limit=${pageSize}`, { cache: "no-store" });
+      const query = requestedRunId
+        ? `run=${encodeURIComponent(requestedRunId)}`
+        : `page=${page}&limit=${pageSize}`;
+      const response = await fetch(`/api/ci-runs?${query}`, { cache: "no-store" });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to load CI runs");
       setRuns(json.runs ?? []);
@@ -172,6 +181,7 @@ export default function CiPage() {
       setCurrentPage(json.pagination?.page ?? 1);
       setError("");
       setSelected((current) => {
+        if (requestedRunId) return (json.runs ?? []).find((run: CiRun) => run.id === requestedRunId) ?? current;
         if (!current) return current;
         return (json.runs ?? []).find((run: CiRun) => run.id === current.id) ?? current;
       });
@@ -231,6 +241,7 @@ export default function CiPage() {
       case "preview_deploying": return "Preview Deploying";
       case "preview_ready": return "Preview Ready";
       case "release_pr_open": return "Release PR Open";
+      case "hotfix_pr_open": return "Hotfix PR Open";
       case "pending_production_deploy": return "Ready for Production";
       case "deploying": return "Deploying...";
       case "deploy_failed": return "Deploy Failed";
@@ -252,9 +263,17 @@ export default function CiPage() {
       case "preview_deploying":
         return "Preview deployment is in progress. The URL will appear when ready.";
       case "preview_ready":
+        if (item.releasePrNumber && item.releasePrStatus === "merged") {
+          return `Release PR #${item.releasePrNumber} is merged. Production deployment is waiting in the Production queue.`;
+        }
+        if (item.releasePrNumber) {
+          return `Preview is live and Release PR #${item.releasePrNumber} already exists. Review or merge it before production deploy.`;
+        }
         return "Preview is live! Test it, then create a Release PR to promote to production.";
       case "release_pr_open":
         return `Release PR #${item.releasePrNumber} is open. Merge it to proceed with production deployment.`;
+      case "hotfix_pr_open":
+        return `Hotfix PR #${item.prNumber} is open. Review and approve the fix from Incident Commander before production deployment.`;
       case "pending_production_deploy":
         return "Release PR is merged. Click Deploy to Production to create the release tag and deploy.";
       case "deploying":
@@ -266,17 +285,26 @@ export default function CiPage() {
     }
   }
 
-  async function startProductionDeploy(item: PendingDeploy) {
+  function openProductionDeployModal(item: PendingDeploy) {
+    setQueueActionErrors((prev) => ({ ...prev, [item.id]: "" }));
+    setProductionDeployTarget(item);
+  }
+
+  async function startProductionDeploy(item: PendingDeploy, requestedReleaseTag?: string) {
     setQueueActionLoading(item.id);
     setQueueActionErrors((prev) => ({ ...prev, [item.id]: "" }));
     try {
       const response = await fetch("/api/deployments/start-production", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ specId: item.id })
+        body: JSON.stringify({
+          specId: item.id,
+          releaseTag: requestedReleaseTag?.trim() || undefined
+        })
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to start production deployment");
+      setProductionDeployTarget(null);
       await loadPendingDeploys();
       await loadRuns();
     } catch (nextError) {
@@ -497,7 +525,9 @@ export default function CiPage() {
 
       {/* Cloudflare Pages handles environment variables automatically via ShipBrain setup */}
 
-      <section className="panel" style={{ marginBottom: 18 }}>
+      <section className="ci-monitor-layout">
+        <div className="ci-monitor-main">
+          <section className="panel">
           <header className="panel-head">
             <h2>
               Deployment Queue
@@ -545,12 +575,18 @@ export default function CiPage() {
                         {item.stage === "pending_production_deploy" && (
                           <button
                             className="btn-primary"
-                            onClick={() => startProductionDeploy(item)}
+                            onClick={() => openProductionDeployModal(item)}
                             disabled={queueActionLoading === item.id}
                           >
                             {queueActionLoading === item.id ? <Loader2 size={12} className="spin" /> : <Rocket size={12} />}
                             {queueActionLoading === item.id ? "Deploying..." : "Deploy to Production"}
                           </button>
+                        )}
+                        {item.stage === "hotfix_pr_open" && item.prUrl && (
+                          <a className="btn-primary" href={item.prUrl} target="_blank" rel="noreferrer">
+                            <GitPullRequest size={12} />
+                            Review Hotfix PR #{item.prNumber}
+                          </a>
                         )}
                         <button
                           className="btn subtle"
@@ -625,10 +661,10 @@ export default function CiPage() {
                               <ExternalLink size={12} />
                               Open Preview
                             </a>
-                            <Link className="btn subtle" href="/spec-to-pr?template=develop-to-prod">
-                              <Rocket size={12} />
-                              Create Release PR
-                            </Link>
+                            <button className="btn subtle" onClick={() => setReleasePrTarget(item)}>
+                              {item.releasePrNumber ? <GitPullRequest size={12} /> : <Rocket size={12} />}
+                              {item.releasePrNumber ? "Release PR Status" : "Promote to Production"}
+                            </button>
                           </>
                         )}
                         {item.stage === "release_pr_open" && item.releasePrUrl && (
@@ -663,10 +699,9 @@ export default function CiPage() {
               )}
             </div>
           )}
-      </section>
+          </section>
 
-      <section className="grid two">
-        <div className="panel">
+          <section className="panel">
           <header className="panel-head">
             <h2>
               Workflow Runs
@@ -799,9 +834,10 @@ export default function CiPage() {
               </div>
             )}
           </div>
+          </section>
         </div>
 
-        <aside className="panel">
+        <aside className="panel ci-workflow-details">
           <header className="panel-head">
             <h2>Workflow Details</h2>
           </header>
@@ -896,37 +932,10 @@ export default function CiPage() {
                   }}>{selected.logs}</pre>
                 </div>
 
-                <label className="field-label" htmlFor="release-tag" style={{ fontSize: 11, color: "var(--text-muted)" }}>Release tag</label>
-                <input
-                  id="release-tag"
-                  className="input compact"
-                  value={releaseTag}
-                  onChange={(event) => setReleaseTag(event.target.value)}
-                  placeholder="cart-v2026.05.23-143015-a1b2"
-                  style={{ width: "100%", marginTop: 4, marginBottom: 14, fontSize: 12.5 }}
-                />
-
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   <button className="btn-primary" onClick={() => analyze(selected)} disabled={busy} style={{ flex: 1, justifyContent: "center" }}>
                     {busy ? <Loader2 size={12} className="spin" /> : <SearchCode size={12} />}
                     {busy ? "Analyzing..." : selected.conclusion === "success" ? "Review run with AI" : "Explain run"}
-                  </button>
-                  <button
-                    className="btn subtle"
-                    disabled={(!selected.deploymentEligible && selected.releaseStatus !== "pending_deploy") || selected.isIncidentHotfix || deploymentBusy}
-                    onClick={() => setGateOpen(true)}
-                    style={{ flex: 1, justifyContent: "center" }}
-                  >
-                    <Rocket size={12} />
-                    {selected.isIncidentHotfix
-                      ? "Incident-linked"
-                      : deploymentBusy
-                        ? "Recording..."
-                        : selected.releaseStatus === "pending_deploy"
-                          ? "Tag & deploy"
-                          : selected.isReleasePromotionPr
-                            ? "Merge, tag, deploy"
-                            : "Validate & audit"}
                   </button>
                 </div>
 
@@ -1022,25 +1031,81 @@ export default function CiPage() {
         </aside>
       </section>
 
-      <ApprovalGate
-        open={gateOpen}
-        title={selected?.releaseStatus === "pending_deploy"
-          ? "Tag and deploy production"
-          : selected?.isReleasePromotionPr
-            ? "Merge, tag, and deploy"
-            : "Validate develop CI"}
-        description={selected?.releaseStatus === "pending_deploy"
-          ? "This release PR is already merged on GitHub. ShipBrain will create the unique release tag you entered and dispatch the Vercel production workflow."
-          : selected?.isReleasePromotionPr
-            ? "This approves the green develop-to-main release PR. ShipBrain will merge it into main, create the release tag you entered, and dispatch the Vercel production workflow."
-            : "This validates develop CI and starts a Vercel Preview deployment for the develop environment. No release tag is created. Production still goes through a develop-to-main release PR and the tag-and-deploy gate."
-        }
-        entityType="ci_run"
-        entityId={selected?.id ?? "none"}
-        onApprove={(note) => recordDeploymentDecision("deploy_approved", note)}
-        onReject={(note) => recordDeploymentDecision("deploy_rejected", note)}
-        onClose={() => setGateOpen(false)}
+      <InputModal
+        open={Boolean(productionDeployTarget)}
+        title="Deploy to production"
+        label="Release tag"
+        placeholder={defaultReleaseTag()}
+        defaultValue={productionDeployTarget?.releaseTag ?? ""}
+        confirmLabel={queueActionLoading === productionDeployTarget?.id ? "Deploying..." : "Start Deployment"}
+        cancelLabel="Cancel"
+        onClose={() => {
+          if (queueActionLoading) return;
+          setProductionDeployTarget(null);
+        }}
+        onConfirm={(value) => {
+          if (!productionDeployTarget || queueActionLoading) return;
+          void startProductionDeploy(productionDeployTarget, value);
+        }}
       />
+      {releasePrTarget ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setReleasePrTarget(null)}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+              <div>
+                <div className="eyebrow mono">Production promotion</div>
+                <h2 style={{ margin: "4px 0 0" }}>
+                  {releasePrTarget.releasePrNumber ? `Release PR #${releasePrTarget.releasePrNumber}` : "Create release PR"}
+                </h2>
+              </div>
+              <button className="btn subtle compact" onClick={() => setReleasePrTarget(null)}>Close</button>
+            </div>
+
+            {releasePrTarget.releasePrNumber ? (
+              <>
+                <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                  ShipBrain already found the release promotion for this develop preview. Do not create another release PR for the same develop snapshot.
+                </p>
+                <div className="card" style={{ padding: 12, margin: "12px 0" }}>
+                  <p style={{ margin: 0, fontSize: 13 }}>
+                    <strong>Status:</strong>{" "}
+                    {releasePrTarget.releasePrStatus === "merged"
+                      ? "Merged. Production deployment is waiting in the Production queue."
+                      : "Open. Review and merge it before production deployment."}
+                  </p>
+                  {releasePrTarget.linkedReleaseStatus ? (
+                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                      Release state: {releasePrTarget.linkedReleaseStatus}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="toolbar modal-actions" style={{ justifyContent: "space-between" }}>
+                  <button className="btn subtle" onClick={() => setReleasePrTarget(null)}>Done</button>
+                  {releasePrTarget.releasePrUrl ? (
+                    <a className="btn-primary" href={releasePrTarget.releasePrUrl} target="_blank" rel="noreferrer">
+                      <GitPullRequest size={12} />
+                      Open Release PR
+                    </a>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                  Preview is live for develop, but ShipBrain has not found a develop-to-main release PR yet. Create one only when this preview is approved for production.
+                </p>
+                <div className="toolbar modal-actions" style={{ justifyContent: "space-between" }}>
+                  <button className="btn subtle" onClick={() => setReleasePrTarget(null)}>Cancel</button>
+                  <Link className="btn-primary" href="/spec-to-pr?template=develop-to-prod" onClick={() => setReleasePrTarget(null)}>
+                    <Rocket size={12} />
+                    Create Release PR
+                  </Link>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

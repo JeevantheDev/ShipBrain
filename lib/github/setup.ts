@@ -522,7 +522,7 @@ jobs:
     name: Sync hotfix to develop
     runs-on: ubuntu-latest
     needs: deploy
-    if: inputs.is_hotfix == 'true' && inputs.reverse_sync == 'true'
+    if: \${{ needs.deploy.result == 'success' && inputs.is_hotfix == 'true' && inputs.reverse_sync == 'true' }}
     permissions:
       contents: write
       pull-requests: write
@@ -533,35 +533,43 @@ jobs:
           fetch-depth: 0
           token: \${{ secrets.GITHUB_TOKEN }}
       - name: Create reverse sync PR
+        id: reverse_sync
         env:
           GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          SYNC_BRANCH="shipbrain/reverse-sync-\${{ inputs.release_tag }}"
-
-          # Create branch from main/master
-          git checkout -b "$SYNC_BRANCH"
-
-          # Push the branch
-          git push origin "$SYNC_BRANCH"
-
-          # Create PR to sync main → develop
-          gh pr create \\
+          EXISTING=$(gh pr list \\
             --base "${devBranch}" \\
-            --head "$SYNC_BRANCH" \\
-            --title "chore: sync \${{ inputs.release_tag }} hotfix to ${devBranch}" \\
-            --body "## Reverse Sync
+            --head "${input.prodBranch}" \\
+            --state open \\
+            --json number,url \\
+            --jq '.[0] // empty')
+
+          if [ -n "$EXISTING" ]; then
+            PR_NUMBER=$(echo "$EXISTING" | jq -r '.number')
+            PR_URL=$(echo "$EXISTING" | jq -r '.url')
+            echo "Existing reverse sync PR found: #$PR_NUMBER"
+          else
+            PR_URL=$(gh pr create \\
+              --base "${devBranch}" \\
+              --head "${input.prodBranch}" \\
+              --title "chore: sync \${{ inputs.release_tag }} hotfix to ${devBranch}" \\
+              --body "## Reverse Sync
 
           This PR syncs the hotfix **\${{ inputs.release_tag }}** from \`${input.prodBranch}\` back to \`${devBranch}\`.
 
           **Why?** After a hotfix is deployed to production, the fix needs to be merged back to ${devBranch} to prevent regression.
 
           ---
-          _Created automatically by ShipBrain_"
+          _Created automatically by ShipBrain_")
+            PR_NUMBER=$(gh pr view "$PR_URL" --json number --jq '.number')
+            echo "Reverse sync PR created: #$PR_NUMBER"
+          fi
 
-          echo "Reverse sync PR created successfully"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
       - name: Notify ShipBrain of reverse sync
         continue-on-error: true
         env:
@@ -577,7 +585,9 @@ jobs:
             -d "{
               \\"repo\\": \\"$GITHUB_REPOSITORY\\",
               \\"release_tag\\": \\"\${{ inputs.release_tag }}\\",
-              \\"sync_branch\\": \\"shipbrain/reverse-sync-\${{ inputs.release_tag }}\\",
+              \\"sync_branch\\": \\"${input.prodBranch}\\",
+              \\"pr_number\\": \\"\${{ steps.reverse_sync.outputs.pr_number }}\\",
+              \\"pr_url\\": \\"\${{ steps.reverse_sync.outputs.pr_url }}\\",
               \\"status\\": \\"\${{ job.status }}\\"
             }"
 `;

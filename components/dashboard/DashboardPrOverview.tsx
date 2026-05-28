@@ -274,6 +274,7 @@ export function DashboardPrOverview() {
             {activeRuns.map((run) => {
               const isMerged = run.status === "merged";
               const isClosed = run.status === "closed";
+              const canManageDraft = run.status === "pending_pr" || run.status === "draft_created";
               return (
                 <div className="pr-row" key={run.id}>
                   <div className={`pr-icon ${isMerged ? "merged" : ""}`} title={statusLabel(run)}>
@@ -302,16 +303,32 @@ export function DashboardPrOverview() {
                         Preview
                       </a>
                     ) : null}
-                    <Link
-                      className="btn primary"
-                      href="/spec-to-pr"
-                      onClick={() => window.localStorage.setItem(selectedStorageKey, run.id)}
-                    >
-                      Resume
-                    </Link>
-                    <button className="btn" style={{ padding: "0 8px", color: "var(--red)" }} aria-label="Delete recent PR" title="Delete" onClick={() => deleteRun(run.id)}>
-                      <Trash2 size={14} />
-                    </button>
+                    {canManageDraft ? (
+                      <Link
+                        className="btn primary"
+                        href="/spec-to-pr"
+                        onClick={() => window.localStorage.setItem(selectedStorageKey, run.id)}
+                      >
+                        Resume
+                      </Link>
+                    ) : isMerged ? (
+                      <Link className="btn subtle" href="/ci">
+                        View in CI
+                      </Link>
+                    ) : (
+                      <Link
+                        className="btn subtle"
+                        href="/spec-to-pr"
+                        onClick={() => window.localStorage.setItem(selectedStorageKey, run.id)}
+                      >
+                        View record
+                      </Link>
+                    )}
+                    {canManageDraft ? (
+                      <button className="btn" style={{ padding: "0 8px", color: "var(--red)" }} aria-label="Delete recent PR" title="Delete" onClick={() => deleteRun(run.id)}>
+                        <Trash2 size={14} />
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               );

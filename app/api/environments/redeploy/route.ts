@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { dispatchDevelopPreviewDeploy, dispatchCloudflareProductionDeploy } from "@/lib/github/deployments";
+import { createReleaseTag, dispatchDevelopPreviewDeploy, dispatchCloudflareProductionDeploy } from "@/lib/github/deployments";
 import { getOctokit } from "@/lib/github/client";
 
 export const runtime = "nodejs";
@@ -13,8 +13,9 @@ function splitRepo(repoFullName: string) {
 function generateReleaseTag() {
   const now = new Date();
   const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-  const time = now.toISOString().slice(11, 16).replace(":", "");
-  return `release-v${date}-${time}`;
+  const time = now.toISOString().slice(11, 19).replace(/:/g, "");
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `release-v${date}-${time}-${suffix}`;
 }
 
 export async function POST(request: Request) {
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
 
   const body = await request.json();
   const { repo: repoFullName, environment, branch } = body;
+  const requestedReleaseTag = String(body.releaseTag ?? "").trim();
 
   if (!repoFullName) {
     return NextResponse.json({ error: "repo is required" }, { status: 400 });
@@ -82,7 +84,27 @@ export async function POST(request: Request) {
       });
 
     } else {
-      // For production, we need to get the latest SHA from main
+      const { data: latestRelease, error: releaseError } = await supabase
+        .from("specs")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("repo_full_name", repoFullName)
+        .eq("release_status", "deployed")
+        .order("deployed_at", { ascending: false })
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (releaseError || !latestRelease?.id) {
+        return NextResponse.json(
+          {
+            error: "Production has not been deployed yet.",
+            detail: "Redeploy is available only after the first successful production deployment. Use CI Monitor to deploy the merged release PR first."
+          },
+          { status: 409 }
+        );
+      }
+
       const octokit = getOctokit();
       const { data: ref } = await octokit.git.getRef({
         owner,
@@ -91,29 +113,15 @@ export async function POST(request: Request) {
       });
 
       const releaseSha = ref.object.sha;
-      const releaseTag = generateReleaseTag();
+      const releaseTag = requestedReleaseTag || generateReleaseTag();
 
-      // Create release tag
-      try {
-        const { data: tagObject } = await octokit.git.createTag({
-          owner,
-          repo,
-          tag: releaseTag,
-          message: `Production redeploy from ShipBrain`,
-          object: releaseSha,
-          type: "commit"
-        });
-
-        await octokit.git.createRef({
-          owner,
-          repo,
-          ref: `refs/tags/${releaseTag}`,
-          sha: tagObject.sha
-        });
-      } catch (tagError) {
-        // Tag might already exist, continue
-        console.error("Tag creation error:", tagError);
-      }
+      await createReleaseTag({
+        owner,
+        repo,
+        tag: releaseTag,
+        sha: releaseSha,
+        message: `Production redeploy ${releaseTag} from ShipBrain`
+      });
 
       // Dispatch production deployment
       const deployment = await dispatchCloudflareProductionDeploy({
@@ -134,9 +142,20 @@ export async function POST(request: Request) {
           repo: repoFullName,
           releaseTag,
           releaseSha,
+          source: "current_main",
           workflowUrl: deployment.workflowUrl
         }
       });
+
+      await supabase
+        .from("specs")
+        .update({
+          release_status: "deploying",
+          release_tag: releaseTag,
+          release_sha: releaseSha,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", latestRelease.id);
 
       return NextResponse.json({
         ok: true,
