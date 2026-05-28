@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AuthForm } from "@/components/auth/AuthForm";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import "../../landing.css";
 
 export default async function LoginPage() {
   const supabase = getSupabaseServerClient();
@@ -11,7 +12,7 @@ export default async function LoginPage() {
   if (user) redirect("/dashboard");
 
   return (
-    <main style={{ display: "grid", minHeight: "100vh", placeItems: "center", padding: 24 }}>
+    <main className="landing-page-wrapper" style={{ display: "grid", minHeight: "100vh", placeItems: "center", padding: 24 }}>
       <section className="panel" style={{ width: "min(460px, 100%)" }}>
         <div className="brand" style={{ color: "var(--ink)", marginBottom: 20 }}>
           <div className="brand-mark">SB</div>

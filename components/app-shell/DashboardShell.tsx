@@ -87,10 +87,10 @@ export function DashboardShell({ children, provider, user }: DashboardShellProps
             <span className="pill ai-pill desktop-status">
               <span className="ai-diamond">◆</span> {provider}
             </span>
-            <span className="pill desktop-status gates-pill">
+            {/* <span className="pill desktop-status gates-pill">
               <span className="status-dot"></span>
               gates armed
-            </span>
+            </span> */}
             <NotificationBell />
           </div>
         </header>

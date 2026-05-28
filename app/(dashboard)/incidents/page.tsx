@@ -561,7 +561,7 @@ export default function IncidentsPage() {
         <div>
           <div className="eyebrow mono">
             <span className="bar"></span>
-            <span className="pillar-tag">Pillar 03</span>
+            <span className="pillar-tag">Pillar 04</span>
             Incident Commander
           </div>
           <h1>Capture alerts, analyze logs, and dispatch automated hotfixes.</h1>

@@ -3,7 +3,12 @@
 =================================================================== */
 
 .landing-page-wrapper {
-  background: #0d1117;
+  background: #161b22;
+  background-image:
+    linear-gradient(var(--border-muted, #21262d) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-muted, #21262d) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-position: center top;
   color: #e6edf3;
   font-family: "Geist", -apple-system, sans-serif;
   font-size: 17px;
@@ -67,7 +72,7 @@ body.landing-active {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(13, 17, 23, 0.85);
+  background: #161b22;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border-muted);
@@ -146,7 +151,8 @@ body.landing-active {
   margin-bottom: 28px;
 }
 .section-h {
-  font-family: "Instrument Serif", serif;
+ /* font-family: "Instrument Serif", serif;*/
+  font-family: "Lexend Deca", sans-serif;
   font-weight: 400;
   font-size: 64px;
   line-height: 1.08;
@@ -179,9 +185,9 @@ body.landing-active {
   margin-bottom: 36px;
 }
 .hero-h {
-  font-family: "Instrument Serif", serif;
+  font-family: "Lexend Deca", sans-serif;
   font-weight: 400;
-  font-size: 112px;
+  font-size: 90px;
   line-height: 1.02;
   letter-spacing: -0.015em;
   color: var(--text);

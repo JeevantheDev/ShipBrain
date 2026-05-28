@@ -23,10 +23,23 @@ export default async function LandingPage() {
       <header className="lp-top">
         <div className="container lp-top-inner">
           <Link href="#" className="wordmark">
-            <span className="glyph">◆</span>
-            shipbrain
+             <div className="brand-mark">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <rect x="1" y="2" width="4" height="2" rx="0.5" fill="#e6edf3" />
+                <rect x="6" y="2" width="7" height="2" rx="0.5" fill="#7d8590" />
+                <rect x="1" y="6" width="9" height="2" rx="0.5" fill="#e6edf3" />
+                <rect x="11" y="6" width="2" height="2" rx="0.5" fill="#a371f7" />
+                <rect x="1" y="10" width="6" height="2" rx="0.5" fill="#e6edf3" />
+                <rect x="8" y="10" width="5" height="2" rx="0.5" fill="#7d8590" />
+              </svg>
+            </div>
+            <div>
+              <strong style={{ fontSize: 16, letterSpacing: "-0.01em" }}>
+                ship<em style={{ fontStyle: "normal", color: "var(--ai-purple)" }}>brain</em>
+              </strong>
+            </div>
           </Link>
-          <nav className="lp-nav">
+          {/* <nav className="lp-nav">
             <a href="#product">product</a>
             <span className="sep">·</span>
             <a href="#gates">gates</a>
@@ -34,7 +47,7 @@ export default async function LandingPage() {
             <a href="#demo">demo</a>
             <span className="sep">·</span>
             <a href="#team">team</a>
-          </nav>
+          </nav> */}
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <Link href="/login" className="btn-cta ghost" style={{ height: "32px", padding: "0 14px", fontSize: "12px", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               Sign In
@@ -50,10 +63,11 @@ export default async function LandingPage() {
       {/* ============ HERO ============ */}
       <section className="section hero">
         <div className="container hero-inner">
-          <span className="mono-label eyebrow">{"// hackathon · 2026"}</span>
+          {/* <span className="mono-label eyebrow">{"// hackathon · 2026"}</span> */}
+          <br/><br/>
           <h1 className="hero-h">
-            Ship software at <em>AI&nbsp;speed</em>,<br />
-            with humans <em>still in charge</em>.
+            Ship software at AI&nbsp;speed,<br />
+            with humans still in charge.
           </h1>
           <p className="hero-sub">
             ShipBrain turns a Jira ticket into a reviewed pull request, explains your red CI in plain English, and drafts the post-mortem before the incident is closed — but never <em>acts</em> without you pressing confirm.
@@ -61,7 +75,7 @@ export default async function LandingPage() {
           <div className="cta-row">
             <Link href="/login" className="btn-cta">Get Started →</Link>
             <a href="#demo" className="btn-cta ghost">See the demo</a>
-            <a href="https://github.com/JeevantheDev/ShipBrain" className="text-link" target="_blank" rel="noopener noreferrer">GitHub <span className="arr">↗</span></a>
+            {/* <a href="https://github.com/JeevantheDev/ShipBrain" className="text-link" target="_blank" rel="noopener noreferrer">GitHub <span className="arr">↗</span></a> */}
           </div>
           <div className="hero-caption">
             <span className="mono-label">scroll to see the four moves</span>
@@ -77,7 +91,7 @@ export default async function LandingPage() {
           <header className="section-head">
             <span className="mono-label">01 / the problem</span>
             <h2 className="section-h">
-              Engineers spend <em>more time on the loop</em> than the work.
+              Engineers spend more time on the loop than the work.
             </h2>
           </header>
 
@@ -90,9 +104,9 @@ export default async function LandingPage() {
             </p>
           </div>
 
-          <blockquote className="pull-quote">
+          {/* <blockquote className="pull-quote">
             &ldquo;The right shape is: AI proposes, human approves, system acts.&rdquo;
-          </blockquote>
+          </blockquote> */}
         </div>
       </section>
 
@@ -102,7 +116,7 @@ export default async function LandingPage() {
           <header className="section-head">
             <span className="mono-label">02 / the product</span>
             <h2 className="section-h">
-              Four moves. Every one of them <em>gated</em>.
+              Four moves. Every one of them gated.
             </h2>
           </header>
 
@@ -150,7 +164,7 @@ export default async function LandingPage() {
           <header className="section-head">
             <span className="mono-label">03 / the bet</span>
             <h2 className="section-h">
-              The whole product is <em>one design idea</em>.
+              The whole product is one design idea.
             </h2>
           </header>
 
@@ -204,33 +218,6 @@ export default async function LandingPage() {
         </div>
       </section>
 
-      {/* ============ SECTION 04 — Model-agnostic ============ */}
-      <section className="section">
-        <div className="container">
-          <header className="section-head">
-            <span className="mono-label">04 / model-agnostic</span>
-            <h2 className="section-h">
-              Swap the brain. <em>Keep the gates.</em>
-            </h2>
-          </header>
-
-          <div className="narrow">
-            <p className="body-p">
-              ShipBrain talks to Claude by default, but the provider is one line in <span className="light" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "15px" }}>.env</span>. Anthropic, OpenAI, a local model — change the brain, every approval gate, prompt, and workflow stays identical.
-            </p>
-          </div>
-
-          <div className="codeblock">
-            <button className="copy-btn" type="button">copy</button>
-            <span className="key">AI_PROVIDER</span>=<span className="val">anthropic</span><br />
-            <span className="key">AI_MODEL</span>=<span className="val">claude-sonnet-4.6</span><br />
-            <br />
-            <span className="comment"># swap to:</span><br />
-            <span className="key">AI_PROVIDER</span>=<span className="val">openai</span><br />
-            <span className="key">AI_MODEL</span>=<span className="val">gpt-4.1</span>
-          </div>
-        </div>
-      </section>
 
       {/* ============ SECTION 05 — Demo ============ */}
       <section className="section" id="demo">
@@ -238,7 +225,7 @@ export default async function LandingPage() {
           <header className="section-head">
             <span className="mono-label">05 / the demo</span>
             <h2 className="section-h">
-              Two minutes. <em>Four moves.</em> One ticket.
+              Two minutes. our moves. One ticket.
             </h2>
           </header>
 
@@ -264,76 +251,6 @@ export default async function LandingPage() {
         </div>
       </section>
 
-      {/* ============ SECTION 06 — Is / Isn't ============ */}
-      <section className="section">
-        <div className="container">
-          <header className="section-head">
-            <span className="mono-label">06 / honest disclosures</span>
-            <h2 className="section-h">
-              What it <em>is</em>. What it <em>isn&apos;t</em>.
-            </h2>
-          </header>
-
-          <div className="is-isnt">
-            <div className="is-list">
-              <div className="col-h is">it is</div>
-              <ul>
-                <li>A console for one engineer or a small team</li>
-                <li>A wrapper around your existing GitHub + CI + alerting</li>
-                <li>A demonstration that approval gates beat autonomy</li>
-                <li>Open source, MIT licensed</li>
-                <li>A hackathon submission, built in a weekend</li>
-              </ul>
-            </div>
-            <div className="is-list">
-              <div className="col-h isnt">it isn&apos;t</div>
-              <ul>
-                <li>An autonomous agent</li>
-                <li>A replacement for code review</li>
-                <li>Production-ready for your Fortune 500</li>
-                <li>A startup (yet)</li>
-                <li>Magic <span className="muted">— it makes mistakes, which is exactly why the gates exist</span></li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ============ SECTION 07 — Team ============ */}
-      <section className="section" id="team">
-        <div className="container">
-          <header className="section-head">
-            <span className="mono-label">07 / team</span>
-            <h2 className="section-h">
-              Built by <em>1 engineer</em>, in <em>48 hours</em>.
-            </h2>
-          </header>
-
-          <div className="narrow">
-            <p className="body-p">Hackathon team. Find us on the demo floor.</p>
-          </div>
-
-          <div className="team-row" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
-            <article className="team-card">
-              <span className="team-avatar">JD</span>
-              <div>
-                <div className="team-name" style={{ fontWeight: 600 }}>Jeevan Jyoti Dash</div>
-                <div className="team-role" style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>Full Stack Architect</div>
-                <a href="https://github.com/JeevantheDev" className="team-link" target="_blank" rel="noopener noreferrer" style={{ display: "inline-block", marginTop: "8px" }}>@JeevantheDev</a>
-              </div>
-            </article>
-
-            <article className="team-card">
-              <span className="team-avatar">SB</span>
-              <div>
-                <div className="team-name" style={{ fontWeight: 600 }}>ShipBrain AI</div>
-                <div className="team-role" style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>Mechanical Operator</div>
-                <span className="team-role" style={{ display: "inline-block", marginTop: "8px", color: "var(--ai-purple)" }}>Autonomous Agent</span>
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
 
       {/* ============ CONTACT / FOOTER ============ */}
       <section className="section contact">
@@ -341,15 +258,15 @@ export default async function LandingPage() {
           <header className="section-head">
             <span className="mono-label">{"// the inbox is open"}</span>
             <h2 className="section-h">
-              Want to break it? <em>Please do.</em>
+              Want to break it? Please do.
             </h2>
           </header>
 
-          <div className="narrowest">
+          {/* <div className="narrowest">
             <p className="body-p">
               This is a hackathon build. It has bugs. We&apos;d rather hear about them than not. Open an issue, send an email, find us on the demo floor.
             </p>
-          </div>
+          </div> */}
 
           <div className="contact-links">
             <div className="contact-row">

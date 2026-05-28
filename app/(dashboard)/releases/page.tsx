@@ -35,13 +35,24 @@ export default async function ReleasesPage() {
 
   return (
     <>
-      <div className="page-header">
+         <header className="page-head">
+          <div>
+            <div className="eyebrow mono">
+              <span className="bar"></span>
+              <span className="pillar-tag">Pillar 03</span>
+              Release Trace 
+            </div>
+            <h1>One timeline for every PR, deploy, and hotfix.</h1>
+            <p className="sub">Webhook-backed release state for Dashboard, CI Monitor, Incidents, and Telegram.</p>
+          </div>
+        </header>
+      {/* <div className="page-header">
         <div>
           <span className="eyebrow">Release Trace</span>
           <h1>One timeline for every PR, deploy, and hotfix.</h1>
           <p>Webhook-backed release state for Dashboard, CI Monitor, Incidents, and Telegram.</p>
         </div>
-      </div>
+      </div> */}
 
       {traces?.length ? (
         <ReleaseTraceBoard traces={traces as any} eventsByTrace={eventsByTrace} />
