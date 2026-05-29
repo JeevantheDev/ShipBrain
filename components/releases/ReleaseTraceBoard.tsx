@@ -1,17 +1,11 @@
 "use client";
 
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ExternalLink,
-  GitPullRequest,
-  Rocket,
-  X,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, GitPullRequest, RefreshCw, Rocket, X } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { TraceActions } from "@/components/releases/TraceActions";
-import { TraceTimeline } from "@/components/releases/TraceTimeline";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type TraceEvent = {
   id?: string;
@@ -46,25 +40,14 @@ type Trace = {
   reverse_sync_pr_number?: number | null;
   reverse_sync_pr_url?: string | null;
   reverse_sync_status?: string | null;
-  preview_deployment?: {
-    url?: string;
-    status?: string;
-    runId?: string | number;
-    run_id?: string | number;
-    workflowRunId?: string | number;
-  } | null;
-  production_deployment?: {
-    url?: string;
-    status?: string;
-    tag?: string;
-    releaseTag?: string;
-    runId?: string | number;
-    run_id?: string | number;
-    workflowRunId?: string | number;
-  } | null;
+  preview_deployment?: { url?: string; status?: string; runId?: string | number; run_id?: string | number; workflowRunId?: string | number } | null;
+  production_deployment?: { url?: string; status?: string; tag?: string; releaseTag?: string; runId?: string | number; run_id?: string | number; workflowRunId?: string | number; isRollback?: boolean } | null;
   incident_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  is_rollback?: boolean;
+  rollback_source_tag?: string | null;
+  rollback_target_tag?: string | null;
 };
 
 type BoardColumn = {
@@ -82,8 +65,7 @@ const columns: BoardColumn[] = [
     title: "Needs attention",
     description: "Blocked, failed, or waiting on a human decision.",
     empty: "No blocked releases.",
-    matches: (trace) =>
-      trace.status === "failed" || Boolean(trace.pending_action),
+    matches: (trace) => trace.status === "failed" || trace.pending_action?.type === "resolve_conflict",
     color: "#ba181b",
   },
   {
@@ -92,7 +74,7 @@ const columns: BoardColumn[] = [
     description: "Draft PRs, reviews, and develop merges.",
     empty: "No draft work in progress.",
     matches: (trace) =>
-      !trace.pending_action &&
+      !(trace.type === "hotfix" && trace.target_branch === "main") &&
       ["draft", "ready_for_review", "approved"].includes(trace.status),
     color: "#1e6091",
   },
@@ -102,28 +84,26 @@ const columns: BoardColumn[] = [
     description: "Develop preview validation before promotion.",
     empty: "No preview validations.",
     matches: (trace) =>
-      !trace.pending_action &&
+      !(trace.type === "hotfix" && trace.target_branch === "main") &&
       ["merged_develop", "preview_live"].includes(trace.status),
     color: "#ffd000",
   },
   {
     id: "production",
     title: "Production",
-    description: "Release PRs, tags, deploys, and hotfixes.",
+    description: "Release PRs, tags, active deploys, and hotfixes.",
     empty: "No production deployments in flight.",
     matches: (trace) =>
-      !trace.pending_action &&
-      ["release_pending", "merged_main", "production_live"].includes(
-        trace.status,
-      ),
+      (trace.type === "hotfix" && trace.target_branch === "main" && ["draft", "ready_for_review", "approved", "merged_main", "production_live", "failed", "rolling_back"].includes(trace.status)) ||
+      ["release_pending", "merged_main", "production_live", "completed", "rolling_back"].includes(trace.status),
     color: "#613dc1",
   },
   {
-    id: "done",
-    title: "Done",
-    description: "Completed or cancelled release traces.",
-    empty: "No completed traces yet.",
-    matches: (trace) => ["completed", "cancelled"].includes(trace.status),
+    id: "cancelled",
+    title: "Closed",
+    description: "Cancelled and rolled-back release traces kept for audit.",
+    empty: "No closed traces.",
+    matches: (trace) => ["cancelled", "rolled_back"].includes(trace.status),
     color: "#008000",
   },
 ];
@@ -134,6 +114,8 @@ function statusLabel(value: string) {
 
 function stageClass(trace: Trace) {
   if (trace.status === "failed") return "failed";
+  if (trace.status === "rolling_back") return "rolling_back";
+  if (trace.status === "rolled_back") return "rolled_back";
   if (trace.pending_action) return "running";
   if (["completed", "production_live"].includes(trace.status)) return "passed";
   return "";
@@ -151,11 +133,15 @@ function dateLabel(value?: string | null) {
 function primaryActionLabel(trace: Trace) {
   if (trace.pending_action?.description)
     return trace.pending_action.description;
+  if (trace.status === "rolled_back" && trace.rollback_target_tag)
+    return `This release was rolled back. Production is now on ${trace.rollback_target_tag}.`;
+  if (trace.status === "rolling_back" && trace.rollback_target_tag)
+    return `Rollback to ${trace.rollback_target_tag} is running.`;
   if (trace.preview_deployment?.url && trace.status === "preview_live")
     return "Preview is live. Promote to production when approved.";
   if (trace.production_deployment?.url)
     return "Production deployment is available.";
-  if (trace.status === "completed") return "Release trace completed.";
+  if (trace.status === "completed") return "Production release is live and retained for audit.";
   return "No pending action.";
 }
 
@@ -193,18 +179,64 @@ function deploymentLabel(url?: string) {
     : "Deployment URL";
 }
 
-export function ReleaseTraceBoard({
-  traces,
-  eventsByTrace,
-}: {
-  traces: Trace[];
-  eventsByTrace: Record<string, TraceEvent[]>;
-}) {
+function journeyLabel(trace: Trace) {
+  const feature = trace.draft_pr_number ? (trace.source_branch ?? "feature") : (trace.source_branch ?? "source");
+  if (trace.type === "hotfix" && trace.target_branch === "main") {
+    return trace.reverse_sync_pr_number
+      ? `${feature} → main → production → sync develop`
+      : `${feature} → main → production`;
+  }
+  if (trace.release_pr_number || ["release_pending", "merged_main", "production_live", "completed"].includes(trace.status)) {
+    return `${feature} → develop → preview → main → production`;
+  }
+  if (trace.type === "hotfix") {
+    return `${feature} → develop → preview`;
+  }
+  if (["merged_develop", "preview_live"].includes(trace.status)) {
+    return `${feature} → develop → preview`;
+  }
+  return `${feature} → ${trace.target_branch ?? "target"}`;
+}
+
+function currentGateLabel(trace: Trace) {
+  if (trace.type === "hotfix" && trace.target_branch === "main" && ["draft", "ready_for_review", "approved"].includes(trace.status)) {
+    return "Production hotfix PR is awaiting incident fix approval.";
+  }
+  if (trace.status === "release_pending") return "Release PR merged. Waiting for Deploy to Production.";
+  if (trace.status === "merged_main") return "Production deployment is running.";
+  if (trace.status === "production_live") return "Production deployment completed.";
+  if (trace.status === "completed") return "Production release completed.";
+  if (trace.status === "rolling_back") return "Rollback is running.";
+  if (trace.status === "rolled_back") return "Rollback completed.";
+  if (trace.status === "preview_live") return "Preview is live. Ready for production promotion.";
+  if (trace.status === "merged_develop") return "Develop merge detected. Waiting for preview deployment.";
+  return trace.pending_action?.description ?? trace.current_phase ?? "Tracked";
+}
+
+export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: Trace[]; eventsByTrace: Record<string, TraceEvent[]>; userId: string }) {
+  const router = useRouter();
+  const refreshTimer = useRef<number | null>(null);
+  const [isPending, startTransition] = useTransition();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = useMemo(
-    () => traces.find((trace) => trace.id === selectedId) ?? null,
-    [selectedId, traces],
-  );
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [liveStatus, setLiveStatus] = useState<"connecting" | "live" | "syncing" | "offline">("connecting");
+  const selected = useMemo(() => traces.find((trace) => trace.id === selectedId) ?? null, [selectedId, traces]);
+
+  const refreshBoard = useCallback((source: "manual" | "webhook" = "manual") => {
+    setLiveStatus(source === "webhook" ? "syncing" : "syncing");
+    startTransition(() => {
+      router.refresh();
+      setLastSyncedAt(new Date());
+      setLiveStatus("live");
+    });
+  }, [router]);
+
+  const scheduleWebhookRefresh = useCallback(() => {
+    if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
+    refreshTimer.current = window.setTimeout(() => {
+      refreshBoard("webhook");
+    }, 450);
+  }, [refreshBoard]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -214,6 +246,45 @@ export function ReleaseTraceBoard({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  useEffect(() => {
+    if (selectedId && !traces.some((trace) => trace.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [selectedId, traces]);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    const channel = supabase
+      .channel(`release-trace-board:${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "release_traces",
+          filter: `user_id=eq.${userId}`
+        },
+        scheduleWebhookRefresh
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "trace_events"
+        },
+        scheduleWebhookRefresh
+      )
+      .subscribe((status) => {
+        setLiveStatus(status === "SUBSCRIBED" ? "live" : status === "CHANNEL_ERROR" || status === "TIMED_OUT" ? "offline" : "connecting");
+      });
+
+    return () => {
+      if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
+      void supabase.removeChannel(channel);
+    };
+  }, [scheduleWebhookRefresh, userId]);
+
   const grouped = columns.map((column) => ({
     ...column,
     traces: traces.filter(column.matches),
@@ -221,6 +292,22 @@ export function ReleaseTraceBoard({
 
   return (
     <>
+      <div className="release-board-toolbar">
+        <div>
+          <span className={`status-pill ${liveStatus === "live" ? "passed" : liveStatus === "offline" ? "failed" : "running"}`}>
+            <span className="dot"></span>
+            {liveStatus === "live" ? "Webhook live sync" : liveStatus === "offline" ? "Live sync offline" : "Syncing"}
+          </span>
+          <span className="release-sync-meta">
+            {lastSyncedAt ? `Last synced ${lastSyncedAt.toLocaleTimeString()}` : "Listening for GitHub PR and workflow updates"}
+          </span>
+        </div>
+        <button className="btn subtle" type="button" onClick={() => refreshBoard("manual")} disabled={isPending || liveStatus === "syncing"}>
+          <RefreshCw size={13} className={isPending || liveStatus === "syncing" ? "spin" : ""} />
+          Refresh
+        </button>
+      </div>
+
       <section className="release-board-shell">
         <div className="release-board">
           {grouped.map((column) => (
@@ -254,9 +341,7 @@ export function ReleaseTraceBoard({
                       <strong>{trace.title}</strong>
                       <p>{trace.repo_full_name}</p>
                       <div className="trace-branches">
-                        <code>{trace.source_branch ?? "source"}</code>
-                        <span>→</span>
-                        <code>{trace.target_branch ?? "target"}</code>
+                        <code>{journeyLabel(trace)}</code>
                       </div>
                       <div className="release-card-footer">
                         {trace.pending_action ? (
@@ -267,9 +352,15 @@ export function ReleaseTraceBoard({
                         <span>
                           {trace.pending_action?.type
                             ? statusLabel(trace.pending_action.type)
-                            : (trace.current_phase ?? "tracked")}
+                            : currentGateLabel(trace)}
                         </span>
                       </div>
+                      {(trace.status === "rolling_back" || trace.status === "rolled_back") && trace.rollback_target_tag ? (
+                        <div className="rollback-indicator">
+                          <RefreshCw size={11} className={trace.status === "rolling_back" ? "spin" : ""} />
+                          <span>{trace.status === "rolling_back" ? "Rolling back to" : "Rolled back to"} {trace.rollback_target_tag}</span>
+                        </div>
+                      ) : null}
                     </button>
                   ))
                 ) : (
@@ -330,6 +421,8 @@ export function ReleaseTraceBoard({
                   traceId={selected.id}
                   pendingType={selected.pending_action?.type ?? null}
                   status={selected.status}
+                  repoFullName={selected.repo_full_name}
+                  currentReleaseTag={selected.production_deployment?.releaseTag ?? selected.production_deployment?.tag}
                 />
               </section>
 
@@ -411,49 +504,25 @@ export function ReleaseTraceBoard({
                   <span className="count">state</span>
                 </div>
                 <div className="trace-detail-list">
-                  <span>Branches</span>
-                  <strong>
-                    {selected.source_branch ?? "n/a"} →{" "}
-                    {selected.target_branch ?? "n/a"}
-                  </strong>
-                  <span>Preview</span>
-                  <strong>
-                    {selected.preview_deployment?.status ?? "n/a"} ·{" "}
-                    {deploymentLabel(selected.preview_deployment?.url)}
-                  </strong>
-                  <span>Production</span>
-                  <strong>
-                    {selected.production_deployment?.status ?? "n/a"} ·{" "}
-                    {deploymentLabel(selected.production_deployment?.url)}
-                  </strong>
-                  <span>Release tag</span>
-                  <strong>
-                    {selected.production_deployment?.releaseTag ??
-                      selected.production_deployment?.tag ??
-                      "n/a"}
-                  </strong>
-                  <span>Reverse sync</span>
-                  <strong>{selected.reverse_sync_status ?? "n/a"}</strong>
-                  <span>Incident</span>
-                  <strong>
-                    {selected.incident_id
-                      ? shortId(selected.incident_id)
-                      : "n/a"}
-                  </strong>
-                  <span>Updated</span>
-                  <strong>{dateLabel(selected.updated_at)}</strong>
+                  <span>Journey</span><strong>{journeyLabel(selected)}</strong>
+                  <span>Current gate</span><strong>{currentGateLabel(selected)}</strong>
+                  <span>Feature PR</span><strong>{selected.draft_pr_number ? `#${selected.draft_pr_number}` : "n/a"}</strong>
+                  <span>Release PR</span><strong>{selected.release_pr_number ? `#${selected.release_pr_number}` : "n/a"}</strong>
+                  <span>Preview</span><strong>{selected.preview_deployment?.status ?? "n/a"} · {deploymentLabel(selected.preview_deployment?.url)}</strong>
+                  <span>Production</span><strong>{selected.production_deployment?.status ?? "n/a"} · {deploymentLabel(selected.production_deployment?.url)}</strong>
+                  <span>Release tag</span><strong>{selected.production_deployment?.releaseTag ?? selected.production_deployment?.tag ?? "n/a"}</strong>
+                  {selected.is_rollback || selected.status === "rolling_back" || selected.status === "rolled_back" ? (
+                    <>
+                      <span>Rollback from</span><strong>{selected.rollback_source_tag ?? "n/a"}</strong>
+                      <span>Rollback to</span><strong>{selected.rollback_target_tag ?? "n/a"}</strong>
+                    </>
+                  ) : null}
+                  <span>Reverse sync</span><strong>{selected.reverse_sync_status ?? "n/a"}</strong>
+                  <span>Incident</span><strong>{selected.incident_id ? shortId(selected.incident_id) : "n/a"}</strong>
+                  <span>Updated</span><strong>{dateLabel(selected.updated_at)}</strong>
                 </div>
               </section>
 
-              <section className="release-detail-section">
-                <div className="section-label mono">
-                  <span>Timeline</span>
-                  <span className="count">
-                    {eventsByTrace[selected.id]?.length ?? 0}
-                  </span>
-                </div>
-                <TraceTimeline events={eventsByTrace[selected.id] ?? []} />
-              </section>
             </div>
           </aside>
         </div>

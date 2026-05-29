@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { dispatchVercelProductionDeploy, createReleaseTag } from "@/lib/github/deployments";
+import { dispatchHotfixDeploy, dispatchVercelProductionDeploy, createReleaseTag } from "@/lib/github/deployments";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getOctokit } from "@/lib/github/client";
+import { updateTraceBySpec } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -20,23 +21,33 @@ function generateReleaseTag() {
 export async function POST(request: Request) {
   const supabase = getSupabaseServerClient();
   const {
-    data: { user }
+    data: { user: authUser }
   } = await supabase.auth.getUser();
+
+  const body = await request.json();
+
+  // Support internal server-to-server calls with internalUserId
+  const internalUserId = body.internalUserId || request.headers.get("X-Internal-User-Id");
+  const user = authUser || (internalUserId ? { id: internalUserId, email: null } : null);
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const body = await request.json();
   const specId = String(body.specId ?? "");
   const requestedReleaseTag = String(body.releaseTag ?? "").trim();
   if (!specId) {
     return NextResponse.json({ error: "specId is required" }, { status: 400 });
   }
+  if (!requestedReleaseTag) {
+    return NextResponse.json(
+      { error: "Release tag is required.", detail: "Confirm or edit the release tag in the Deploy to Production modal before starting deployment." },
+      { status: 400 }
+    );
+  }
 
   const { data: spec, error: specError } = await supabase
     .from("specs")
-    .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, release_status, release_pr_status, release_tag, release_sha")
+    .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, release_status, release_pr_status, release_tag, release_sha, incident_id")
     .eq("id", specId)
     .eq("user_id", user.id)
     .single();
@@ -46,16 +57,21 @@ export async function POST(request: Request) {
   }
 
   const isMergedReleasePromotion = spec.status === "merged" && spec.branch_name === "develop" && spec.base_branch === "main";
+  const isMergedDirectMainHotfix =
+    spec.status === "merged" &&
+    spec.base_branch === "main" &&
+    typeof spec.branch_name === "string" &&
+    spec.branch_name.startsWith("hotfix/");
   const isPendingDeploy = spec.release_status === "pending_deploy" && spec.release_pr_status === "merged";
 
-  if (!isPendingDeploy && !isMergedReleasePromotion) {
+  if (!isPendingDeploy && !isMergedReleasePromotion && !isMergedDirectMainHotfix) {
     return NextResponse.json(
       { error: "Spec is not ready for production deployment.", detail: `Current release_status: ${spec.release_status}` },
       { status: 409 }
     );
   }
 
-  if (!isMergedReleasePromotion && spec.release_pr_status !== "merged") {
+  if (!isMergedReleasePromotion && !isMergedDirectMainHotfix && spec.release_pr_status !== "merged") {
     return NextResponse.json(
       { error: "Release PR must be merged before deploying to production.", detail: `Current release_pr_status: ${spec.release_pr_status}` },
       { status: 409 }
@@ -63,7 +79,7 @@ export async function POST(request: Request) {
   }
 
   const { owner, repo } = splitRepo(spec.repo_full_name);
-  const releaseTag = requestedReleaseTag || spec.release_tag || generateReleaseTag();
+  const releaseTag = requestedReleaseTag;
   let releaseSha = spec.release_sha || spec.merge_sha;
 
   if (!releaseSha && isMergedReleasePromotion && spec.pr_number) {
@@ -80,7 +96,7 @@ export async function POST(request: Request) {
     }
   }
 
-  if (!releaseSha && isMergedReleasePromotion) {
+  if (!releaseSha && (isMergedReleasePromotion || isMergedDirectMainHotfix)) {
     try {
       const octokit = getOctokit();
       const { data: ref } = await octokit.git.getRef({
@@ -156,13 +172,22 @@ export async function POST(request: Request) {
       });
     }
 
-    // Dispatch production deploy workflow
-    const deployment = await dispatchVercelProductionDeploy({
-      owner,
-      repo,
-      releaseTag,
-      releaseSha
-    });
+    // Dispatch production deploy workflow. Direct main hotfixes must carry the
+    // hotfix flags so the repo workflow opens the main -> develop reverse-sync PR.
+    const deployment = isMergedDirectMainHotfix
+      ? await dispatchHotfixDeploy({
+          owner,
+          repo,
+          releaseTag,
+          releaseSha,
+          reverseSync: true
+        })
+      : await dispatchVercelProductionDeploy({
+          owner,
+          repo,
+          releaseTag,
+          releaseSha
+        });
 
     // Update spec with deployment info
     await supabase
@@ -176,6 +201,43 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString()
       })
       .eq("id", spec.id);
+
+    if (isMergedDirectMainHotfix && spec.incident_id) {
+      await supabase
+        .from("incidents")
+        .update({
+          release_version: releaseTag,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", spec.incident_id)
+        .eq("user_id", user.id);
+    }
+
+    await updateTraceBySpec(spec.id, {
+      status: "merged_main",
+      production_deployment: {
+        status: "deploying",
+        tag: releaseTag,
+        releaseTag,
+        sha: releaseSha,
+        url: deployment.workflowUrl,
+        runUrl: deployment.workflowUrl,
+        timestamp: new Date().toISOString()
+      }
+    }, {
+      eventType: "deployment_started",
+      source: "manual",
+      actor: user.email ?? user.id,
+      actorType: "user",
+      details: {
+        specId: spec.id,
+        repo: spec.repo_full_name,
+        releaseTag,
+        releaseSha,
+        workflowUrl: deployment.workflowUrl,
+        approvedFor: "production deployment"
+      }
+    }).catch(() => null);
 
     // Record approval event
     await supabase.from("approval_events").insert({
@@ -193,6 +255,21 @@ export async function POST(request: Request) {
         approvedFor: "production deployment"
       }
     });
+
+    // Create notification for production deployment
+    await supabase
+      .from("notifications")
+      .insert({
+        user_id: user.id,
+        type: "production_deploy_started",
+        title: "Production Deployment Started",
+        body: `Deploying ${releaseTag} to production`,
+        href: deployment.workflowUrl,
+        severity: "warning",
+        repo_full_name: spec.repo_full_name,
+        metadata: { specId: spec.id, releaseTag, releaseSha }
+      })
+      .catch((err) => console.error("notification creation failed", err));
 
     return NextResponse.json({
       ok: true,

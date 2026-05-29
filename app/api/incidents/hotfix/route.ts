@@ -222,6 +222,22 @@ export async function POST(request: Request) {
       .single();
 
     if (error) return NextResponse.json({ error: "Hotfix PR was created, but incident sync failed.", detail: error.message }, { status: 500 });
+
+    // Create notification for hotfix PR created
+    await supabase
+      .from("notifications")
+      .insert({
+        user_id: user.id,
+        type: "hotfix_created",
+        title: "Hotfix PR Created",
+        body: `Created hotfix PR #${pr.number} for incident: ${incident.title ?? incident.id.slice(0, 8)}`,
+        href: pr.html_url,
+        severity: "warning",
+        repo_full_name: incident.repo_full_name,
+        metadata: { incidentId: incident.id, prNumber: pr.number, branch }
+      })
+      .catch((err) => console.error("notification creation failed", err));
+
     return NextResponse.json({ incident: toIncident(data), specId: spec.id, pr: { ...pr, branch, base }, commits });
   }
 
@@ -476,6 +492,21 @@ export async function POST(request: Request) {
     } catch (traceError) {
       console.error("hotfix release trace update failed", traceError);
     }
+
+    // Create notification for hotfix approved
+    await supabase
+      .from("notifications")
+      .insert({
+        user_id: user.id,
+        type: "hotfix_approved",
+        title: "Hotfix Approved & Merged",
+        body: `Hotfix for incident "${incident.title ?? incident.id.slice(0, 8)}" merged${isProdDeploy ? ` and deploying to production` : ""}`,
+        href: deployment?.workflowUrl ?? incident.hotfix_pr_url,
+        severity: isProdDeploy ? "warning" : "info",
+        repo_full_name: incident.repo_full_name,
+        metadata: { incidentId: incident.id, mergeSha: merge.sha, releaseTag: isProdDeploy ? releaseTag : null }
+      })
+      .catch((err) => console.error("notification creation failed", err));
 
     return NextResponse.json({
       incident: toIncident(data),

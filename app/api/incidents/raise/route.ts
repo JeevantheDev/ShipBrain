@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { repoFromBearer } from "@/lib/shipbrain/api-auth";
+import { flushPendingTelegramNotifications } from "@/lib/telegram/flush";
 
 export const runtime = "nodejs";
 
@@ -81,5 +82,6 @@ export async function POST(request: Request) {
   });
 
   if (error) return NextResponse.json({ error: "PagerDuty accepted the event, but ShipBrain could not save the incident.", detail: error.message }, { status: 500 });
+  await flushPendingTelegramNotifications().catch((error) => console.error("telegram notification flush failed", error));
   return NextResponse.json({ ok: true, incident });
 }

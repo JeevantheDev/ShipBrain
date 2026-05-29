@@ -51,6 +51,8 @@ export function NotificationBell() {
 
   useEffect(() => {
     void loadNotifications();
+    const interval = window.setInterval(() => void loadNotifications(false), 15000);
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {

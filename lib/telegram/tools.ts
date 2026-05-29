@@ -1,8 +1,10 @@
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { appendChatMessage, getOrCreateChatThread } from "@/lib/ai/chat-store";
 import { generateScaffold } from "@/lib/ai/chains/code-scaffold";
 import { analyzeIncident } from "@/lib/ai/chains/incident-analyzer";
 import { generatePostmortem } from "@/lib/ai/chains/postmortem";
 import { decomposeSpec, specPlanSchema } from "@/lib/ai/chains/spec-decompose";
+import { answerShipBrainQuestion } from "@/lib/ai/shipbrain-chat";
 import { listPullRequestCommits } from "@/lib/github/commits";
 import { getOctokit } from "@/lib/github/client";
 import {
@@ -11,7 +13,7 @@ import {
   dispatchDevelopPreviewDeploy
 } from "@/lib/github/deployments";
 import { createDraftPR, createReleasePullRequest, createReverseSyncPR, mergePullRequest, tagCommitForRelease } from "@/lib/github/pr";
-import { createOrUpdateTrace, updateTraceByIncident, updateTraceBySpec } from "@/lib/orchestrator";
+import { createOrUpdateTrace, updateTraceByIncident, updateTraceBySpec, initiateRollback, addTraceEvent } from "@/lib/orchestrator";
 import { resolvePagerDutyIncident } from "@/lib/pagerduty/incidents";
 import { escapeTelegram } from "@/lib/telegram/formatter";
 
@@ -87,7 +89,6 @@ export async function runTelegramCommand(user: TelegramUser, text: string) {
   if (input === "/status" || input === "status") return getTraceStatus(user);
   if (input === "/traces" || input === "traces") return getReleaseTraces(user);
   if (input.startsWith("/trace ") || input.startsWith("trace ")) return getReleaseTraceDetail(user, parts[1]);
-  if (input.startsWith("/verify ") || input.startsWith("verify ")) return verifyTraceFromTelegram(user, parts[1]);
   if (input.startsWith("/approve ") || input.startsWith("approve ")) return approveTraceFromTelegram(user, parts[1]);
   if (input.startsWith("/deployments") || input.startsWith("/pending") || input.includes("pending deployment")) {
     return getPendingDeployments(user);
@@ -110,12 +111,23 @@ export async function runTelegramCommand(user: TelegramUser, text: string) {
   if (/^\/redeploy(\s|$)/.test(input)) {
     return startAutoDeployment(user, parts[1], { redeploy: true });
   }
+  if (input.startsWith("/rollback_releases") || input.startsWith("/rollbackreleases")) {
+    return getRollbackReleases(user);
+  }
+  if (input.startsWith("/rollback_status") || input.startsWith("/rollbackstatus")) {
+    return getRollbackStatus(user);
+  }
+  if (input.startsWith("/rollback ") || input.startsWith("/rollback_")) {
+    const tag = text.trim().split(/\s+/).slice(1).join(" ");
+    return initiateRollbackFromTelegram(user, tag);
+  }
   if (input === "/help" || input === "help" || input === "/start") return helpText();
   if (input.startsWith("/incident ") || input.startsWith("incident ")) return getIncidentDetail(user, parts[1]);
   if (input.includes("incident") || input.startsWith("/incidents")) return getIncidents(user);
   if (input.includes("release") || input.startsWith("/releases")) return getReleases(user);
   if (input.includes("ci") || input.includes("workflow")) return getCiStatus(user);
   if (input.includes("pr") || input.includes("pull") || input.startsWith("/prs")) return getPendingPrs(user);
+  if (!input.startsWith("/")) return chatWithShipBrain(user, text);
   return [
     "I can help with ShipBrain operations.",
     "",
@@ -131,6 +143,43 @@ export async function runTelegramCommand(user: TelegramUser, text: string) {
     "• /traces",
     "• /help"
   ].join("\n");
+}
+
+async function chatWithShipBrain(user: TelegramUser, text: string) {
+  const db = getSupabaseAdminClient();
+  const repoFullName = await activeRepo(user.user_id);
+  const thread = await getOrCreateChatThread({
+    supabase: db,
+    userId: user.user_id,
+    repoFullName,
+    channel: "telegram",
+    externalThreadKey: `telegram:${user.user_id}`
+  });
+  await appendChatMessage({
+    supabase: db,
+    userId: user.user_id,
+    threadId: thread.id,
+    role: "user",
+    content: text,
+    metadata: { channel: "telegram", activeRepo: repoFullName }
+  });
+  const answer = await answerShipBrainQuestion({
+    supabase: db,
+    userId: user.user_id,
+    repoFullName,
+    threadId: thread.id,
+    message: text,
+    limit: 8
+  });
+  await appendChatMessage({
+    supabase: db,
+    userId: user.user_id,
+    threadId: thread.id,
+    role: "assistant",
+    content: answer.reply,
+    metadata: { channel: "telegram", activeRepo: answer.activeRepo }
+  });
+  return answer.reply;
 }
 
 function helpText() {
@@ -153,13 +202,15 @@ function helpText() {
     "• /status - release trace pending-action summary",
     "• /traces - active release traces",
     "• /trace <id> - release trace detail and timeline",
-    "• /verify <id> - verify preview/production trace step",
     "• /approve <id|pr> - approve pending release/deploy action",
     "• /deploy_dev <id> - start the pending develop preview deploy",
     "• /deploy_prod <id> - tag and deploy a pending production release",
     "• /deploy <id> - deploy the next valid stage automatically",
     "• /redeploy_dev <id> - re-run develop preview deployment",
     "• /redeploy_prod <id> - re-run production deployment for an existing release",
+    "• /rollback_releases - list releases available for rollback",
+    "• /rollback <tag> - rollback to a previous release by tag",
+    "• /rollback_status - show active rollback status",
     "• /incident <id> - incident detail, hotfix PR, and reverse-sync status",
     "• /help - show this menu",
     "",
@@ -934,56 +985,11 @@ async function findTrace(user: TelegramUser, token?: string) {
   return trace;
 }
 
-export async function verifyTraceFromTelegram(user: TelegramUser, token?: string) {
-  const db = getSupabaseAdminClient();
-  const trace = await findTrace(user, token);
-  const isPreview = trace.status === "merged_develop" || trace.status === "preview_live" || trace.current_phase === "preview";
-  const nextStatus = isPreview ? "preview_live" : trace.reverse_sync_pr_number && trace.reverse_sync_status !== "merged" ? "production_live" : "completed";
-  const update: Record<string, any> = {
-    status: nextStatus,
-    current_phase: nextStatus === "preview_live" ? "preview" : nextStatus === "completed" ? "live" : "production",
-    updated_at: new Date().toISOString()
-  };
-  if (isPreview) {
-    update.preview_deployment = {
-      ...(trace.preview_deployment ?? {}),
-      verified: true,
-      verifiedAt: new Date().toISOString(),
-      verifiedBy: "telegram"
-    };
-  } else {
-    update.production_deployment = {
-      ...(trace.production_deployment ?? {}),
-      verified: true,
-      verifiedAt: new Date().toISOString(),
-      verifiedBy: "telegram"
-    };
-    update.completed_at = nextStatus === "completed" ? new Date().toISOString() : null;
-  }
-
-  await db.from("release_traces").update(update).eq("id", trace.id);
-  await db.from("trace_events").insert({
-    trace_id: trace.id,
-    event_type: "manual_action",
-    actor: "telegram",
-    actor_type: "bot",
-    source: "telegram",
-    details: { command: "/verify", previousStatus: trace.status, nextStatus }
-  });
-
-  return [
-    "✅ *Trace verified*",
-    `Trace: \`${shortId(trace.id)}\` · ${escapeTelegram(trace.title)}`,
-    `Status: ${nextStatus}`,
-    nextStatus === "preview_live" ? `Next: create/promote release PR in ShipBrain, or check /status.` : "No further verification required unless reverse sync is pending."
-  ].join("\n");
-}
-
 export async function approveTraceFromTelegram(user: TelegramUser, token?: string) {
   const trace = await findTrace(user, token);
   const action = trace.pending_action as { type?: string } | null;
 
-  if (trace.spec_id && (action?.type === "verify_preview" || trace.status === "merged_develop")) {
+  if (trace.spec_id && trace.status === "merged_develop") {
     return startPreviewDeployment(user, String(trace.spec_id));
   }
   if (trace.spec_id && (action?.type === "create_release_pr" || trace.status === "preview_live")) {
@@ -1513,5 +1519,236 @@ export async function startProductionDeployment(user: TelegramUser, token?: stri
     `Release: \`${releaseTag}\``,
     `SHA: \`${releaseSha.slice(0, 12)}\``,
     `Workflow: ${deployment.workflowUrl}`
+  ].join("\n");
+}
+
+export async function getRollbackReleases(user: TelegramUser) {
+  const db = getSupabaseAdminClient();
+  const repos = await connectedRepos(user.user_id);
+  if (!repos.length) return "No connected repositories yet.";
+
+  const { data, error } = await db
+    .from("specs")
+    .select("id, repo_full_name, release_tag, release_sha, release_status, deployed_at, decomposed_tasks")
+    .eq("user_id", user.user_id)
+    .in("repo_full_name", repos)
+    .eq("release_status", "deployed")
+    .not("release_tag", "is", null)
+    .order("deployed_at", { ascending: false, nullsFirst: false })
+    .limit(10);
+
+  if (error) throw new Error(error.message);
+  if (!data?.length) return "No releases available for rollback yet.";
+
+  return [
+    "🔄 *Available releases for rollback*",
+    "",
+    ...data.map((item, index) => {
+      const tasks = item.decomposed_tasks as { prTitle?: string } | null;
+      const title = tasks?.prTitle ?? "Release";
+      const date = item.deployed_at ? new Date(item.deployed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "n/a";
+      return `${index + 1}. \`${item.release_tag}\` - ${escapeTelegram(title).slice(0, 50)} (${date})`;
+    }),
+    "",
+    "To rollback: /rollback release-v2026.05.XX-XXXXXX"
+  ].join("\n");
+}
+
+export async function getRollbackStatus(user: TelegramUser) {
+  const db = getSupabaseAdminClient();
+  const repos = await connectedRepos(user.user_id);
+  if (!repos.length) return "No connected repositories yet.";
+
+  const { data: activeRollbacks } = await db
+    .from("rollback_history")
+    .select("*")
+    .eq("user_id", user.user_id)
+    .in("repo_full_name", repos)
+    .in("status", ["pending", "deploying"])
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  const { data: rollingBackTraces } = await db
+    .from("release_traces")
+    .select("id, title, repo_full_name, status, rollback_source_tag, rollback_target_tag, updated_at")
+    .eq("user_id", user.user_id)
+    .in("repo_full_name", repos)
+    .eq("status", "rolling_back")
+    .order("updated_at", { ascending: false })
+    .limit(5);
+
+  if (!activeRollbacks?.length && !rollingBackTraces?.length) {
+    return "✅ No active rollbacks in progress.";
+  }
+
+  const lines = ["🔄 *Active Rollbacks*", ""];
+
+  if (activeRollbacks?.length) {
+    lines.push("*Rollback History:*");
+    for (const rollback of activeRollbacks) {
+      const startTime = new Date(rollback.initiated_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      lines.push(`• \`${rollback.repo_full_name}\`: ${rollback.source_release_tag} → ${rollback.target_release_tag}`);
+      lines.push(`  Status: ${rollback.status} · Started: ${startTime}`);
+      if (rollback.workflow_url) lines.push(`  Workflow: ${rollback.workflow_url}`);
+    }
+    lines.push("");
+  }
+
+  if (rollingBackTraces?.length) {
+    lines.push("*Rolling Back Traces:*");
+    for (const trace of rollingBackTraces) {
+      lines.push(`• \`${shortId(trace.id)}\` ${escapeTelegram(trace.title)}`);
+      lines.push(`  ${trace.rollback_source_tag ?? "current"} → ${trace.rollback_target_tag ?? "target"}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export async function initiateRollbackFromTelegram(user: TelegramUser, token?: string) {
+  if (!token?.trim()) return "Missing release tag. Run /rollback_releases to see available tags.";
+
+  const db = getSupabaseAdminClient();
+  const repos = await connectedRepos(user.user_id);
+  if (!repos.length) return "No connected repositories yet.";
+
+  const targetTag = token.trim();
+
+  // Find target spec by release tag
+  const { data: targetSpec } = await db
+    .from("specs")
+    .select("id, repo_full_name, release_tag, release_sha, release_status, decomposed_tasks")
+    .eq("user_id", user.user_id)
+    .in("repo_full_name", repos)
+    .eq("release_tag", targetTag)
+    .eq("release_status", "deployed")
+    .maybeSingle();
+
+  if (!targetSpec) {
+    return `No deployed release found for tag "${targetTag}". Run /rollback_releases for available tags.`;
+  }
+
+  if (!targetSpec.release_sha) {
+    return "Target release does not have a release SHA.";
+  }
+
+  // Get current production release tag
+  const { data: currentSpec } = await db
+    .from("specs")
+    .select("id, release_tag, release_sha")
+    .eq("user_id", user.user_id)
+    .eq("repo_full_name", targetSpec.repo_full_name)
+    .eq("release_status", "deployed")
+    .order("deployed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const sourceReleaseTag = currentSpec?.release_tag ?? "unknown";
+
+  // Check for active rollbacks
+  const { data: activeRollback } = await db
+    .from("rollback_history")
+    .select("id")
+    .eq("repo_full_name", targetSpec.repo_full_name)
+    .in("status", ["pending", "deploying"])
+    .maybeSingle();
+
+  if (activeRollback) {
+    return "A rollback is already in progress for this repository. Run /rollback_status to check.";
+  }
+
+  // Find the most recent production trace for this repo
+  const { data: trace } = await db
+    .from("release_traces")
+    .select("*")
+    .eq("user_id", user.user_id)
+    .eq("repo_full_name", targetSpec.repo_full_name)
+    .in("status", ["production_live", "merged_main", "failed"])
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // Dispatch the rollback deployment
+  const { owner, repo } = splitRepo(targetSpec.repo_full_name);
+  let deployment;
+  try {
+    deployment = await dispatchCloudflareProductionDeploy({
+      owner,
+      repo,
+      releaseTag: targetTag,
+      releaseSha: targetSpec.release_sha,
+      isHotfix: false,
+      reverseSync: false
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Deployment dispatch failed";
+    return `❌ Rollback failed: ${message}`;
+  }
+
+  // Create rollback history record
+  const { data: rollbackRecord } = await db
+    .from("rollback_history")
+    .insert({
+      user_id: user.user_id,
+      repo_full_name: targetSpec.repo_full_name,
+      trace_id: trace?.id ?? null,
+      spec_id: targetSpec.id,
+      source_release_tag: sourceReleaseTag,
+      target_release_tag: targetTag,
+      target_release_sha: targetSpec.release_sha,
+      status: "deploying",
+      initiated_by: "telegram",
+      workflow_url: deployment.workflowUrl,
+      metadata: {
+        targetSpecId: targetSpec.id,
+        sourceSpecId: currentSpec?.id ?? null,
+        deploymentWorkflowId: deployment.workflowId
+      }
+    })
+    .select("id")
+    .single();
+
+  // Update trace if found
+  if (trace) {
+    await initiateRollback({
+      traceId: trace.id,
+      targetReleaseTag: targetTag,
+      targetReleaseSha: targetSpec.release_sha,
+      sourceReleaseTag,
+      workflowUrl: deployment.workflowUrl,
+      initiatedBy: "telegram",
+      rollbackId: rollbackRecord?.id
+    });
+  }
+
+  // Log approval event
+  await db.from("approval_events").insert({
+    entity_type: "spec",
+    entity_id: targetSpec.id,
+    action: "telegram_rollback_initiated",
+    actor_id: user.user_id,
+    note: `Telegram initiated rollback from ${sourceReleaseTag} to ${targetTag}`,
+    metadata: {
+      sourceReleaseTag,
+      targetReleaseTag: targetTag,
+      targetReleaseSha: targetSpec.release_sha,
+      rollbackId: rollbackRecord?.id,
+      workflowUrl: deployment.workflowUrl
+    }
+  });
+
+  const tasks = targetSpec.decomposed_tasks as { prTitle?: string } | null;
+  const title = tasks?.prTitle ?? "Release";
+
+  return [
+    "🔄 *Rollback initiated*",
+    `Repo: \`${targetSpec.repo_full_name}\``,
+    `From: \`${sourceReleaseTag}\``,
+    `To: \`${targetTag}\``,
+    `Title: ${escapeTelegram(title).slice(0, 60)}`,
+    `SHA: \`${targetSpec.release_sha.slice(0, 12)}\``,
+    `Workflow: ${deployment.workflowUrl}`,
+    "",
+    "Check progress: /rollback_status"
   ].join("\n");
 }

@@ -9,6 +9,7 @@ import { CloseDraftPrModal } from "@/components/pr-sync/CloseDraftPrModal";
 import { RichTextEditor } from "@/components/spec-editor/RichTextEditor";
 import { InputModal } from "@/components/ui/InputModal";
 import { Toast, useToast } from "@/components/ui/Toast";
+import { DEFAULT_SPEC_PR_RECIPES, type SpecPrRecipe } from "@/lib/spec-recipes";
 
 type SpecResult = {
   tasks: Array<{ title: string; description: string; files: string[]; estimatedLines?: number }>;
@@ -54,6 +55,7 @@ type RecentPrRun = {
 
 const recentPrStorageKey = "shipbrain:recent-pr-runs";
 const selectedPrStorageKey = "shipbrain:selected-pr-run";
+const selectedSpecRecipeStorageKey = "shipbrain:selected-spec-pr-recipe";
 
 const flowCopy: Record<FlowStage, { percent: number; label: string; note: string; estimate: string }> = {
   idle: {
@@ -106,175 +108,6 @@ const flowCopy: Record<FlowStage, { percent: number; label: string; note: string
   }
 };
 
-const quickPrTemplates = [
-  {
-    id: "test-color-change",
-    label: "Heading color change",
-    prefix: "test",
-    baseBranch: "develop",
-    sourceBranch: undefined,
-    ticket: `# TEST: Update checkout heading color
-
-## Summary
-Change the main checkout heading color in index.html for testing the ShipBrain E2E flow.
-
-## Change Request
-- **File:** index.html
-- **Current:** color: #333 (dark gray)
-- **New:** color: #0066cc (blue)
-
-## Requirements
-- [ ] Update the heading color in the CSS
-- [ ] Keep existing layout unchanged
-- [ ] No other file changes needed
-
-## Acceptance Criteria
-- [ ] Heading displays in new color
-- [ ] No visual regressions
-- [ ] Page loads correctly
-
-## Notes
-This is a simple test change to validate the full ShipBrain workflow:
-1. Spec-to-PR creates Draft PR
-2. Developer commits the color change
-3. PR merged to develop
-4. CI Monitor validates
-5. Manager approves production deploy
-
----
-ShipBrain-codegen: handoff-only`
-  },
-  {
-    id: "feature",
-    label: "New functionality",
-    prefix: "feature",
-    baseBranch: "develop",
-    sourceBranch: undefined,
-    ticket: `# Feature: [Feature Name]
-
-## Summary
-Brief description of the feature to be implemented.
-
-## User Story
-As a [type of user], I want [goal] so that [benefit].
-
-## Requirements
-- [ ] Requirement 1
-- [ ] Requirement 2
-- [ ] Requirement 3
-
-## Acceptance Criteria
-- [ ] Criteria 1
-- [ ] Criteria 2
-- [ ] Criteria 3
-
-## Technical Notes
-- Implementation approach
-- Dependencies or integrations
-- Performance considerations
-
----
-ShipBrain-codegen: handoff-only`
-  },
-  {
-    id: "bugfix",
-    label: "Issue resolution",
-    prefix: "bug fix",
-    baseBranch: "develop",
-    sourceBranch: undefined,
-    ticket: `# Bug Fix: [Bug Title]
-
-## Problem Description
-Clear description of the bug and its impact.
-
-## Steps to Reproduce
-1. Step 1
-2. Step 2
-3. Step 3
-
-## Expected Behavior
-What should happen.
-
-## Proposed Fix
-Brief description of the solution approach.
-
----
-ShipBrain-codegen: handoff-only`
-  },
-  {
-    id: "refactor",
-    label: "Code improvement",
-    prefix: "refactor",
-    baseBranch: "develop",
-    sourceBranch: undefined,
-    ticket: `# Refactor: [Component/Module Name]
-
-## Current State
-Description of the current implementation and its issues.
-
-## Proposed Changes
-- Change 1
-- Change 2
-- Change 3
-
-## Benefits
-- Improved maintainability
-- Better performance
-- Cleaner code structure
-
----
-ShipBrain-codegen: handoff-only`
-  },
-  {
-    id: "develop-to-prod",
-    label: "Develop → production",
-    prefix: "release",
-    baseBranch: "main",
-    sourceBranch: "develop",
-    ticket: `# Release: Promote develop to production
-
-## Summary
-Create a production release PR from develop branch to main.
-
-## Pre-release Checklist
-- [ ] All features complete and tested
-- [ ] CI pipeline passing on develop
-- [ ] Code review completed
-- [ ] Documentation updated
-- [ ] No known critical bugs
-
-## Release Notes
-### New Features
-- Feature 1
-- Feature 2
-
----
-ShipBrain-codegen: handoff-only
-Source branch: develop
-Destination branch: main`
-  },
-  {
-    id: "documentation",
-    label: "Documentation update",
-    prefix: "docs",
-    baseBranch: "develop",
-    sourceBranch: undefined,
-    ticket: `# Documentation: [Topic]
-
-## Purpose
-What documentation needs to be added or updated.
-
-## Sections to Update
-- [ ] README
-- [ ] API documentation
-- [ ] User guide
-- [ ] Code comments
-
----
-ShipBrain-codegen: handoff-only`
-  }
-] as const;
-
 export default function SpecToPrPage() {
   const aiPlanRef = useRef<HTMLDivElement | null>(null);
   const [spec, setSpec] = useState("");
@@ -304,6 +137,7 @@ export default function SpecToPrPage() {
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeError, setCloseError] = useState("");
   const [quickTemplateId, setQuickTemplateId] = useState("");
+  const [quickPrTemplates, setQuickPrTemplates] = useState<SpecPrRecipe[]>(DEFAULT_SPEC_PR_RECIPES);
   const [retryCountdown, setRetryCountdown] = useState(0);
 
   // Modal states for styled prompts
@@ -327,7 +161,15 @@ export default function SpecToPrPage() {
     return Math.round(wordCount * 1.3);
   }, [wordCount]);
 
-  const useExistingSourceBranch = quickTemplateId === "develop-to-prod" || (branchName === "develop" && baseBranch === "main");
+  const selectedQuickTemplate = useMemo(
+    () => quickPrTemplates.find((item) => item.id === quickTemplateId),
+    [quickPrTemplates, quickTemplateId]
+  );
+  const sampleTemplateId = useMemo(
+    () => quickPrTemplates.find((item) => item.isSample)?.id ?? quickPrTemplates[0]?.id ?? "",
+    [quickPrTemplates]
+  );
+  const useExistingSourceBranch = Boolean(selectedQuickTemplate?.sourceBranch) || (branchName === "develop" && baseBranch === "main");
   const flow = flowCopy[flowStage];
   const displayedPercent = flowStage === "planning" || flowStage === "creating_pr" ? livePercent : flow.percent;
 
@@ -350,7 +192,16 @@ export default function SpecToPrPage() {
       const nextRepo = (event as CustomEvent<string>).detail;
       if (nextRepo) setRepo(nextRepo);
     }
+    async function loadRecipes() {
+      const response = await fetch("/api/spec-recipes", { cache: "no-store" }).catch(() => null);
+      if (!response?.ok) return;
+      const json = await response.json().catch(() => ({}));
+      if (!cancelled && Array.isArray(json.recipes) && json.recipes.length > 0) {
+        setQuickPrTemplates(json.recipes);
+      }
+    }
     void loadActiveRepo();
+    void loadRecipes();
     void loadRecentRuns();
     const interval = window.setInterval(() => void loadRecentRuns(), 30000);
     window.addEventListener("shipbrain:active-repo", handleActiveRepo);
@@ -360,6 +211,24 @@ export default function SpecToPrPage() {
       window.removeEventListener("shipbrain:active-repo", handleActiveRepo);
     };
   }, []);
+
+  useEffect(() => {
+    function consumeSelectedRecipe(recipeId: string | null) {
+      if (!recipeId) return;
+      if (!quickPrTemplates.some((item) => item.id === recipeId)) return;
+      applyQuickTemplate(recipeId);
+      window.localStorage.removeItem(selectedSpecRecipeStorageKey);
+    }
+
+    consumeSelectedRecipe(window.localStorage.getItem(selectedSpecRecipeStorageKey));
+
+    function handleSelectedRecipe(event: Event) {
+      consumeSelectedRecipe((event as CustomEvent<string>).detail);
+    }
+
+    window.addEventListener("shipbrain:select-spec-pr-recipe", handleSelectedRecipe);
+    return () => window.removeEventListener("shipbrain:select-spec-pr-recipe", handleSelectedRecipe);
+  }, [quickPrTemplates]);
 
   async function loadRecentRuns() {
     try {
@@ -521,6 +390,10 @@ export default function SpecToPrPage() {
     if (run.ciConclusion) return "CI failed";
     if (run.ciStatus) return `CI ${run.ciStatus}`;
     return "CI pending";
+  }
+
+  function canManageRecentRun(run: RecentPrRun) {
+    return run.status === "pending_pr" || run.status === "draft_created";
   }
 
   async function deleteRecentRun(id: string) {
@@ -721,7 +594,7 @@ export default function SpecToPrPage() {
       if (apiError.retryable && retryAttempt < 1) {
         const seconds = retryDelay(apiError);
         setRetryCountdown(seconds);
-        setStatus(`Gemini quota cooling down. Retrying in ${seconds}s...`);
+        setStatus(`AI provider quota cooling down. Retrying in ${seconds}s...`);
         setError([apiError.error, apiError.detail].filter(Boolean).join(" "));
         setPrRetryAvailable(true);
         setFlowStage("failed");
@@ -740,7 +613,7 @@ export default function SpecToPrPage() {
     setResult(json);
     setPrTitle(json.prTitle);
     setReviewers(json.suggestedReviewers);
-    const template = quickPrTemplates.find((item) => item.id === quickTemplateId);
+    const template = selectedQuickTemplate;
     setBranchName(template?.sourceBranch ?? json.suggestedBranch);
     const runId = `pr-run-${Date.now()}`;
     setCurrentRunId(runId);
@@ -832,7 +705,7 @@ export default function SpecToPrPage() {
       if (apiError.retryable && retryAttempt < 1) {
         const seconds = retryDelay(apiError);
         setRetryCountdown(seconds);
-        setStatus(`Gemini quota cooling down. Retrying Draft PR in ${seconds}s...`);
+        setStatus(`AI provider quota cooling down. Retrying Draft PR in ${seconds}s...`);
         setError([apiError.error, apiError.detail].filter(Boolean).join(" "));
         setPrRetryAvailable(true);
         setFlowStage("failed");
@@ -852,7 +725,7 @@ export default function SpecToPrPage() {
     }
     const nextResult = { ...json, suggestedBranch: branchName.trim() };
     setResult(nextResult);
-    setStatus("Draft PR ready");
+    setStatus(json.warning ? "Draft PR ready - reviewers skipped" : "Draft PR ready");
     setPrRetryAvailable(false);
     setLivePercent(100);
     setFlowStage("ready");
@@ -884,8 +757,8 @@ export default function SpecToPrPage() {
     requestDraftPrApproval();
   }
 
-  const activeRecentRuns = recentRuns.filter((run) => run.status !== "closed" && run.status !== "merged").slice(0, 5);
-  const syncedRecentRuns = recentRuns.filter((run) => run.status === "closed" || run.status === "merged").slice(0, 1);
+  const activeRecentRuns = recentRuns.filter(canManageRecentRun).slice(0, 5);
+  const syncedRecentRuns = recentRuns.filter((run) => !canManageRecentRun(run)).slice(0, 3);
 
   const uniqueFilesCount = useMemo(() => {
     if (!result) return 0;
@@ -946,7 +819,7 @@ export default function SpecToPrPage() {
         </div>
 
         <div className="toolbar-right">
-          <button className="ghost-btn" type="button" disabled={flowStage === "planning" || flowStage === "creating_pr" || isConfirmingPr} style={{ opacity: (flowStage === "planning" || flowStage === "creating_pr" || isConfirmingPr) ? 0.5 : 1 }} onClick={() => applyQuickTemplate("test-color-change")}>
+          <button className="ghost-btn" type="button" disabled={!sampleTemplateId || flowStage === "planning" || flowStage === "creating_pr" || isConfirmingPr} style={{ opacity: (!sampleTemplateId || flowStage === "planning" || flowStage === "creating_pr" || isConfirmingPr) ? 0.5 : 1 }} onClick={() => applyQuickTemplate(sampleTemplateId)}>
             <span>Load sample ticket</span>
           </button>
           {isConfirmingPr || flowStage === "creating_pr" ? (
@@ -1026,7 +899,9 @@ export default function SpecToPrPage() {
                       </span>
                       <span style={{ marginLeft: 6 }}>{run.result.prTitle}</span>
                     </div>
-                    <div className="resume-meta">PR #{run.result.pr?.number ?? "merged"}</div>
+                    <div className="resume-meta">
+                      PR #{run.result.pr?.number ?? "n/a"} · {recentStatusLabel(run)}
+                    </div>
                   </div>
                   <button className="btn subtle" type="button" onClick={() => viewSyncedRecord(run)}>View synced record</button>
                 </div>

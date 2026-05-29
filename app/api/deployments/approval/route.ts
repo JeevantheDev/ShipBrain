@@ -402,6 +402,33 @@ export async function POST(request: Request) {
       .from("specs")
       .update(specUpdate)
       .eq("id", ciRun.spec_id);
+
+    // Create notification for deployment approval/rejection
+    const notificationType = action === "deploy_approved"
+      ? releasePrMode === "merge_existing_pr" ? "production_deploy_approved" : "preview_deploy_approved"
+      : "deploy_rejected";
+    const notificationTitle = action === "deploy_approved"
+      ? releasePrMode === "merge_existing_pr" ? "Production Deployment Approved" : "Preview Deployment Approved"
+      : "Deployment Rejected";
+    const notificationBody = action === "deploy_approved"
+      ? releasePrMode === "merge_existing_pr"
+        ? `Approved production deployment for ${releaseTag}`
+        : `Approved preview deployment for PR #${ciRun.pr_number}`
+      : `Rejected deployment for PR #${ciRun.pr_number}`;
+
+    await supabase
+      .from("notifications")
+      .insert({
+        user_id: user.id,
+        type: notificationType,
+        title: notificationTitle,
+        body: notificationBody,
+        href: deployment?.workflowUrl ?? previewDeployment?.workflowUrl ?? ciRun.html_url,
+        severity: action === "deploy_approved" ? "info" : "warning",
+        repo_full_name: ciRun.repo_full_name,
+        metadata: { specId: ciRun.spec_id, prNumber: ciRun.pr_number, releaseTag: isAuditOnly ? null : releaseTag }
+      })
+      .catch((err) => console.error("notification creation failed:", err));
   }
 
   return NextResponse.json(toAudit(data));

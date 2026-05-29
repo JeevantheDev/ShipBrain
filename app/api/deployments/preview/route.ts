@@ -26,6 +26,7 @@ export async function POST(request: Request) {
     : { data: null };
 
   if (spec?.id) {
+    const previewBranch = String(body.branch ?? "develop");
     await supabase
       .from("specs")
       .update({
@@ -36,6 +37,20 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString()
       })
       .eq("id", spec.id);
+
+    if (body.run_url) {
+      await supabase
+        .from("ci_runs")
+        .update({
+          branch: previewBranch,
+          environment: "preview",
+          preview_url: body.preview_url ?? null,
+          branch_alias: body.branch_alias ?? null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("html_url", body.run_url)
+        .eq("repo_full_name", repoFullName);
+    }
   }
 
   return NextResponse.json({ ok: true });

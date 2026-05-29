@@ -3,6 +3,7 @@
 import { Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { InputModal } from "@/components/ui/InputModal";
 
 type PendingDeploy = {
   id: string;
@@ -40,6 +41,7 @@ export function PendingDeployQueue() {
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [redeployLoading, setRedeployLoading] = useState<string | null>(null);
+  const [productionDeployTarget, setProductionDeployTarget] = useState<PendingDeploy | null>(null);
 
   useEffect(() => {
     void loadPending();
@@ -113,17 +115,33 @@ export function PendingDeployQueue() {
     }
   }
 
-  async function startProductionDeploy(item: PendingDeploy) {
+  function defaultReleaseTag() {
+    const now = new Date();
+    const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+    const time = now.toISOString().slice(11, 16).replace(":", "");
+    return `release-v${date}-${time}`;
+  }
+
+  function openProductionDeployModal(item: PendingDeploy) {
+    setActionErrors((prev) => ({ ...prev, [item.id]: "" }));
+    setProductionDeployTarget(item);
+  }
+
+  async function startProductionDeploy(item: PendingDeploy, requestedReleaseTag?: string) {
     setActionLoading(item.id);
     setActionErrors((prev) => ({ ...prev, [item.id]: "" }));
     try {
       const response = await fetch("/api/deployments/start-production", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ specId: item.id })
+        body: JSON.stringify({
+          specId: item.id,
+          releaseTag: requestedReleaseTag?.trim() || undefined
+        })
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to start production deployment");
+      setProductionDeployTarget(null);
       await loadPending();
     } catch (nextError) {
       setActionErrors((prev) => ({
@@ -257,6 +275,7 @@ export function PendingDeployQueue() {
   }
 
   return (
+    <>
     <div className="panel">
       <header className="panel-head">
         <h2>
@@ -386,7 +405,7 @@ export function PendingDeployQueue() {
                   {item.stage === "pending_production_deploy" && (
                     <button
                       className="btn primary"
-                      onClick={() => startProductionDeploy(item)}
+                      onClick={() => openProductionDeployModal(item)}
                       disabled={actionLoading === item.id}
                     >
                       {actionLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
@@ -437,5 +456,24 @@ export function PendingDeployQueue() {
         </div>
       )}
     </div>
+    <InputModal
+      open={Boolean(productionDeployTarget)}
+      title="Deploy to production"
+      label="Release tag"
+      placeholder={defaultReleaseTag()}
+      defaultValue={productionDeployTarget?.releaseTag ?? defaultReleaseTag()}
+      confirmLabel={actionLoading === productionDeployTarget?.id ? "Deploying..." : "Start Deployment"}
+      cancelLabel="Cancel"
+      required
+      onClose={() => {
+        if (actionLoading) return;
+        setProductionDeployTarget(null);
+      }}
+      onConfirm={(value) => {
+        if (!productionDeployTarget || actionLoading) return;
+        void startProductionDeploy(productionDeployTarget, value);
+      }}
+    />
+    </>
   );
 }

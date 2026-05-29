@@ -115,38 +115,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       source: "manual",
       details: { action, merge }
     });
-  } else if (action === "verify_preview") {
-    nextStatus = trace.release_pr_number ? "release_pending" : "preview_live";
-    update.status = nextStatus;
-    update.current_phase = phaseForStatus(nextStatus);
-    update.preview_deployment = {
-      ...(trace.preview_deployment ?? {}),
-      verified: true,
-      verifiedAt: new Date().toISOString(),
-      verifiedBy: user.email ?? user.id
-    };
-    eventType = "status_changed";
-  } else if (action === "verify_production") {
-    nextStatus = trace.reverse_sync_pr_number && trace.reverse_sync_status !== "merged" ? "production_live" : "completed";
-    update.status = nextStatus;
-    update.current_phase = phaseForStatus(nextStatus);
-    update.completed_at = nextStatus === "completed" ? new Date().toISOString() : null;
-    update.production_deployment = {
-      ...(trace.production_deployment ?? {}),
-      verified: true,
-      verifiedAt: new Date().toISOString(),
-      verifiedBy: user.email ?? user.id
-    };
-    eventType = "status_changed";
   } else if (action === "cancel") {
     nextStatus = "cancelled";
-    update.status = nextStatus;
-    update.current_phase = phaseForStatus(nextStatus);
-    update.pending_action = null;
-    update.completed_at = new Date().toISOString();
-    eventType = "status_changed";
-  } else if (action === "complete") {
-    nextStatus = "completed";
     update.status = nextStatus;
     update.current_phase = phaseForStatus(nextStatus);
     update.pending_action = null;

@@ -9,7 +9,9 @@ export type ReleaseTraceStatus =
   | "production_live"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "rolling_back"
+  | "rolled_back";
 
 export type ReleaseTraceType = "feature" | "hotfix" | "release";
 
@@ -18,11 +20,9 @@ export type PendingAction = {
     | "review_pr"
     | "approve_pr"
     | "merge_to_develop"
-    | "verify_preview"
     | "create_release_pr"
     | "approve_release"
     | "merge_to_main"
-    | "verify_production"
     | "merge_reverse_sync"
     | "resolve_conflict";
   description: string;
@@ -47,6 +47,9 @@ export type TraceEventType =
   | "reverse_sync_merged"
   | "incident_linked"
   | "manual_action"
-  | "status_changed";
+  | "status_changed"
+  | "rollback_initiated"
+  | "rollback_deployed"
+  | "rollback_failed";
 
 export type TraceSource = "github" | "cloudflare" | "manual" | "telegram" | "system";

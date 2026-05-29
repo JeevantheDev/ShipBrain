@@ -6,9 +6,9 @@ describe("getModel factory", () => {
     delete process.env.LLM_PROVIDER;
   });
 
-  it("defaults to anthropic when LLM_PROVIDER is unset", async () => {
+  it("defaults to Microsoft Foundry when LLM_PROVIDER is unset", async () => {
     const { getProvider } = await import("@/lib/ai/model");
-    expect(getProvider()).toBe("anthropic");
+    expect(getProvider()).toBe("microsoft_foundry");
   });
 
   it("supports openai", async () => {
@@ -17,10 +17,16 @@ describe("getModel factory", () => {
     expect(getProvider()).toBe("openai");
   });
 
-  it("supports azure", async () => {
+  it("maps azure aliases to Microsoft Foundry", async () => {
     process.env.LLM_PROVIDER = "azure";
     const { getProvider } = await import("@/lib/ai/model");
-    expect(getProvider()).toBe("azure");
+    expect(getProvider()).toBe("microsoft_foundry");
+  });
+
+  it("supports Microsoft Foundry aliases", async () => {
+    process.env.LLM_PROVIDER = "ms_foundry";
+    const { getProvider } = await import("@/lib/ai/model");
+    expect(getProvider()).toBe("microsoft_foundry");
   });
 
   it("supports google", async () => {

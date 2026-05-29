@@ -149,19 +149,29 @@ export async function createDraftPR(input: DraftPrInput) {
     draft: true
   });
 
+  let reviewerWarning: string | undefined;
   if (input.reviewers?.length) {
-    await octokit.pulls.requestReviewers({
-      owner: input.owner,
-      repo: input.repo,
-      pull_number: pr.number,
-      reviewers: input.reviewers
-    });
+    try {
+      await octokit.pulls.requestReviewers({
+        owner: input.owner,
+        repo: input.repo,
+        pull_number: pr.number,
+        reviewers: input.reviewers
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "GitHub rejected the reviewer request.";
+      const isCollaboratorError = /Reviews may only be requested from collaborators|not a collaborator/i.test(message);
+      if (!isCollaboratorError) throw error;
+      reviewerWarning =
+        "Draft PR was created, but reviewer assignment was skipped because one or more suggested reviewers are not repository collaborators.";
+    }
   }
 
   return {
     number: pr.number,
     html_url: pr.html_url,
-    draft: pr.draft ?? true
+    draft: pr.draft ?? true,
+    reviewerWarning
   };
 }
 

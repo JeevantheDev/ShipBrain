@@ -330,6 +330,15 @@ export default function CiPage() {
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to start preview deployment");
       await loadPendingDeploys();
       await loadRuns();
+      if (json.ciRunId) {
+        const runResponse = await fetch(`/api/ci-runs?run=${encodeURIComponent(String(json.ciRunId))}`, { cache: "no-store" }).catch(() => null);
+        const runJson = await runResponse?.json().catch(() => null);
+        const run = runJson?.runs?.[0] as CiRun | undefined;
+        if (run) {
+          setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)]);
+          setSelected(run);
+        }
+      }
     } catch (nextError) {
       setQueueActionErrors((prev) => ({
         ...prev,
@@ -358,8 +367,8 @@ export default function CiPage() {
 
   function getEnvironment(run: CiRun): "PROD" | "DEV" | "CI" | null {
     const name = (run.workflowName ?? run.title).toLowerCase();
-    if (name.includes("production") || name.includes("prod deploy") || run.branch === "main") return "PROD";
     if (name.includes("preview") || run.branch === "develop") return "DEV";
+    if (name.includes("production") || name.includes("prod deploy") || run.branch === "main") return "PROD";
     if (name.includes("ci") || name.includes("test") || name.includes("lint")) return "CI";
     return null;
   }
@@ -1036,9 +1045,10 @@ export default function CiPage() {
         title="Deploy to production"
         label="Release tag"
         placeholder={defaultReleaseTag()}
-        defaultValue={productionDeployTarget?.releaseTag ?? ""}
+        defaultValue={productionDeployTarget?.releaseTag ?? defaultReleaseTag()}
         confirmLabel={queueActionLoading === productionDeployTarget?.id ? "Deploying..." : "Start Deployment"}
         cancelLabel="Cancel"
+        required
         onClose={() => {
           if (queueActionLoading) return;
           setProductionDeployTarget(null);

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isBranchDeleteEvent, statusFromPullRequestEvent, verifyWebhookSignature } from "@/lib/github/webhooks";
-import { createOrUpdateTrace, updateTraceBySpec } from "@/lib/orchestrator";
+import { createOrUpdateTrace, updateTraceBySpecOrPr } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -27,6 +27,8 @@ export async function POST(request: Request) {
     const repoFullName = json.repository?.full_name ?? null;
     const branch = workflowRun.head_branch ?? null;
     const isVercelDeploy = workflowRun.name === "ShipBrain Production Deploy" || workflowRun.name === "ShipBrain Vercel Production Deploy";
+    const isPreviewDeploy = /preview/i.test(String(workflowRun.name ?? ""));
+    const displayBranch = isPreviewDeploy ? "develop" : branch;
     const workflowPrNumber = workflowRun.pull_requests?.[0]?.number ?? null;
     const { data: pullRequestSpec } = repoFullName && workflowPrNumber
       ? await supabase
@@ -105,9 +107,10 @@ export async function POST(request: Request) {
           html_url: workflowRun.html_url ?? null,
           head_sha: workflowRun.head_sha ?? null,
           event: workflowRun.event ?? null,
-          branch,
+          branch: displayBranch,
           status: workflowRun.status ?? "queued",
           conclusion: workflowRun.conclusion ?? null,
+          environment: isPreviewDeploy ? "preview" : isVercelDeploy ? "production" : null,
           updated_at: new Date().toISOString()
         },
         { onConflict: "github_run_id" }
@@ -142,38 +145,47 @@ export async function POST(request: Request) {
 
       await supabase.from("specs").update(specUpdate).eq("id", spec.id);
 
-      await updateTraceBySpec(spec.id, {
-        status: isVercelDeploy
-          ? workflowRun.status === "completed"
-            ? workflowRun.conclusion === "success"
-              ? "production_live"
-              : "failed"
-            : "merged_main"
-          : workflowRun.status === "completed"
-            ? workflowRun.conclusion === "success"
-              ? "preview_live"
-              : "failed"
-            : "merged_develop",
-        ...(isVercelDeploy
-          ? { production_deployment: { status: workflowRun.conclusion ?? workflowRun.status, url: workflowRun.html_url, sha: workflowRun.head_sha, timestamp: new Date().toISOString() } }
-          : { preview_deployment: { status: workflowRun.conclusion ?? workflowRun.status, url: workflowRun.html_url, sha: workflowRun.head_sha, timestamp: new Date().toISOString() } })
-      }, {
-        eventType: workflowRun.status === "completed"
-          ? workflowRun.conclusion === "success"
-            ? "deployment_succeeded"
-            : "deployment_failed"
-          : "deployment_started",
-        source: "github",
-        actor: workflowRun.actor?.login ?? "github-actions",
-        actorType: "github",
-        details: {
-          workflowRunId: workflowRun.id,
-          workflowName: workflowRun.name,
-          runUrl: workflowRun.html_url,
-          conclusion: workflowRun.conclusion,
-          status: workflowRun.status
-        }
-      });
+      if (isVercelDeploy || isPreviewDeploy) {
+        await updateTraceBySpecOrPr({
+          specId: spec.id,
+          repoFullName,
+          prNumber: spec.pr_number ?? workflowPrNumber,
+          branchName: branch,
+          patch: {
+            status: isVercelDeploy
+              ? workflowRun.status === "completed"
+                ? workflowRun.conclusion === "success"
+                  ? "production_live"
+                  : "failed"
+                : "merged_main"
+              : workflowRun.status === "completed"
+                ? workflowRun.conclusion === "success"
+                  ? "preview_live"
+                  : "failed"
+                : "merged_develop",
+            ...(isVercelDeploy
+              ? { production_deployment: { status: workflowRun.conclusion ?? workflowRun.status, url: workflowRun.html_url, sha: workflowRun.head_sha, timestamp: new Date().toISOString(), runId: workflowRun.id } }
+              : { preview_deployment: { status: workflowRun.conclusion ?? workflowRun.status, url: workflowRun.html_url, sha: workflowRun.head_sha, timestamp: new Date().toISOString(), runId: workflowRun.id } })
+          },
+          event: {
+            eventType: workflowRun.status === "completed"
+              ? workflowRun.conclusion === "success"
+                ? "deployment_succeeded"
+                : "deployment_failed"
+              : "deployment_started",
+            source: "github",
+            actor: workflowRun.actor?.login ?? "github-actions",
+            actorType: "github",
+            details: {
+              workflowRunId: workflowRun.id,
+              workflowName: workflowRun.name,
+              runUrl: workflowRun.html_url,
+              conclusion: workflowRun.conclusion,
+              status: workflowRun.status
+            }
+          }
+        });
+      }
     }
 
     return NextResponse.json({
@@ -194,6 +206,7 @@ export async function POST(request: Request) {
     const repoFullName = json.repository?.full_name;
     const nextStatus = statusFromPullRequestEvent(json);
     let updated = 0;
+    let syncedSpecId: string | null = null;
 
     if (repoFullName && pullRequest.number && nextStatus) {
       // When a release PR (develop→main) is merged on GitHub, DO NOT auto-deploy
@@ -238,6 +251,7 @@ export async function POST(request: Request) {
           .maybeSingle();
 
         if (readySpec?.id) {
+          syncedSpecId = readySpec.id;
           await supabase
             .from("specs")
             .update({
@@ -278,7 +292,8 @@ export async function POST(request: Request) {
               merge_sha: pullRequest.merge_commit_sha ?? null,
               feature_head_sha: pullRequest.head?.sha ?? null,
               feature_last_synced_at: new Date().toISOString(),
-              release_status: "ready_for_prod",
+              release_status: pullRequest.base?.ref === "main" ? "pending_deploy" : "ready_for_prod",
+              ...(pullRequest.base?.ref === "main" ? { release_pr_status: "merged" } : {}),
               updated_at: new Date().toISOString()
             }
           : {
@@ -294,6 +309,7 @@ export async function POST(request: Request) {
 
       // Skip standard update for release promotion PRs (already handled above)
       if (prUpdate) {
+        // First try to update existing spec
         const { data, error } = await supabase
           .from("specs")
           .update(prUpdate)
@@ -305,6 +321,62 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "Unable to sync pull request webhook.", detail: error.message }, { status: 500 });
         }
         updated = data?.length ?? 0;
+        syncedSpecId = data?.[0]?.id ?? null;
+
+        // If no existing spec was updated, create one for this PR
+        // This handles PRs created outside ShipBrain or when spec save failed
+        if (updated === 0 && nextStatus === "merged") {
+          // Find the user who owns this repo
+          const { data: repoOwner } = await supabase
+            .from("repos")
+            .select("user_id")
+            .eq("full_name", repoFullName)
+            .maybeSingle();
+
+          if (repoOwner?.user_id) {
+            const { data: newSpec, error: insertError } = await supabase
+              .from("specs")
+              .insert({
+                user_id: repoOwner.user_id,
+                raw_spec: pullRequest.body ?? pullRequest.title ?? "",
+                decomposed_tasks: { prTitle: pullRequest.title },
+                status: nextStatus,
+                repo_full_name: repoFullName,
+                branch_name: pullRequest.head?.ref,
+                base_branch: pullRequest.base?.ref,
+                pr_number: pullRequest.number,
+                pr_url: pullRequest.html_url,
+                merged_at: pullRequest.merged_at ?? new Date().toISOString(),
+                merge_sha: pullRequest.merge_commit_sha ?? null,
+                feature_head_sha: pullRequest.head?.sha ?? null,
+                release_status: pullRequest.base?.ref === "main" ? "pending_deploy" : "ready_for_prod",
+                updated_at: new Date().toISOString()
+              })
+              .select("id")
+              .single();
+
+            if (!insertError && newSpec) {
+              updated = 1;
+              syncedSpecId = newSpec.id;
+              console.log(`Created new spec ${newSpec.id} for merged PR #${pullRequest.number}`);
+
+              // Create notification for the user
+              await supabase
+                .from("notifications")
+                .insert({
+                  user_id: repoOwner.user_id,
+                  type: "pr_merged",
+                  title: "PR Merged",
+                  body: `PR #${pullRequest.number}: ${pullRequest.title} merged to ${pullRequest.base?.ref}`,
+                  href: pullRequest.html_url,
+                  severity: "info",
+                  repo_full_name: repoFullName,
+                  metadata: { prNumber: pullRequest.number, branch: pullRequest.head?.ref, baseBranch: pullRequest.base?.ref }
+                })
+                .catch((err) => console.error("notification creation failed:", err));
+            }
+          }
+        }
       } else {
         updated = 1; // Release promotion PR was handled above
       }
@@ -313,37 +385,74 @@ export async function POST(request: Request) {
         const baseBranch = pullRequest.base?.ref ?? "develop";
         const headBranch = pullRequest.head?.ref ?? "feature";
         const isHotfix = headBranch.startsWith("hotfix/");
+        const isShipBrainSetupPr = headBranch.startsWith("shipbrain/setup");
         const traceStatus =
           nextStatus === "merged"
             ? baseBranch === "main"
               ? "merged_main"
               : "merged_develop"
+            : nextStatus === "closed"
+              ? "cancelled"
             : pullRequest.draft
               ? "draft"
               : "ready_for_review";
 
-        await createOrUpdateTrace({
-          repoFullName,
-          type: isReleasePromotionPr ? "release" : isHotfix ? "hotfix" : "feature",
-          title: pullRequest.title ?? `PR #${pullRequest.number}`,
-          description: pullRequest.body ?? null,
-          status: traceStatus,
-          sourceBranch: headBranch,
-          targetBranch: baseBranch,
-          draftPrNumber: pullRequest.number,
-          draftPrUrl: pullRequest.html_url,
-          releasePrNumber: isReleasePromotionPr ? pullRequest.number : null,
-          releasePrUrl: isReleasePromotionPr ? pullRequest.html_url : null,
-          source: "github",
-          actor: pullRequest.user?.login ?? "github",
-          eventType: nextStatus === "merged" ? "pr_merged" : json.action === "opened" ? "pr_opened" : "pr_updated",
-          details: {
-            action: json.action,
-            merged: pullRequest.merged ?? false,
-            mergeCommitSha: pullRequest.merge_commit_sha ?? null,
-            prNumber: pullRequest.number
-          }
-        });
+        if (isShipBrainSetupPr) {
+          // Onboarding/setup PRs configure ShipBrain itself; they are not product release traces.
+        } else if (isReleasePromotionPr && syncedSpecId) {
+          await updateTraceBySpecOrPr({
+            specId: syncedSpecId,
+            repoFullName,
+            prNumber: pullRequest.number,
+            branchName: headBranch,
+            patch: {
+              status: traceStatus,
+              release_pr_number: pullRequest.number,
+              release_pr_url: pullRequest.html_url,
+              merged_to_main: nextStatus === "merged"
+                ? {
+                    sha: pullRequest.merge_commit_sha ?? null,
+                    mergedAt: pullRequest.merged_at ?? new Date().toISOString(),
+                    prNumber: pullRequest.number
+                  }
+                : null
+            },
+            event: {
+              eventType: nextStatus === "merged" ? "pr_merged" : nextStatus === "closed" ? "status_changed" : json.action === "opened" ? "pr_opened" : "pr_updated",
+              source: "github",
+              actor: pullRequest.user?.login ?? "github",
+              actorType: "github",
+              details: {
+                action: json.action,
+                merged: pullRequest.merged ?? false,
+                mergeCommitSha: pullRequest.merge_commit_sha ?? null,
+                prNumber: pullRequest.number
+              }
+            }
+          });
+        } else {
+          await createOrUpdateTrace({
+            repoFullName,
+            type: isHotfix ? "hotfix" : "feature",
+            title: pullRequest.title ?? `PR #${pullRequest.number}`,
+            description: pullRequest.body ?? null,
+            status: traceStatus,
+            sourceBranch: headBranch,
+            targetBranch: baseBranch,
+            draftPrNumber: pullRequest.number,
+            draftPrUrl: pullRequest.html_url,
+            specId: syncedSpecId,
+            source: "github",
+            actor: pullRequest.user?.login ?? "github",
+            eventType: nextStatus === "merged" ? "pr_merged" : nextStatus === "closed" ? "status_changed" : json.action === "opened" ? "pr_opened" : "pr_updated",
+            details: {
+              action: json.action,
+              merged: pullRequest.merged ?? false,
+              mergeCommitSha: pullRequest.merge_commit_sha ?? null,
+              prNumber: pullRequest.number
+            }
+          });
+        }
       } catch (error) {
         console.error("release trace sync failed", error);
       }
@@ -402,6 +511,45 @@ export async function POST(request: Request) {
 
     if (error) {
       return NextResponse.json({ error: "Unable to sync branch delete webhook.", detail: error.message }, { status: 500 });
+    }
+
+    try {
+      const { data: traces } = await supabase
+        .from("release_traces")
+        .select("id")
+        .eq("repo_full_name", json.repository.full_name)
+        .eq("source_branch", json.ref)
+        .in("status", ["draft", "ready_for_review", "approved", "release_pending", "failed"]);
+
+      if (traces?.length) {
+        const now = new Date().toISOString();
+        await supabase
+          .from("release_traces")
+          .update({
+            status: "cancelled",
+            current_phase: "closed",
+            pending_action: null,
+            updated_at: now
+          })
+          .in("id", traces.map((trace) => trace.id));
+
+        await supabase.from("trace_events").insert(
+          traces.map((trace) => ({
+            trace_id: trace.id,
+            event_type: "status_changed",
+            actor: "github",
+            actor_type: "github",
+            source: "github",
+            details: {
+              action: "branch_deleted",
+              branch: json.ref,
+              repo: json.repository.full_name
+            }
+          }))
+        );
+      }
+    } catch (traceError) {
+      console.error("Unable to sync release trace branch deletion", traceError);
     }
 
     return NextResponse.json({

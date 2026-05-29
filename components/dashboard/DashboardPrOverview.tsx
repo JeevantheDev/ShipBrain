@@ -183,6 +183,10 @@ export function DashboardPrOverview() {
     return "ci pending";
   }
 
+  function canManageDraftRun(run: RecentPrRun) {
+    return run.status === "pending_pr" || run.status === "draft_created";
+  }
+
   return (
     <>
       {/* Metrics Row */}
@@ -274,7 +278,7 @@ export function DashboardPrOverview() {
             {activeRuns.map((run) => {
               const isMerged = run.status === "merged";
               const isClosed = run.status === "closed";
-              const canManageDraft = run.status === "pending_pr" || run.status === "draft_created";
+              const canManageDraft = canManageDraftRun(run);
               return (
                 <div className="pr-row" key={run.id}>
                   <div className={`pr-icon ${isMerged ? "merged" : ""}`} title={statusLabel(run)}>

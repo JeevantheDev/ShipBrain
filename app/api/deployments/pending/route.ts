@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/cloudflare/client";
+import { createOrUpdateTrace } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -41,7 +42,82 @@ export async function GET() {
   const octokit = getOctokit();
   const queue: any[] = [];
 
-  for (const spec of specs ?? []) {
+  for (const rawSpec of specs ?? []) {
+    const spec = { ...rawSpec };
+
+    if (spec.pr_number && spec.repo_full_name && ["draft_created", "pending_pr"].includes(spec.status)) {
+      try {
+        const { owner, repo } = splitRepo(spec.repo_full_name);
+        const { data: pr } = await octokit.pulls.get({
+          owner,
+          repo,
+          pull_number: spec.pr_number
+        });
+
+        const nextStatus = pr.merged ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft_created" : "pending_pr";
+        const nextBaseBranch = pr.base?.ref ?? spec.base_branch;
+        const nextBranchName = pr.head?.ref ?? spec.branch_name;
+        const nextMergeSha = pr.merged ? pr.merge_commit_sha ?? spec.merge_sha : spec.merge_sha;
+
+        if (
+          nextStatus !== spec.status ||
+          nextBaseBranch !== spec.base_branch ||
+          nextBranchName !== spec.branch_name ||
+          nextMergeSha !== spec.merge_sha
+        ) {
+          const updates: Record<string, any> = {
+            status: nextStatus,
+            pr_url: pr.html_url ?? spec.pr_url,
+            branch_name: nextBranchName,
+            base_branch: nextBaseBranch,
+            feature_head_sha: pr.head?.sha ?? spec.feature_head_sha,
+            feature_last_synced_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+
+          if (nextStatus === "merged") {
+            updates.merged_at = pr.merged_at ?? new Date().toISOString();
+            updates.merge_sha = nextMergeSha;
+            if (nextBaseBranch === "develop" && !spec.release_status) {
+              updates.release_status = "ready_for_prod";
+            } else if (nextBaseBranch === "main" && spec.branch_name?.startsWith("hotfix/") && spec.release_status !== "deployed" && spec.release_status !== "deploying") {
+              updates.release_status = "pending_deploy";
+              updates.release_pr_status = "merged";
+            }
+          }
+
+          await supabase.from("specs").update(updates).eq("id", spec.id);
+          Object.assign(spec, updates);
+
+          await createOrUpdateTrace({
+            repoFullName: spec.repo_full_name,
+            type: nextBranchName?.startsWith("hotfix/") ? "hotfix" : nextBranchName === "develop" && nextBaseBranch === "main" ? "release" : "feature",
+            title: pr.title ?? `PR #${spec.pr_number}`,
+            description: pr.body ?? null,
+            status: nextStatus === "merged" ? nextBaseBranch === "main" ? "merged_main" : "merged_develop" : nextStatus === "closed" ? "cancelled" : pr.draft ? "draft" : "ready_for_review",
+            sourceBranch: nextBranchName ?? spec.branch_name,
+            targetBranch: nextBaseBranch ?? spec.base_branch,
+            draftPrNumber: spec.pr_number,
+            draftPrUrl: pr.html_url ?? spec.pr_url,
+            releasePrNumber: nextBranchName === "develop" && nextBaseBranch === "main" ? spec.pr_number : null,
+            releasePrUrl: nextBranchName === "develop" && nextBaseBranch === "main" ? pr.html_url ?? spec.pr_url : null,
+            specId: spec.id,
+            source: "github",
+            actor: "ShipBrain sync",
+            eventType: nextStatus === "merged" ? "pr_merged" : "pr_updated",
+            details: {
+              prNumber: spec.pr_number,
+              merged: pr.merged,
+              mergeCommitSha: nextMergeSha,
+              syncSource: "deployment_queue"
+            }
+          });
+        }
+      } catch (error) {
+        console.error("Unable to reconcile PR for deployment queue", error);
+      }
+    }
+
     const plan = spec.decomposed_tasks as { prTitle?: string } | null;
     const title = plan?.prTitle ?? `PR #${spec.pr_number}`;
     let linkedReleasePrNumber = spec.release_pr_number;

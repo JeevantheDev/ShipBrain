@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
+import { updateTraceBySpecOrPr } from "@/lib/orchestrator";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getLatestPreviewUrl, getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/cloudflare/client";
 
@@ -13,6 +14,9 @@ function splitRepo(repoFullName: string) {
 /**
  * Active refresh endpoint - checks GitHub directly for latest status
  * This doesn't rely on webhooks and gives accurate real-time data
+ *
+ * POST with { specId } - refresh a specific spec
+ * POST with { discover: true, repoFullName } - discover and create specs for merged PRs
  */
 export async function POST(request: Request) {
   const supabase = getSupabaseServerClient();
@@ -24,9 +28,105 @@ export async function POST(request: Request) {
 
   const body = await request.json();
   const specId = body.specId;
+  const discover = body.discover === true;
+  const repoFullName = body.repoFullName;
+
+  // Discovery mode - find and create specs for merged PRs that don't have specs
+  if (discover && repoFullName) {
+    const octokit = getOctokit();
+    const { owner, repo } = splitRepo(repoFullName);
+    const created: any[] = [];
+
+    try {
+      // Get recently merged PRs from GitHub
+      const { data: pulls } = await octokit.pulls.list({
+        owner,
+        repo,
+        state: "closed",
+        sort: "updated",
+        direction: "desc",
+        per_page: 20
+      });
+
+      const mergedPrs = pulls.filter(pr => pr.merged_at);
+
+      for (const pr of mergedPrs) {
+        // Check if spec already exists for this PR
+        const { data: existingSpec } = await supabase
+          .from("specs")
+          .select("id")
+          .eq("repo_full_name", repoFullName)
+          .eq("pr_number", pr.number)
+          .maybeSingle();
+
+        if (!existingSpec) {
+          // Create spec for this PR
+          const baseBranch = pr.base?.ref ?? "develop";
+          const { data: newSpec, error: insertError } = await supabase
+            .from("specs")
+            .insert({
+              user_id: user.id,
+              raw_spec: pr.body ?? pr.title ?? "",
+              decomposed_tasks: { prTitle: pr.title },
+              status: "merged",
+              repo_full_name: repoFullName,
+              branch_name: pr.head?.ref,
+              base_branch: baseBranch,
+              pr_number: pr.number,
+              pr_url: pr.html_url,
+              merged_at: pr.merged_at,
+              merge_sha: pr.merge_commit_sha ?? null,
+              feature_head_sha: pr.head?.sha ?? null,
+              release_status: baseBranch === "main" ? "pending_deploy" : "ready_for_prod",
+              updated_at: new Date().toISOString()
+            })
+            .select("id")
+            .single();
+
+          if (!insertError && newSpec) {
+            created.push({
+              specId: newSpec.id,
+              prNumber: pr.number,
+              title: pr.title,
+              baseBranch
+            });
+          }
+        }
+      }
+
+      // Create notification if any specs were created
+      if (created.length > 0) {
+        await supabase
+          .from("notifications")
+          .insert({
+            user_id: user.id,
+            type: "specs_discovered",
+            title: "PRs Synced",
+            body: `Discovered and synced ${created.length} merged PR(s) from GitHub`,
+            href: `/releases`,
+            severity: "info",
+            repo_full_name: repoFullName,
+            metadata: { created }
+          })
+          .catch((err) => console.error("notification creation failed:", err));
+      }
+
+      return NextResponse.json({
+        ok: true,
+        discovered: created.length,
+        specs: created,
+        message: created.length > 0 ? `Created ${created.length} spec(s) for merged PRs` : "No new PRs to sync"
+      });
+    } catch (error) {
+      return NextResponse.json({
+        error: "Failed to discover PRs from GitHub",
+        detail: error instanceof Error ? error.message : "Unknown error"
+      }, { status: 500 });
+    }
+  }
 
   if (!specId) {
-    return NextResponse.json({ error: "specId is required" }, { status: 400 });
+    return NextResponse.json({ error: "specId is required (or use discover mode)" }, { status: 400 });
   }
 
   const { data: spec, error: specError } = await supabase
@@ -235,6 +335,31 @@ export async function POST(request: Request) {
 
     // Apply updates
     await supabase.from("specs").update(updates).eq("id", specId);
+
+    if (updates.status === "closed" || updates.release_pr_status === "closed") {
+      await updateTraceBySpecOrPr({
+        specId,
+        repoFullName: spec.repo_full_name,
+        prNumber: updates.release_pr_status === "closed" ? spec.release_pr_number : spec.pr_number,
+        branchName: spec.branch_name,
+        patch: {
+          status: "cancelled"
+        },
+        event: {
+          eventType: "status_changed",
+          source: "github",
+          actor: "ShipBrain sync",
+          actorType: "system",
+          details: {
+            reason: updates.release_pr_status === "closed" ? "release_pr_closed" : "draft_pr_closed",
+            specId,
+            prNumber: updates.release_pr_status === "closed" ? spec.release_pr_number : spec.pr_number
+          }
+        }
+      }).catch((traceError) => {
+        console.error("Unable to sync release trace from spec refresh", traceError);
+      });
+    }
 
     return NextResponse.json({
       ok: true,

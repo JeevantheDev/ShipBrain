@@ -2,12 +2,14 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Menu, X } from "lucide-react";
+import { Menu, MessageSquareText, X } from "lucide-react";
 import { SidebarNav } from "@/components/app-shell/SidebarNav";
 import { UserMenu } from "@/components/app-shell/UserMenu";
+import { SidebarEnvironments } from "@/components/app-shell/SidebarEnvironments";
 import { RepoOnboarding } from "@/components/repo-onboarding/RepoOnboarding";
 import { Crumbs } from "@/components/app-shell/Crumbs";
 import { NotificationBell } from "@/components/app-shell/NotificationBell";
+import { ChatDrawer } from "@/components/app-shell/ChatDrawer";
 
 type DashboardShellProps = {
   children: ReactNode;
@@ -19,9 +21,17 @@ type DashboardShellProps = {
   };
 };
 
+function formatProvider(provider: string) {
+  if (provider === "microsoft_foundry" || provider === "ms_foundry" || provider === "azure" || provider === "azure_foundry") {
+    return "MS Foundry";
+  }
+  return provider;
+}
+
 export function DashboardShell({ children, provider, user }: DashboardShellProps) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -71,8 +81,12 @@ export function DashboardShell({ children, provider, user }: DashboardShellProps
           <SidebarNav onNavigate={() => setSidebarOpen(false)} />
         </div>
 
-        <div className="sidebar-user-block">
-          <UserMenu name={user.name} email={user.email} avatarUrl={user.avatarUrl} />
+        <div className="sidebar-bottom-block">
+          <SidebarEnvironments />
+
+          <div className="sidebar-user-block">
+            <UserMenu name={user.name} email={user.email} avatarUrl={user.avatarUrl} />
+          </div>
         </div>
       </aside>
 
@@ -85,17 +99,22 @@ export function DashboardShell({ children, provider, user }: DashboardShellProps
           <div className="topbar-right">
             <RepoOnboarding />
             <span className="pill ai-pill desktop-status">
-              <span className="ai-diamond">◆</span> {provider}
+              <span className="ai-diamond">◆</span> {formatProvider(provider)}
             </span>
             {/* <span className="pill desktop-status gates-pill">
               <span className="status-dot"></span>
               gates armed
             </span> */}
+            <button className="topbar-chat-button" type="button" onClick={() => setChatOpen(true)}>
+              <MessageSquareText size={15} />
+              <span>AI Chat</span>
+            </button>
             <NotificationBell />
           </div>
         </header>
         <div className="content">{children}</div>
       </main>
+      <ChatDrawer open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
   );
 }

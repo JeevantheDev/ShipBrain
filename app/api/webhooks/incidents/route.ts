@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { verifyShipBrainApiKey } from "@/lib/shipbrain/api-keys";
+import { flushPendingTelegramNotifications } from "@/lib/telegram/flush";
 
 export const runtime = "nodejs";
 
@@ -287,6 +288,7 @@ export async function POST(request: Request) {
       .single();
 
     if (error) return json({ error: "Unable to update incident from webhook.", detail: error.message }, { status: 500 });
+    await flushPendingTelegramNotifications().catch((error) => console.error("telegram notification flush failed", error));
     return json({ ok: true, deduped: true, incident: data }, { status: 200 });
   }
 
@@ -317,5 +319,6 @@ export async function POST(request: Request) {
     return json({ error: "Unable to create incident from webhook.", detail: error.message }, { status: 500 });
   }
 
+  await flushPendingTelegramNotifications().catch((error) => console.error("telegram notification flush failed", error));
   return json({ ok: true, incident: data }, { status: 201 });
 }

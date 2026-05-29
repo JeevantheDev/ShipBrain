@@ -1047,7 +1047,7 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
                       {analysisProgress < 40
                         ? "Ingesting Alert Payload metadata logs."
                         : analysisProgress < 76
-                          ? "Querying Gemini trace analyzer."
+                          ? "Querying Microsoft Foundry trace analyzer."
                           : "Formatting fix proposals."}
                     </div>
                   </div>

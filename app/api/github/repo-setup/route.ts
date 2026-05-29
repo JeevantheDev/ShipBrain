@@ -11,35 +11,13 @@ import {
   getShipBrainCloudflareCredentials
 } from "@/lib/cloudflare/client";
 import { generateShipBrainApiKey, hashShipBrainApiKey, lastFour } from "@/lib/shipbrain/api-keys";
+import { resolvePublicShipBrainUrl } from "@/lib/shipbrain/public-url";
 import { requirePasswordConfirmation } from "@/lib/auth/reauth";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
 type SetupEmit = (event: Record<string, unknown>) => void | Promise<void>;
-
-function publicShipBrainApiUrl(request: Request) {
-  const configured =
-    process.env.SHIPBRAIN_API_URL ??
-    process.env.NEXT_PUBLIC_SHIPBRAIN_API_URL ??
-    process.env.VERCEL_URL ??
-    process.env.NGROK_PUBLIC_URL ??
-    process.env.NGROK_URL;
-
-  if (configured?.trim()) {
-    let url = configured.trim();
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = `https://${url}`;
-    }
-    return url.replace(/\/$/, "");
-  }
-
-  const origin = new URL(request.url).origin;
-  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(origin)) {
-    throw new Error("Set SHIPBRAIN_API_URL to your public ngrok URL before connecting a repo from localhost. GitHub Actions cannot call localhost.");
-  }
-  return origin.replace(/\/$/, "");
-}
 
 async function getContext() {
   const supabase = getSupabaseServerClient();
@@ -149,7 +127,7 @@ async function runSetup({
 
   // Generate ShipBrain credentials
   const shipbrainApiKey = generateShipBrainApiKey();
-  const apiUrl = publicShipBrainApiUrl(request);
+  const apiUrl = resolvePublicShipBrainUrl(request, { requirePublicForLocal: true });
 
   // Get ShipBrain's Cloudflare credentials
   const { apiToken: cfApiToken, accountId: cfAccountId } = getShipBrainCloudflareCredentials();
