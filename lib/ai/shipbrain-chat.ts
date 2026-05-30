@@ -220,8 +220,17 @@ function resolveWriteToolParams(
         params.specId = specId;
       }
 
-      if (toolName === "deploy_production" && args.release_tag) {
-        params.releaseTag = args.release_tag;
+      if (toolName === "deploy_production") {
+        // Use provided tag or generate a default one that will be shown in confirmation
+        // This ensures the same tag is used when the user confirms
+        if (args.release_tag) {
+          params.releaseTag = args.release_tag;
+        } else {
+          const now = new Date();
+          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+          const time = now.toISOString().slice(11, 16).replace(":", "");
+          params.releaseTag = `release-v${date}-${time}`;
+        }
       }
       break;
     }
@@ -309,6 +318,22 @@ function resolveWriteToolParams(
       if (found) {
         params.incidentId = found.id;
         params.incidentTitle = found.title;
+        // For approve_hotfix, capture the base branch and set default release tag if targeting main
+        if (toolName === "approve_hotfix") {
+          const baseBranch = found.hotfixBaseBranch || args.base_branch || args.baseBranch;
+          if (baseBranch) {
+            params.baseBranch = baseBranch;
+          }
+          // If targeting main and no release tag provided, generate a default one
+          if (baseBranch === "main" && !args.release_tag) {
+            const now = new Date();
+            const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+            const incidentPart = found.id?.slice(0, 8) || "fix";
+            params.releaseTag = `hotfix-v${date}-${incidentPart}`;
+          } else if (args.release_tag) {
+            params.releaseTag = args.release_tag;
+          }
+        }
       } else if (incidentId) {
         params.incidentId = incidentId;
       }

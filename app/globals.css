@@ -5759,3 +5759,227 @@ p {
     grid-template-columns: 1fr;
   }
 }
+
+/* ─── Spec Citation Tooltip ─────────────────────────────────────────────────── */
+
+.spec-citation-trigger {
+  position: relative;
+  display: inline;
+  cursor: help;
+}
+
+.spec-citation-trigger .inline-code {
+  border-bottom: 1px dashed var(--ai-purple);
+  transition: background 0.15s ease;
+}
+
+.spec-citation-trigger:hover .inline-code {
+  background: rgba(139, 92, 246, 0.2);
+}
+
+.spec-citation-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  min-width: 280px;
+  max-width: 360px;
+  padding: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  animation: spec-tooltip-in 0.15s ease;
+}
+
+@keyframes spec-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.spec-citation-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--line);
+}
+
+.spec-citation-loading,
+.spec-citation-error,
+.spec-citation-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.spec-citation-loading .spin {
+  animation: spin 1s linear infinite;
+}
+
+.spec-citation-error {
+  color: var(--red);
+}
+
+.spec-citation-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spec-citation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.spec-citation-pr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--brand);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.spec-citation-pr-link:hover {
+  color: var(--ai-purple);
+}
+
+.spec-citation-pr-link svg:last-child {
+  opacity: 0.5;
+}
+
+.spec-citation-no-pr {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.spec-citation-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: capitalize;
+  background: var(--panel-3);
+  color: var(--text-muted);
+}
+
+.spec-citation-status.merged {
+  background: rgba(46, 160, 67, 0.15);
+  color: var(--green);
+}
+
+.spec-citation-status.draft {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--ai-purple);
+}
+
+.spec-citation-status.open {
+  background: rgba(47, 129, 247, 0.15);
+  color: var(--brand);
+}
+
+.spec-citation-status.failed {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--red);
+}
+
+.spec-citation-status .status-icon {
+  flex-shrink: 0;
+}
+
+.spec-citation-status .status-icon.merged {
+  color: var(--green);
+}
+
+.spec-citation-status .status-icon.failed {
+  color: var(--red);
+}
+
+.spec-citation-status .status-icon.pending {
+  color: var(--text-muted);
+}
+
+.spec-citation-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.spec-citation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.spec-citation-repo {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.spec-citation-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.spec-citation-base {
+  opacity: 0.7;
+}
+
+.spec-citation-release {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.spec-citation-release code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--panel-3);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  color: var(--ai-purple);
+}
+
+.spec-citation-preview {
+  font-size: 11px;
+  color: var(--brand);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.spec-citation-preview:hover {
+  text-decoration: underline;
+}
+
+.spec-citation-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}

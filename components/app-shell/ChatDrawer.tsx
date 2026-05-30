@@ -30,6 +30,7 @@ import {
   X,
   Zap
 } from "lucide-react";
+import { SpecCitation, isSpecId } from "@/components/ui/SpecCitation";
 
 type ChatMessage = {
   id: string;
@@ -725,6 +726,17 @@ Please try again or check the console for more details.`;
                           em: ({ children }) => <em>{children}</em>,
                           code: ({ children, className }) => {
                             const isInline = !className;
+                            const text = String(children).replace(/\n$/, "");
+
+                            // Check if this inline code is a spec ID (UUID)
+                            if (isInline && isSpecId(text)) {
+                              return (
+                                <SpecCitation specId={text}>
+                                  <code className="inline-code">{children}</code>
+                                </SpecCitation>
+                              );
+                            }
+
                             return isInline ? (
                               <code className="inline-code">{children}</code>
                             ) : (

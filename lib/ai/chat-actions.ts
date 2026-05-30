@@ -236,16 +236,9 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
       return `I'll deploy spec \`${params.specId}\` to the preview environment.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
     case "deploy_production": {
-      const defaultTag = params.releaseTag || (() => {
-        const now = new Date();
-        const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-        const time = now.toISOString().slice(11, 16).replace(":", "");
-        return `release-v${date}-${time}`;
-      })();
-      if (!params.releaseTag) {
-        return `I'll deploy to production for spec \`${params.specId}\`.\n\n**Release Tag:** \`${defaultTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
-      }
-      return `I'll create release tag \`${params.releaseTag}\` and deploy to production for spec \`${params.specId}\`.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+      // params.releaseTag is now always set by resolveWriteToolParams
+      const releaseTag = params.releaseTag;
+      return `I'll deploy to production for spec \`${params.specId}\`.\n\n**Release Tag:** \`${releaseTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
     }
 
     case "approve_release":
@@ -261,20 +254,11 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
       return `I'll create a hotfix PR for incident \`${params.incidentId}\` on the **${params.baseBranch}** branch.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
     case "approve_hotfix": {
-      // Look up the incident from context to check if it targets main (production)
-      const incidents = (context?.incidents ?? []) as any[];
-      const incident = incidents.find((i: any) => i.id === params.incidentId || i.id?.startsWith(params.incidentId));
-      const baseBranch = params.baseBranch || params.targetBranch || incident?.hotfixBaseBranch;
-      const isMainTarget = baseBranch === "main";
+      // params.baseBranch and params.releaseTag are now set by resolveWriteToolParams
+      const isMainTarget = params.baseBranch === "main";
 
-      if (isMainTarget && !params.releaseTag) {
-        const defaultHotfixTag = (() => {
-          const now = new Date();
-          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-          const incidentPart = params.incidentId?.slice(0, 8) || "fix";
-          return `hotfix-v${date}-${incidentPart}`;
-        })();
-        return `I'll merge the hotfix for incident \`${params.incidentId}\` and deploy it to **production**.${riskWarning}\n\n**Release Tag:** \`${defaultHotfixTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
+      if (isMainTarget && params.releaseTag) {
+        return `I'll merge the hotfix for incident \`${params.incidentId}\` and deploy it to **production**.${riskWarning}\n\n**Release Tag:** \`${params.releaseTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
       }
       return `I'll merge the hotfix for incident \`${params.incidentId}\` and deploy it.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
     }
@@ -290,6 +274,30 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
   }
 }
 
+// Resolve base URL for internal API calls
+function getInternalApiBaseUrl(): string {
+  // Try various environment variables in order of preference
+  const candidates = [
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.SHIPBRAIN_API_URL,
+    process.env.NEXT_PUBLIC_SHIPBRAIN_API_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`,
+    process.env.VERCEL_URL && `https://${process.env.VERCEL_URL}`,
+    "http://localhost:3003"
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate?.trim()) {
+      const url = candidate.trim();
+      // Ensure URL has protocol
+      const withProtocol = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+      return withProtocol.replace(/\/$/, "");
+    }
+  }
+
+  return "http://localhost:3003";
+}
+
 // Execute action
 export async function executeAction(
   action: ActionType,
@@ -298,7 +306,7 @@ export async function executeAction(
   userId: string,
   repoFullName: string | null
 ): Promise<{ success: boolean; result?: any; error?: string }> {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3003";
+  const baseUrl = getInternalApiBaseUrl();
 
   try {
     switch (action) {
