@@ -27,6 +27,7 @@ type TracePatch = Partial<{
   title: string;
   description: string | null;
   status: ReleaseTraceStatus;
+  current_phase: string | null;
   source_branch: string;
   target_branch: string;
   draft_pr_number: number | null;
@@ -155,6 +156,9 @@ export async function createOrUpdateTrace(input: TraceInput) {
     details: input.details ?? {}
   });
   await recomputePendingAction(result.data.id);
+  if (result.data.type === "release") {
+    await propagateReleaseState(db, result.data);
+  }
   return result.data;
 }
 
@@ -172,6 +176,9 @@ export async function updateTraceBySpec(specId: string, patch: TracePatch, event
   if (error) throw new Error(error.message);
   await addTraceEvent({ traceId: trace.id, ...event });
   await recomputePendingAction(trace.id);
+  if (data.type === "release") {
+    await propagateReleaseState(db, data);
+  }
   return data;
 }
 
@@ -235,6 +242,9 @@ export async function updateTraceBySpecOrPr(input: {
   if (error) throw new Error(error.message);
   await addTraceEvent({ traceId: trace.id, ...input.event });
   await recomputePendingAction(trace.id);
+  if (data.type === "release") {
+    await propagateReleaseState(db, data);
+  }
   return data;
 }
 
@@ -309,6 +319,9 @@ export async function initiateRollback(input: {
     }
   });
   await recomputePendingAction(input.traceId);
+  if (data.type === "release") {
+    await propagateReleaseState(db, data);
+  }
   return data;
 }
 
@@ -422,6 +435,12 @@ export async function completeRollback(input: {
           }
         });
         await recomputePendingAction(targetTrace.id);
+        if (targetTrace.type === "release") {
+          const { data: updatedTarget } = await db.from("release_traces").select("*").eq("id", targetTrace.id).single();
+          if (updatedTarget) {
+            await propagateReleaseState(db, updatedTarget);
+          }
+        }
       }
     }
   }
@@ -477,5 +496,183 @@ export async function completeRollback(input: {
     }
   });
   await recomputePendingAction(trace.id);
+  if (data.type === "release") {
+    await propagateReleaseState(db, data);
+  }
   return data;
+}
+
+async function propagateReleaseState(db: any, releaseTrace: any) {
+  if (releaseTrace.type !== "release" || !releaseTrace.release_pr_number) return;
+
+  const patch: Record<string, any> = {
+    status: releaseTrace.status,
+    current_phase: releaseTrace.current_phase,
+    merged_to_main: releaseTrace.merged_to_main,
+    production_deployment: releaseTrace.production_deployment,
+    completed_at: releaseTrace.completed_at,
+    updated_at: new Date().toISOString()
+  };
+
+  // Update all feature traces associated with this release PR
+  const { data: updatedFeatures } = await db
+    .from("release_traces")
+    .update(patch)
+    .eq("repo_full_name", releaseTrace.repo_full_name)
+    .eq("type", "feature")
+    .eq("release_pr_number", releaseTrace.release_pr_number)
+    .select("id");
+
+  if (updatedFeatures?.length) {
+    for (const feature of updatedFeatures) {
+      await addTraceEvent({
+        traceId: feature.id,
+        eventType: "status_changed",
+        actor: "ShipBrain sync",
+        actorType: "system",
+        source: "system",
+        details: {
+          note: `Propagated release state from Release PR #${releaseTrace.release_pr_number}`,
+          releaseStatus: releaseTrace.status
+        }
+      });
+      await recomputePendingAction(feature.id);
+    }
+  }
+
+  // Also propagate to the specs table!
+  const specPatch: Record<string, any> = {
+    release_status: releaseTrace.status === "production_live" || releaseTrace.status === "completed"
+      ? "deployed"
+      : releaseTrace.status === "failed"
+        ? "failed"
+        : releaseTrace.status === "merged_main"
+          ? "deploying"
+          : "ready_for_prod",
+    deployed_at: releaseTrace.completed_at,
+    updated_at: new Date().toISOString()
+  };
+
+  if (releaseTrace.production_deployment?.url) {
+    specPatch.production_url = releaseTrace.production_deployment.url;
+  }
+
+  await db
+    .from("specs")
+    .update(specPatch)
+    .eq("repo_full_name", releaseTrace.repo_full_name)
+    .eq("release_pr_number", releaseTrace.release_pr_number);
+}
+
+export async function associateFeaturesWithRelease(repoFullName: string, releasePrNumber: number, releasePrUrl: string, releasePrState: string) {
+  const db = getSupabaseAdminClient();
+
+  // Find all feature traces that are merged_develop or preview_live
+  const { data: traces } = await db
+    .from("release_traces")
+    .select("id, title")
+    .eq("repo_full_name", repoFullName)
+    .eq("type", "feature")
+    .in("status", ["merged_develop", "preview_live"]);
+
+  if (traces?.length) {
+    const traceStatus = releasePrState === "merged" ? "merged_main" : "release_pending";
+    const phase = phaseForTraceStatus(traceStatus, { type: "feature", target_branch: "main" });
+
+    for (const trace of traces) {
+      await db
+        .from("release_traces")
+        .update({
+          status: traceStatus,
+          current_phase: phase,
+          release_pr_number: releasePrNumber,
+          release_pr_url: releasePrUrl,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", trace.id);
+
+      await addTraceEvent({
+        traceId: trace.id,
+        eventType: "status_changed",
+        actor: "github",
+        actorType: "github",
+        source: "github",
+        details: {
+          note: `Associated with Release PR #${releasePrNumber}`,
+          prNumber: releasePrNumber,
+          prUrl: releasePrUrl
+        }
+      });
+      await recomputePendingAction(trace.id);
+    }
+  }
+
+  // Find all specs that are merged to develop and don't have a release PR number yet, or match this one
+  const releaseStatus = releasePrState === "merged" ? "pending_deploy" : "ready_for_prod";
+  await db
+    .from("specs")
+    .update({
+      release_pr_number: releasePrNumber,
+      release_pr_url: releasePrUrl,
+      release_pr_status: releasePrState,
+      release_status: releaseStatus,
+      updated_at: new Date().toISOString()
+    })
+    .eq("repo_full_name", repoFullName)
+    .eq("base_branch", "develop")
+    .eq("status", "merged")
+    .or(`release_pr_number.is.null,release_pr_number.eq.${releasePrNumber}`);
+}
+
+export async function dissociateFeaturesFromRelease(repoFullName: string, releasePrNumber: number) {
+  const db = getSupabaseAdminClient();
+
+  // Find all feature traces linked to this release PR
+  const { data: traces } = await db
+    .from("release_traces")
+    .select("id")
+    .eq("repo_full_name", repoFullName)
+    .eq("type", "feature")
+    .eq("release_pr_number", releasePrNumber);
+
+  if (traces?.length) {
+    for (const trace of traces) {
+      await db
+        .from("release_traces")
+        .update({
+          status: "preview_live",
+          current_phase: "preview",
+          release_pr_number: null,
+          release_pr_url: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", trace.id);
+
+      await addTraceEvent({
+        traceId: trace.id,
+        eventType: "status_changed",
+        actor: "github",
+        actorType: "github",
+        source: "github",
+        details: {
+          note: `Dissociated from closed Release PR #${releasePrNumber}`,
+          prNumber: releasePrNumber
+        }
+      });
+      await recomputePendingAction(trace.id);
+    }
+  }
+
+  // Clear release_pr fields on specs
+  await db
+    .from("specs")
+    .update({
+      release_pr_number: null,
+      release_pr_url: null,
+      release_pr_status: null,
+      release_status: null,
+      updated_at: new Date().toISOString()
+    })
+    .eq("repo_full_name", repoFullName)
+    .eq("release_pr_number", releasePrNumber);
 }

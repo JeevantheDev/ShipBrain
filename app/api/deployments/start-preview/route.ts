@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { dispatchDevelopPreviewDeploy } from "@/lib/github/deployments";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { updateTraceBySpec } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -53,9 +55,9 @@ export async function POST(request: Request) {
 
   const body = await request.json();
 
-  // Support internal server-to-server calls with internalUserId
   const internalUserId = body.internalUserId || request.headers.get("X-Internal-User-Id");
-  const user = authUser || (internalUserId ? { id: internalUserId } : null);
+  const user = authUser || (internalUserId ? { id: internalUserId, email: null } : null) as any;
+  const isInternalCall = !authUser && !!internalUserId;
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -65,7 +67,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "specId is required" }, { status: 400 });
   }
 
-  const { data: spec, error: specError } = await supabase
+  // Use admin client for internal calls to bypass RLS
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
+
+  const { data: spec, error: specError } = await db
     .from("specs")
     .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, deployment_status, preview_status, preview_url")
     .eq("id", specId)
@@ -108,7 +113,7 @@ export async function POST(request: Request) {
 
   try {
     const dispatchedAfter = Date.now();
-    const { data: repoRow } = await supabase
+    const { data: repoRow } = await db
       .from("repos")
       .select("default_branch")
       .eq("full_name", spec.repo_full_name)
@@ -116,12 +121,18 @@ export async function POST(request: Request) {
 
     const defaultBranch = repoRow?.default_branch || "main";
 
+    // Use the spec's base_branch to ensure we deploy from the correct branch
+    // This is important for hotfixes that target develop - they should deploy from develop, not main
+    const targetBranch = spec.base_branch || "develop";
+
     const deployment = await dispatchDevelopPreviewDeploy({
       owner,
       repo,
-      ref: "develop",
+      ref: targetBranch,
       defaultBranch,
-      sourcePrNumber: spec.pr_number
+      sourcePrNumber: spec.pr_number,
+      // For preview deployments, prefer failing over using wrong branch
+      noFallback: true
     });
 
     const workflowRun = await findDispatchedPreviewRun({
@@ -132,7 +143,7 @@ export async function POST(request: Request) {
       defaultBranch
     });
 
-    await supabase
+    await db
       .from("specs")
       .update({
         deployment_status: "develop_validated",
@@ -146,7 +157,7 @@ export async function POST(request: Request) {
       .eq("id", spec.id);
 
     if (workflowRun?.id) {
-      await supabase
+      await db
         .from("ci_runs")
         .upsert(
           {
@@ -169,7 +180,7 @@ export async function POST(request: Request) {
         );
     }
 
-    await supabase.from("approval_events").insert({
+    await db.from("approval_events").insert({
       entity_type: "spec",
       entity_id: spec.id,
       action: "deploy_approved",
@@ -186,7 +197,7 @@ export async function POST(request: Request) {
     });
 
     // Create notification for preview deployment
-    await supabase
+    const { error: notifError } = await db
       .from("notifications")
       .insert({
         user_id: user.id,
@@ -197,8 +208,30 @@ export async function POST(request: Request) {
         severity: "info",
         repo_full_name: spec.repo_full_name,
         metadata: { specId: spec.id, prNumber: spec.pr_number, branch: "develop" }
-      })
-      .catch((err) => console.error("notification creation failed", err));
+      });
+    if (notifError) console.error("notification creation failed", notifError);
+
+    // Update release trace to show preview deploying
+    await updateTraceBySpec(spec.id, {
+      status: "merged_develop",
+      current_phase: "preview",
+      preview_deployment: {
+        status: "deploying",
+        url: deployment.workflowUrl,
+        branch: "develop",
+        timestamp: new Date().toISOString()
+      }
+    }, {
+      eventType: "preview_deploy_started",
+      source: "manual",
+      actor: user.email ?? user.id,
+      actorType: "user",
+      details: {
+        specId: spec.id,
+        prNumber: spec.pr_number,
+        workflowUrl: deployment.workflowUrl
+      }
+    }).catch((err) => console.error("Failed to update trace for preview start:", err));
 
     return NextResponse.json({
       ok: true,

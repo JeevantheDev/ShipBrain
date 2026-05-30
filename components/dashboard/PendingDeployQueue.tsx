@@ -5,6 +5,15 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { InputModal } from "@/components/ui/InputModal";
 
+type IncludedFeature = {
+  id: string;
+  prNumber: number;
+  prUrl: string;
+  title: string;
+  branchName: string;
+  mergedAt?: string;
+};
+
 type PendingDeploy = {
   id: string;
   queueType: "develop" | "production";
@@ -31,6 +40,9 @@ type PendingDeploy = {
   mergedAt?: string;
   ciRunId?: string;
   updatedAt: string;
+  // Consolidated features for preview_ready stage
+  includedFeatures?: IncludedFeature[];
+  featureCount?: number;
 };
 
 export function PendingDeployQueue() {
@@ -228,6 +240,9 @@ export function PendingDeployQueue() {
         if (item.releasePrNumber) {
           return `Preview is live and Release PR #${item.releasePrNumber} already exists. Review or merge it before production deploy.`;
         }
+        if (item.featureCount && item.featureCount > 1) {
+          return `${item.featureCount} features are ready in develop. Create a Release PR to promote all to production.`;
+        }
         return "Preview is live! Test it, then create a Release PR to promote to production.";
       case "release_pr_open":
         return `Release PR #${item.releasePrNumber} is open. Merge it to proceed with production deployment.`;
@@ -332,13 +347,27 @@ export function PendingDeployQueue() {
                   </svg>
                   <div>
                     {stageCopy(item)}
-                    {item.mergedAt && (
+                    {item.mergedAt && !item.includedFeatures?.length && (
                       <div className="merged-line mono">
                         merged {new Date(item.mergedAt).toLocaleString()}
                       </div>
                     )}
                   </div>
                 </div>
+
+                {item.includedFeatures && item.includedFeatures.length > 1 && (
+                  <div className="dq-features-list">
+                    <div className="dq-features-header">Included features ({item.featureCount}):</div>
+                    {item.includedFeatures.map((feature) => (
+                      <div key={feature.id} className="dq-feature-item">
+                        <a href={feature.prUrl} target="_blank" rel="noreferrer">
+                          PR #{feature.prNumber}
+                        </a>
+                        <span className="dq-feature-title">{feature.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {item.previewUrl && (
                   <div className="dq-url">
@@ -381,16 +410,19 @@ export function PendingDeployQueue() {
                       </button>
                       {item.releasePrNumber && item.releasePrUrl ? (
                         <a className="btn primary" href={item.releasePrUrl} target="_blank" rel="noreferrer">
-                          Review Release PR #{item.releasePrNumber}
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
+                            <path d="M3 6h6M9 6l-2.5 2.5M9 6L6.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          Open Release PR #{item.releasePrNumber}
                         </a>
                       ) : item.releasePrNumber ? (
                         <button className="btn primary" disabled>
-                          Release PR #{item.releasePrNumber}
+                          Release PR #{item.releasePrNumber} (draft)
                         </button>
                       ) : (
                         <Link className="btn primary" href="/spec-to-pr?template=develop-to-prod">
                           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
-                            <path d="M2 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                            <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
                           </svg>
                           Create Release PR
                         </Link>

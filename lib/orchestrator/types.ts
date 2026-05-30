@@ -41,6 +41,8 @@ export type TraceEventType =
   | "deployment_started"
   | "deployment_succeeded"
   | "deployment_failed"
+  | "preview_deploy_started"
+  | "preview_deployed"
   | "release_pr_created"
   | "hotfix_created"
   | "reverse_sync_created"

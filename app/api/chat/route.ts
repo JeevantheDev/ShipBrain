@@ -95,7 +95,8 @@ export async function POST(request: Request) {
     repoFullName: profile?.active_repo_full_name ?? null,
     threadId: thread.id,
     message,
-    limit: 12
+    limit: 12,
+    pendingAction: body.pendingAction ?? null
   });
 
   const assistantMessage = await appendChatMessage({

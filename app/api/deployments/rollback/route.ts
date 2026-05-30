@@ -40,7 +40,8 @@ export async function POST(request: Request) {
     .select("id, repo_full_name, release_tag, release_sha, release_status, production_url, decomposed_tasks")
     .eq("user_id", user.id)
     .eq("release_tag", targetReleaseTag)
-    .eq("release_status", "deployed");
+    .eq("release_status", "deployed")
+    .eq("base_branch", "main");
 
   if (repoFullName) {
     specQuery = specQuery.eq("repo_full_name", repoFullName);
@@ -90,15 +91,19 @@ export async function POST(request: Request) {
   if (traceId) {
     const { data } = await db.from("release_traces").select("*").eq("id", traceId).eq("user_id", user.id).maybeSingle();
     trace = data;
+    if (trace && trace.type !== "release") {
+      return NextResponse.json({ error: "Rollbacks are only supported for Release traces, not individual feature traces." }, { status: 400 });
+    }
   }
 
   if (!trace) {
-    // Find the most recent production trace for this repo
+    // Find the most recent production trace of type release for this repo
     const { data } = await db
       .from("release_traces")
       .select("*")
       .eq("user_id", user.id)
       .eq("repo_full_name", targetSpec.repo_full_name)
+      .eq("type", "release")
       .in("status", ["production_live", "merged_main", "failed"])
       .order("updated_at", { ascending: false })
       .limit(1)
@@ -193,7 +198,7 @@ export async function POST(request: Request) {
   }
 
   // Create notification for rollback
-  await supabase
+  const { error: notifError } = await db
     .from("notifications")
     .insert({
       user_id: user.id,
@@ -204,8 +209,8 @@ export async function POST(request: Request) {
       severity: "warning",
       repo_full_name: targetSpec.repo_full_name,
       metadata: { sourceReleaseTag, targetReleaseTag, rollbackId: rollbackRecord?.id }
-    })
-    .catch((err) => console.error("notification creation failed", err));
+    });
+  if (notifError) console.error("notification creation failed", notifError);
 
   return NextResponse.json({
     ok: true,

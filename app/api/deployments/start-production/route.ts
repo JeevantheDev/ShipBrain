@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { dispatchHotfixDeploy, dispatchVercelProductionDeploy, createReleaseTag } from "@/lib/github/deployments";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getOctokit } from "@/lib/github/client";
 import { updateTraceBySpec } from "@/lib/orchestrator";
 
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
   // Support internal server-to-server calls with internalUserId
   const internalUserId = body.internalUserId || request.headers.get("X-Internal-User-Id");
   const user = authUser || (internalUserId ? { id: internalUserId, email: null } : null);
+  const isInternalCall = !authUser && !!internalUserId;
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -45,9 +47,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const { data: spec, error: specError } = await supabase
+  // Use admin client for internal calls to bypass RLS
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
+
+  const { data: spec, error: specError } = await db
     .from("specs")
-    .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, release_status, release_pr_status, release_tag, release_sha, incident_id")
+    .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, release_status, release_pr_number, release_pr_url, release_pr_status, release_tag, release_sha, incident_id")
     .eq("id", specId)
     .eq("user_id", user.id)
     .single();
@@ -63,6 +68,34 @@ export async function POST(request: Request) {
     typeof spec.branch_name === "string" &&
     spec.branch_name.startsWith("hotfix/");
   const isPendingDeploy = spec.release_status === "pending_deploy" && spec.release_pr_status === "merged";
+  const isFeatureMergedToDevelop = spec.status === "merged" && spec.base_branch === "develop";
+
+  // Smart guidance based on current state
+  if (isFeatureMergedToDevelop) {
+    // Feature merged to develop - check release PR status
+    if (!spec.release_pr_number) {
+      return NextResponse.json(
+        {
+          error: "No release PR exists yet.",
+          detail: "Create a Release PR (develop → main) first from the Deployment Queue, then merge it before deploying to production.",
+          action: "create_release_pr"
+        },
+        { status: 409 }
+      );
+    }
+    if (spec.release_pr_status !== "merged") {
+      return NextResponse.json(
+        {
+          error: "Release PR is not merged yet.",
+          detail: `Please review and merge Release PR #${spec.release_pr_number} on GitHub first, then try again.`,
+          action: "merge_release_pr",
+          releasePrNumber: spec.release_pr_number,
+          releasePrUrl: spec.release_pr_url
+        },
+        { status: 409 }
+      );
+    }
+  }
 
   if (!isPendingDeploy && !isMergedReleasePromotion && !isMergedDirectMainHotfix) {
     return NextResponse.json(
@@ -129,7 +162,7 @@ export async function POST(request: Request) {
       releaseSha = commit.sha;
 
       // Update the spec with the full SHA for future use
-      await supabase
+      await db
         .from("specs")
         .update({ release_sha: releaseSha, updated_at: new Date().toISOString() })
         .eq("id", spec.id);
@@ -145,7 +178,7 @@ export async function POST(request: Request) {
         releaseSha = ref.object.sha;
 
         // Update the spec with the full SHA
-        await supabase
+        await db
           .from("specs")
           .update({ release_sha: releaseSha, updated_at: new Date().toISOString() })
           .eq("id", spec.id);
@@ -190,7 +223,7 @@ export async function POST(request: Request) {
         });
 
     // Update spec with deployment info
-    await supabase
+    await db
       .from("specs")
       .update({
         release_tag: releaseTag,
@@ -203,7 +236,7 @@ export async function POST(request: Request) {
       .eq("id", spec.id);
 
     if (isMergedDirectMainHotfix && spec.incident_id) {
-      await supabase
+      await db
         .from("incidents")
         .update({
           release_version: releaseTag,
@@ -240,7 +273,7 @@ export async function POST(request: Request) {
     }).catch(() => null);
 
     // Record approval event
-    await supabase.from("approval_events").insert({
+    await db.from("approval_events").insert({
       entity_type: "spec",
       entity_id: spec.id,
       action: "deploy_approved",
@@ -257,7 +290,7 @@ export async function POST(request: Request) {
     });
 
     // Create notification for production deployment
-    await supabase
+    const { error: notifError } = await db
       .from("notifications")
       .insert({
         user_id: user.id,
@@ -268,8 +301,8 @@ export async function POST(request: Request) {
         severity: "warning",
         repo_full_name: spec.repo_full_name,
         metadata: { specId: spec.id, releaseTag, releaseSha }
-      })
-      .catch((err) => console.error("notification creation failed", err));
+      });
+    if (notifError) console.error("notification creation failed", notifError);
 
     return NextResponse.json({
       ok: true,

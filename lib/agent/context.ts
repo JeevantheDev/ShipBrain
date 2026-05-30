@@ -33,7 +33,7 @@ export async function getShipBrainAgentContext({
 
   let specsQuery = supabase
     .from("specs")
-    .select("id, repo_full_name, raw_spec, pr_number, pr_url, status, branch_name, base_branch, release_status, release_tag, preview_status, preview_url, deployment_url, updated_at")
+    .select("id, repo_full_name, raw_spec, pr_number, pr_url, status, branch_name, base_branch, release_status, release_tag, preview_status, preview_url, deployment_url, decomposed_tasks, updated_at")
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
     .limit(limit);
@@ -94,10 +94,26 @@ export async function getShipBrainAgentContext({
     ...repo,
     active: repoFilter ? repo.full_name === repoFilter : false
   }));
-  const pendingDeployments = recentPrs.filter((spec: any) =>
-    ["merged", "draft_created", "pending_pr"].includes(spec.status) &&
-    spec.release_status !== "deployed"
-  );
+
+  // Filter for truly pending deployments:
+  // - Must be in a deployable status
+  // - Not already fully deployed (release_status !== "deployed")
+  // - For preview: not already preview deployed (!preview_url && preview_status !== "deployed")
+  const pendingDeployments = recentPrs.filter((spec: any) => {
+    if (!["merged", "draft_created", "pending_pr"].includes(spec.status)) return false;
+    if (spec.release_status === "deployed") return false;
+
+    // For develop-targeted PRs, check if preview is already deployed
+    if (spec.base_branch === "develop" && spec.status === "merged") {
+      // If preview is already deployed/deploying, only include if ready for production (has release PR)
+      if (spec.preview_url || spec.preview_status === "deployed") {
+        // Include only if there's a pending production action
+        return spec.release_status === "pending_deploy" || spec.release_status === "ready_for_prod";
+      }
+    }
+
+    return true;
+  });
 
   return {
     activeRepo: repoFilter ?? null,

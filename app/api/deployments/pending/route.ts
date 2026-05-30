@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/cloudflare/client";
-import { createOrUpdateTrace } from "@/lib/orchestrator";
+import { createOrUpdateTrace, updateTraceBySpec } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -80,7 +80,8 @@ export async function GET() {
             updates.merge_sha = nextMergeSha;
             if (nextBaseBranch === "develop" && !spec.release_status) {
               updates.release_status = "ready_for_prod";
-            } else if (nextBaseBranch === "main" && spec.branch_name?.startsWith("hotfix/") && spec.release_status !== "deployed" && spec.release_status !== "deploying") {
+            } else if (nextBaseBranch === "main" && spec.release_status !== "deployed" && spec.release_status !== "deploying") {
+              // Both hotfix PRs and release PRs (develop -> main) should be pending_deploy
               updates.release_status = "pending_deploy";
               updates.release_pr_status = "merged";
             }
@@ -120,6 +121,8 @@ export async function GET() {
 
     const plan = spec.decomposed_tasks as { prTitle?: string } | null;
     const title = plan?.prTitle ?? `PR #${spec.pr_number}`;
+
+    // First check if this spec itself has a release PR (Telegram flow stores it on the same spec)
     let linkedReleasePrNumber = spec.release_pr_number;
     let linkedReleasePrUrl = spec.release_pr_url;
     let linkedReleasePrStatus = spec.release_pr_status;
@@ -140,6 +143,7 @@ export async function GET() {
       queueType = "develop";
 
       if (!linkedReleasePrNumber) {
+        // Find active (non-deployed, non-closed) release PRs for this repo
         const { data: releaseSpec } = await supabase
           .from("specs")
           .select("pr_number, pr_url, status, release_status, release_pr_status")
@@ -148,6 +152,7 @@ export async function GET() {
           .eq("branch_name", "develop")
           .eq("base_branch", "main")
           .not("status", "eq", "closed")
+          .not("release_status", "eq", "deployed")
           .order("updated_at", { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -160,9 +165,13 @@ export async function GET() {
         }
       }
 
-      if (spec.preview_url || spec.preview_status === "deployed" || linkedReleasePrNumber) {
-        // Feature rows stay in the develop lane. Production deploy actions belong
-        // to the separate develop -> main release promotion spec.
+      // Don't skip features with linked release PR - show them with "Review Release PR" button
+      // Only skip if the release PR is already merged (it will show in production queue)
+      if (linkedReleasePrNumber && linkedReleasePrStatus === "merged") {
+        continue; // Release PR is merged, production deploy pending
+      }
+
+      if (spec.preview_url || spec.preview_status === "deployed") {
         stage = "preview_ready";
       } else if (spec.preview_status === "deploying") {
         // Actively verify the preview run hasn't already completed — prevents stale badge
@@ -196,6 +205,7 @@ export async function GET() {
                 updated_at: new Date().toISOString()
               };
 
+              let previewUrl: string | null = null;
               try {
                 // Get Cloudflare credentials from repo record
                 const { data: repoRecord } = await supabase
@@ -209,7 +219,7 @@ export async function GET() {
                 const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN;
 
                 if (cloudflareApiToken && cloudflareAccountId && cloudflareProjectName && spec.merge_sha) {
-                  const previewUrl = await getPreviewUrlForSha({
+                  previewUrl = await getPreviewUrlForSha({
                     apiToken: cloudflareApiToken,
                     accountId: cloudflareAccountId,
                     projectName: cloudflareProjectName,
@@ -224,6 +234,29 @@ export async function GET() {
               }
 
               await supabase.from("specs").update(updateData).eq("id", spec.id);
+
+              // Update release trace to preview_live
+              await updateTraceBySpec(spec.id, {
+                status: "preview_live",
+                current_phase: "preview",
+                preview_deployment: {
+                  status: "deployed",
+                  url: previewUrl,
+                  branch: "develop",
+                  timestamp: new Date().toISOString()
+                }
+              }, {
+                eventType: "preview_deployed",
+                source: "github",
+                actor: "github-actions",
+                actorType: "system",
+                details: {
+                  previewUrl,
+                  runUrl: matchRun.html_url,
+                  prNumber: spec.pr_number
+                }
+              }).catch((err) => console.error("Failed to update trace for preview:", err));
+
               resolvedPreviewStage = "preview_ready";
             } else {
               // Run failed — reset so user can retry
@@ -251,6 +284,8 @@ export async function GET() {
 
       if (spec.incident_id && spec.status !== "merged") {
         stage = "hotfix_pr_open";
+      } else if (isReleasePromotionSpec && spec.status !== "merged") {
+        stage = "release_pr_open";
       } else if (spec.status === "merged" && isReleasePromotionSpec) {
         if (spec.release_status === "deploying") {
           stage = "deploying";
@@ -376,9 +411,9 @@ export async function GET() {
       deploymentStatus: spec.deployment_status,
       releaseStatus: spec.release_status,
       linkedReleaseStatus,
-      releasePrNumber: linkedReleasePrNumber,
-      releasePrUrl: linkedReleasePrUrl,
-      releasePrStatus: linkedReleasePrStatus,
+      releasePrNumber: isReleasePromotionSpec ? spec.pr_number : linkedReleasePrNumber,
+      releasePrUrl: isReleasePromotionSpec ? spec.pr_url : linkedReleasePrUrl,
+      releasePrStatus: isReleasePromotionSpec ? spec.release_pr_status : linkedReleasePrStatus,
       releaseTag: spec.release_tag,
       releaseSha: spec.release_sha,
       previewUrl: spec.preview_url,
@@ -392,13 +427,85 @@ export async function GET() {
     });
   }
 
+  // Consolidate preview_ready items by repo - ONE release PR per repo includes all features
+  const previewReadyByRepo = new Map<string, any[]>();
+  const otherItems: any[] = [];
+
+  for (const item of queue) {
+    if (item.stage === "preview_ready" && item.queueType === "develop") {
+      const existing = previewReadyByRepo.get(item.repo) ?? [];
+      existing.push(item);
+      previewReadyByRepo.set(item.repo, existing);
+    } else {
+      otherItems.push(item);
+    }
+  }
+
+  // Create consolidated items for preview_ready repos
+  const consolidatedQueue: any[] = [...otherItems];
+
+  for (const [repo, features] of previewReadyByRepo) {
+    // Sort features by mergedAt (most recent first)
+    features.sort((a, b) => new Date(b.mergedAt ?? b.updatedAt).getTime() - new Date(a.mergedAt ?? a.updatedAt).getTime());
+
+    const mostRecent = features[0];
+    const featureCount = features.length;
+
+    // Check if ANY feature has a release PR (not just the most recent)
+    const featureWithReleasePr = features.find(f => f.releasePrNumber);
+    const releasePrNumber = featureWithReleasePr?.releasePrNumber ?? mostRecent.releasePrNumber;
+    const releasePrUrl = featureWithReleasePr?.releasePrUrl ?? mostRecent.releasePrUrl;
+    const releasePrStatus = featureWithReleasePr?.releasePrStatus ?? mostRecent.releasePrStatus;
+
+    // Create consolidated item
+    consolidatedQueue.push({
+      id: mostRecent.id,
+      queueType: "develop",
+      stage: "preview_ready",
+      prNumber: mostRecent.prNumber,
+      prUrl: mostRecent.prUrl,
+      title: featureCount > 1
+        ? `${featureCount} features ready for release`
+        : mostRecent.title,
+      repo,
+      branchName: mostRecent.branchName,
+      baseBranch: mostRecent.baseBranch,
+      deploymentStatus: mostRecent.deploymentStatus,
+      releaseStatus: featureWithReleasePr?.releaseStatus ?? mostRecent.releaseStatus,
+      linkedReleaseStatus: featureWithReleasePr?.linkedReleaseStatus ?? mostRecent.linkedReleaseStatus,
+      releasePrNumber,
+      releasePrUrl,
+      releasePrStatus,
+      releaseTag: featureWithReleasePr?.releaseTag ?? mostRecent.releaseTag,
+      releaseSha: featureWithReleasePr?.releaseSha ?? mostRecent.releaseSha,
+      previewUrl: mostRecent.previewUrl,
+      previewStatus: mostRecent.previewStatus,
+      previewBranchAlias: mostRecent.previewBranchAlias,
+      productionUrl: mostRecent.productionUrl,
+      mergeSha: mostRecent.mergeSha,
+      mergedAt: mostRecent.mergedAt,
+      ciRunId: mostRecent.ciRunId,
+      updatedAt: mostRecent.updatedAt,
+      // Include all features for display
+      includedFeatures: features.map(f => ({
+        id: f.id,
+        prNumber: f.prNumber,
+        prUrl: f.prUrl,
+        title: f.title,
+        branchName: f.branchName,
+        mergedAt: f.mergedAt
+      })),
+      featureCount
+    });
+  }
+
   // Sort by updated time, production items first
-  queue.sort((a, b) => {
+  consolidatedQueue.sort((a, b) => {
     if (a.queueType !== b.queueType) {
       return a.queueType === "production" ? -1 : 1;
     }
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
   });
 
-  return NextResponse.json(queue);
+  return NextResponse.json(consolidatedQueue);
 }

@@ -423,6 +423,7 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
                   status={selected.status}
                   repoFullName={selected.repo_full_name}
                   currentReleaseTag={selected.production_deployment?.releaseTag ?? selected.production_deployment?.tag}
+                  type={selected.type}
                 />
               </section>
 

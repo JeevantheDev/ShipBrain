@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { dispatchDevelopPreviewDeploy, dispatchVercelProductionDeploy } from "@/lib/github/deployments";
 import { ensureReleaseTagAvailable, mergePullRequest, tagCommitForRelease } from "@/lib/github/pr";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
@@ -29,23 +30,31 @@ function toAudit(row: any) {
   };
 }
 
-async function getUserOr401() {
+async function getUserOr401(request?: Request) {
   const supabase = getSupabaseServerClient();
   const {
-    data: { user }
+    data: { user: authUser }
   } = await supabase.auth.getUser();
-  return { supabase, user };
+
+  // Support internal server-to-server calls with X-Internal-User-Id
+  const internalUserId = request?.headers.get("X-Internal-User-Id");
+  const user = authUser || (internalUserId ? { id: internalUserId, email: null, user_metadata: {} } : null);
+
+  return { supabase, user: user as any };
 }
 
 export async function GET(request: Request) {
-  const { supabase, user } = await getUserOr401();
+  const { supabase, user } = await getUserOr401(request);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const isInternalCall = !request.headers.get("cookie") && !!request.headers.get("X-Internal-User-Id");
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
 
   const url = new URL(request.url);
   const entityId = url.searchParams.get("entityId");
   const specId = url.searchParams.get("specId");
 
-  let query = supabase
+  let query = db
     .from("approval_events")
     .select("id, action, note, metadata, created_at")
     .eq("entity_type", "ci_run")
@@ -68,15 +77,144 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const { supabase, user } = await getUserOr401();
+  const { supabase, user } = await getUserOr401(request);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const isInternalCall = !request.headers.get("cookie") && !!request.headers.get("X-Internal-User-Id");
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
+
   const body = await request.json();
-  const runId = String(body.runId ?? "");
+  let runId = String(body.runId ?? "");
   const action = body.action as ApprovalAction;
-  if (!runId) return NextResponse.json({ error: "runId is required" }, { status: 400 });
+
   if (action !== "deploy_approved" && action !== "deploy_rejected") {
     return NextResponse.json({ error: "action must be deploy_approved or deploy_rejected" }, { status: 400 });
+  }
+
+  // Support mapping traceId/specId to a runId on internal calls
+  let specId = body.specId || body.traceId;
+  if (body.traceId && !specId) {
+    const { data: traceRow } = await db
+      .from("release_traces")
+      .select("spec_id")
+      .eq("id", body.traceId)
+      .maybeSingle();
+    if (traceRow?.spec_id) {
+      specId = traceRow.spec_id;
+    }
+  }
+
+  if (specId && !runId) {
+    // Check if this is a merged release PR that's ready for deployment (no CI run needed)
+    const { data: specForDeploy } = await db
+      .from("specs")
+      .select("id, status, merge_sha, base_branch, branch_name, release_status, release_pr_status, release_pr_number, repo_full_name")
+      .eq("id", specId)
+      .single();
+
+    // If release PR is merged and pending deploy, we can deploy directly without CI run
+    if (
+      specForDeploy &&
+      specForDeploy.release_pr_status === "merged" &&
+      specForDeploy.release_status === "pending_deploy" &&
+      specForDeploy.merge_sha
+    ) {
+      // Direct deployment path - no CI run needed
+      const { owner, repo } = splitRepo(specForDeploy.repo_full_name);
+      const releaseTag = String(body.releaseTag ?? "").trim() || defaultReleaseTag();
+
+      try {
+        const { dispatchCloudflareProductionDeploy } = await import("@/lib/github/deployments");
+
+        await ensureReleaseTagAvailable({
+          owner,
+          repo,
+          sha: specForDeploy.merge_sha,
+          releaseTag
+        });
+
+        const release = await tagCommitForRelease({
+          owner,
+          repo,
+          sha: specForDeploy.merge_sha,
+          releaseTag
+        });
+
+        const deployment = await dispatchCloudflareProductionDeploy({
+          owner,
+          repo,
+          releaseTag: release.releaseTag,
+          releaseSha: release.sha
+        });
+
+        // Update spec
+        await db.from("specs").update({
+          deployment_status: "approved",
+          release_tag: releaseTag,
+          release_sha: release.sha,
+          release_status: "deploying",
+          deployment_url: deployment.workflowUrl,
+          updated_at: new Date().toISOString()
+        }).eq("id", specId);
+
+        // Log approval event
+        await db.from("approval_events").insert({
+          entity_type: "spec",
+          entity_id: specId,
+          action: "deploy_approved",
+          actor_id: user.id,
+          note: "Production deployment approved (release PR already merged)",
+          metadata: {
+            releaseTag,
+            releaseSha: release.sha,
+            workflowUrl: deployment.workflowUrl,
+            repo: specForDeploy.repo_full_name
+          }
+        });
+
+        return NextResponse.json({
+          ok: true,
+          releaseTag,
+          releaseSha: release.sha,
+          workflowUrl: deployment.workflowUrl,
+          nextStep: "Production deployment in progress"
+        });
+      } catch (error) {
+        return NextResponse.json({
+          error: "Failed to start production deployment.",
+          detail: error instanceof Error ? error.message : "Unknown error"
+        }, { status: 500 });
+      }
+    }
+
+    // Find the latest CI run for this spec that is successful or running
+    const { data: ciRuns, error: ciRunsError } = await db
+      .from("ci_runs")
+      .select("github_run_id, status, conclusion, branch")
+      .eq("spec_id", specId)
+      .order("updated_at", { ascending: false });
+
+    if (ciRunsError) {
+      return NextResponse.json({ error: "Failed to query CI runs for spec.", detail: ciRunsError.message }, { status: 500 });
+    }
+
+    const targetRun = ciRuns?.find(r => r.conclusion === "success") || ciRuns?.[0];
+    if (targetRun) {
+      runId = String(targetRun.github_run_id);
+    } else {
+      // If no CI runs but we have a merged spec, try direct deployment
+      if (specForDeploy?.status === "merged" && specForDeploy.merge_sha) {
+        return NextResponse.json({
+          error: "No CI runs found, but spec is merged.",
+          detail: "Try using 'Deploy to Production' instead of 'Approve Release' for merged release PRs."
+        }, { status: 404 });
+      }
+      return NextResponse.json({ error: "No workflow runs found for this spec/trace. Please ensure CI has run on GitHub." }, { status: 404 });
+    }
+  }
+
+  if (!runId) {
+    return NextResponse.json({ error: "runId is required" }, { status: 400 });
   }
 
   const githubRunId = Number(runId);
@@ -84,7 +222,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "runId must be a GitHub workflow run id" }, { status: 400 });
   }
 
-  const { data: ciRun, error: ciError } = await supabase
+  const { data: ciRun, error: ciError } = await db
     .from("ci_runs")
     .select("github_run_id, spec_id, pr_number, repo_full_name, workflow_name, title, html_url, branch, status, conclusion, head_sha, updated_at, specs(incident_id)")
     .eq("github_run_id", githubRunId)
@@ -116,7 +254,7 @@ export async function POST(request: Request) {
   // For pending deploys, we allow approval from the main branch CI run
   let isPendingDeployFromMain = false;
   if (action === "deploy_approved" && ciRun.branch === "main" && ciRun.spec_id) {
-    const { data: pendingSpec } = await supabase
+    const { data: pendingSpec } = await db
       .from("specs")
       .select("release_status, release_pr_status")
       .eq("id", ciRun.spec_id)
@@ -135,7 +273,7 @@ export async function POST(request: Request) {
     );
   }
 
-  await supabase.from("profiles").upsert({
+  await db.from("profiles").upsert({
     id: user.id,
     github_login: user.user_metadata?.user_name ?? user.user_metadata?.preferred_username ?? null,
     avatar_url: user.user_metadata?.avatar_url ?? null
@@ -160,7 +298,7 @@ export async function POST(request: Request) {
 
     const { owner, repo } = splitRepo(ciRun.repo_full_name);
     const { data: specRow, error: specError } = ciRun.spec_id
-      ? await supabase
+      ? await db
           .from("specs")
           .select("id, status, merge_sha, base_branch, branch_name, pr_number, pr_url, release_status, release_pr_number, release_pr_url, release_pr_status, preview_url, preview_status, preview_branch_alias")
           .eq("id", ciRun.spec_id)
@@ -246,7 +384,7 @@ export async function POST(request: Request) {
       // No release tag is created here. Production remains the develop->main release PR path.
       releasePrMode = null;
       try {
-        const { data: repoRow } = await supabase
+        const { data: repoRow } = await db
           .from("repos")
           .select("default_branch")
           .eq("full_name", ciRun.repo_full_name)
@@ -321,7 +459,7 @@ export async function POST(request: Request) {
     approvedFor: isAuditOnly ? "develop preview deployment" : "production release deployment"
   };
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from("approval_events")
     .insert({
       entity_type: "ci_run",
@@ -398,7 +536,7 @@ export async function POST(request: Request) {
       };
     }
 
-    await supabase
+    await db
       .from("specs")
       .update(specUpdate)
       .eq("id", ciRun.spec_id);
@@ -416,7 +554,7 @@ export async function POST(request: Request) {
         : `Approved preview deployment for PR #${ciRun.pr_number}`
       : `Rejected deployment for PR #${ciRun.pr_number}`;
 
-    await supabase
+    await db
       .from("notifications")
       .insert({
         user_id: user.id,
@@ -428,7 +566,9 @@ export async function POST(request: Request) {
         repo_full_name: ciRun.repo_full_name,
         metadata: { specId: ciRun.spec_id, prNumber: ciRun.pr_number, releaseTag: isAuditOnly ? null : releaseTag }
       })
-      .catch((err) => console.error("notification creation failed:", err));
+      .then(({ error: notifError }) => {
+        if (notifError) console.error("notification creation failed:", notifError);
+      });
   }
 
   return NextResponse.json(toAudit(data));

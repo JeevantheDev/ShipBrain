@@ -10,9 +10,10 @@ type TraceActionsProps = {
   status: string;
   repoFullName?: string;
   currentReleaseTag?: string;
+  type?: string;
 };
 
-export function TraceActions({ traceId, pendingType, status, repoFullName, currentReleaseTag }: TraceActionsProps) {
+export function TraceActions({ traceId, pendingType, status, repoFullName, currentReleaseTag, type }: TraceActionsProps) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -37,7 +38,7 @@ export function TraceActions({ traceId, pendingType, status, repoFullName, curre
 
   const canCreateReleasePr = pendingType === "create_release_pr";
   const canMergeReverseSync = pendingType === "merge_reverse_sync";
-  const canRollback = ["production_live", "merged_main", "failed"].includes(status) && repoFullName;
+  const canRollback = ["production_live", "merged_main", "failed"].includes(status) && repoFullName && type === "release";
   const isRollingBack = status === "rolling_back";
 
   return (

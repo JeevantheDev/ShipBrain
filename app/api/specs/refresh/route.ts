@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
-import { updateTraceBySpecOrPr } from "@/lib/orchestrator";
+import { updateTraceBySpecOrPr, updateTraceBySpec } from "@/lib/orchestrator";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getLatestPreviewUrl, getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/cloudflare/client";
 
@@ -96,7 +96,7 @@ export async function POST(request: Request) {
 
       // Create notification if any specs were created
       if (created.length > 0) {
-        await supabase
+        const { error: notifError } = await supabase
           .from("notifications")
           .insert({
             user_id: user.id,
@@ -107,8 +107,8 @@ export async function POST(request: Request) {
             severity: "info",
             repo_full_name: repoFullName,
             metadata: { created }
-          })
-          .catch((err) => console.error("notification creation failed:", err));
+          });
+        if (notifError) console.error("notification creation failed:", notifError);
       }
 
       return NextResponse.json({
@@ -297,10 +297,44 @@ export async function POST(request: Request) {
               if (previewUrl) {
                 updates.preview_status = "deployed";
                 updates.preview_url = previewUrl;
+                // Update trace to preview_live
+                await updateTraceBySpec(spec.id, {
+                  status: "preview_live",
+                  current_phase: "preview",
+                  preview_deployment: {
+                    status: "deployed",
+                    url: previewUrl,
+                    branch: "develop",
+                    timestamp: new Date().toISOString()
+                  }
+                }, {
+                  eventType: "preview_deployed",
+                  source: "github",
+                  actor: "github-actions",
+                  actorType: "system",
+                  details: { previewUrl, prNumber: spec.pr_number }
+                }).catch((err) => console.error("Failed to update trace for preview:", err));
               } else if (!cloudflareApiToken || !cloudflareAccountId || !cloudflareProjectName) {
                 // Fallback to constructed URL if no Cloudflare credentials
                 updates.preview_status = "deployed";
                 updates.preview_url = `https://${cloudflareProjectName || repo.toLowerCase()}.pages.dev`;
+                // Update trace to preview_live with fallback URL
+                await updateTraceBySpec(spec.id, {
+                  status: "preview_live",
+                  current_phase: "preview",
+                  preview_deployment: {
+                    status: "deployed",
+                    url: updates.preview_url,
+                    branch: "develop",
+                    timestamp: new Date().toISOString()
+                  }
+                }, {
+                  eventType: "preview_deployed",
+                  source: "github",
+                  actor: "github-actions",
+                  actorType: "system",
+                  details: { previewUrl: updates.preview_url, prNumber: spec.pr_number }
+                }).catch((err) => console.error("Failed to update trace for preview:", err));
               } else {
                 // Cloudflare deployment not ready yet, keep in deploying status
                 updates.preview_status = "deploying";

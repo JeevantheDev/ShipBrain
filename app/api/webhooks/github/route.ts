@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isBranchDeleteEvent, statusFromPullRequestEvent, verifyWebhookSignature } from "@/lib/github/webhooks";
-import { createOrUpdateTrace, updateTraceBySpecOrPr } from "@/lib/orchestrator";
+import { createOrUpdateTrace, updateTraceBySpecOrPr, associateFeaturesWithRelease, dissociateFeaturesFromRelease } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 
@@ -30,6 +30,36 @@ export async function POST(request: Request) {
     const isPreviewDeploy = /preview/i.test(String(workflowRun.name ?? ""));
     const displayBranch = isPreviewDeploy ? "develop" : branch;
     const workflowPrNumber = workflowRun.pull_requests?.[0]?.number ?? null;
+
+    // 1. Try to find the spec by checking if there's already an existing CI run in our DB with this run ID
+    const { data: existingCiRun } = repoFullName
+      ? await supabase
+          .from("ci_runs")
+          .select("spec_id, pr_number")
+          .eq("github_run_id", workflowRun.id)
+          .maybeSingle()
+      : { data: null };
+
+    const { data: existingCiRunSpec } = (repoFullName && existingCiRun?.spec_id)
+      ? await supabase
+          .from("specs")
+          .select("id, pr_number")
+          .eq("id", existingCiRun.spec_id)
+          .maybeSingle()
+      : { data: null };
+
+    // 2. Try to find spec that has this workflow run as its latest CI run or deployment run
+    const { data: matchedRunSpec } = repoFullName
+      ? await supabase
+          .from("specs")
+          .select("id, pr_number")
+          .eq("repo_full_name", repoFullName)
+          .or(`latest_ci_run_id.eq.${workflowRun.id},deployment_run_id.eq.${workflowRun.id}`)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : { data: null };
+
     const { data: pullRequestSpec } = repoFullName && workflowPrNumber
       ? await supabase
           .from("specs")
@@ -92,15 +122,15 @@ export async function POST(request: Request) {
           .maybeSingle()
       : { data: null };
 
-    const spec = pullRequestSpec ?? releaseSpec ?? releaseTagSpec ?? mergedSpec ?? deployingSpec ?? branchSpec;
+    const spec = existingCiRunSpec ?? matchedRunSpec ?? pullRequestSpec ?? releaseSpec ?? releaseTagSpec ?? mergedSpec ?? deployingSpec ?? branchSpec;
 
     const { error: ciError } = await supabase
       .from("ci_runs")
       .upsert(
         {
           github_run_id: workflowRun.id,
-          spec_id: spec?.id ?? null,
-          pr_number: spec?.pr_number ?? null,
+          spec_id: spec?.id ?? existingCiRun?.spec_id ?? null,
+          pr_number: spec?.pr_number ?? existingCiRun?.pr_number ?? null,
           repo_full_name: repoFullName,
           workflow_name: workflowRun.name ?? null,
           title: workflowRun.display_title ?? workflowRun.name ?? `Workflow run #${workflowRun.id}`,
@@ -237,6 +267,19 @@ export async function POST(request: Request) {
         pullRequest.head?.ref === "develop" &&
         pullRequest.base?.ref === "main";
 
+      if (isReleasePromotionPr) {
+        if (nextStatus === "closed") {
+          await dissociateFeaturesFromRelease(repoFullName, pullRequest.number).catch((err) => console.error("Error dissociating features:", err));
+        } else {
+          await associateFeaturesWithRelease(
+            repoFullName,
+            pullRequest.number,
+            pullRequest.html_url,
+            nextStatus === "merged" ? "merged" : (pullRequest.state || "open")
+          ).catch((err) => console.error("Error associating features:", err));
+        }
+      }
+
       // For release PRs (develop → main), find the latest ready_for_prod spec and update it
       if (isReleasePromotionPr && nextStatus === "merged") {
         const { data: readySpec } = await supabase
@@ -325,7 +368,7 @@ export async function POST(request: Request) {
 
         // If no existing spec was updated, create one for this PR
         // This handles PRs created outside ShipBrain or when spec save failed
-        if (updated === 0 && nextStatus === "merged") {
+        if (updated === 0 && (nextStatus === "merged" || isReleasePromotionPr)) {
           // Find the user who owns this repo
           const { data: repoOwner } = await supabase
             .from("repos")
@@ -346,10 +389,10 @@ export async function POST(request: Request) {
                 base_branch: pullRequest.base?.ref,
                 pr_number: pullRequest.number,
                 pr_url: pullRequest.html_url,
-                merged_at: pullRequest.merged_at ?? new Date().toISOString(),
+                merged_at: nextStatus === "merged" ? (pullRequest.merged_at ?? new Date().toISOString()) : null,
                 merge_sha: pullRequest.merge_commit_sha ?? null,
                 feature_head_sha: pullRequest.head?.sha ?? null,
-                release_status: pullRequest.base?.ref === "main" ? "pending_deploy" : "ready_for_prod",
+                release_status: pullRequest.base?.ref === "main" ? (nextStatus === "merged" ? "pending_deploy" : "ready_for_prod") : "ready_for_prod",
                 updated_at: new Date().toISOString()
               })
               .select("id")
@@ -361,7 +404,7 @@ export async function POST(request: Request) {
               console.log(`Created new spec ${newSpec.id} for merged PR #${pullRequest.number}`);
 
               // Create notification for the user
-              await supabase
+              const { error: notifError } = await supabase
                 .from("notifications")
                 .insert({
                   user_id: repoOwner.user_id,
@@ -372,8 +415,8 @@ export async function POST(request: Request) {
                   severity: "info",
                   repo_full_name: repoFullName,
                   metadata: { prNumber: pullRequest.number, branch: pullRequest.head?.ref, baseBranch: pullRequest.base?.ref }
-                })
-                .catch((err) => console.error("notification creation failed:", err));
+                });
+              if (notifError) console.error("notification creation failed:", notifError);
             }
           }
         }
@@ -400,7 +443,7 @@ export async function POST(request: Request) {
         if (isShipBrainSetupPr) {
           // Onboarding/setup PRs configure ShipBrain itself; they are not product release traces.
         } else if (isReleasePromotionPr && syncedSpecId) {
-          await updateTraceBySpecOrPr({
+          const traceUpdated = await updateTraceBySpecOrPr({
             specId: syncedSpecId,
             repoFullName,
             prNumber: pullRequest.number,
@@ -430,6 +473,29 @@ export async function POST(request: Request) {
               }
             }
           });
+
+          if (!traceUpdated) {
+            await createOrUpdateTrace({
+              repoFullName,
+              type: "release",
+              title: pullRequest.title ?? `Release PR #${pullRequest.number}`,
+              description: pullRequest.body ?? null,
+              status: traceStatus,
+              sourceBranch: headBranch,
+              targetBranch: baseBranch,
+              releasePrNumber: pullRequest.number,
+              releasePrUrl: pullRequest.html_url,
+              specId: syncedSpecId,
+              source: "github",
+              actor: pullRequest.user?.login ?? "github",
+              eventType: "trace_created",
+              details: {
+                action: json.action,
+                merged: pullRequest.merged ?? false,
+                prNumber: pullRequest.number
+              }
+            }).catch((err) => console.error("Error creating release trace:", err));
+          }
         } else {
           await createOrUpdateTrace({
             repoFullName,

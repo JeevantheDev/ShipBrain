@@ -21,6 +21,7 @@ export type ActionType =
   | "approve_hotfix"
   | "analyze_incident"
   | "resolve_incident"
+  | "acknowledge_incident"
   | "view_status"
   | "view_prs"
   | "view_deployments"
@@ -30,6 +31,15 @@ export type ActionType =
 
 export type ActionStatus = "pending_confirmation" | "executing" | "completed" | "failed" | "needs_input";
 
+/** A selectable chip the frontend renders when the LLM wants input selection */
+export type ActionOption = {
+  label: string;
+  sublabel?: string;
+  /** The message text auto-sent when the user clicks this option */
+  value: string;
+  badge?: string;
+};
+
 export type ChatAction = {
   type: ActionType;
   status: ActionStatus;
@@ -38,8 +48,11 @@ export type ChatAction = {
   confirmationMessage?: string;
   result?: any;
   error?: string;
+  /** Selectable options surfaced by the backend so the user doesn't need to type */
+  options?: ActionOption[];
 };
 
+// ActionIntent type retained for backward compatibility with any remaining references
 export type ActionIntent = {
   detected: boolean;
   action?: ActionType;
@@ -129,6 +142,14 @@ const ACTION_DEFINITIONS: Record<ActionType, {
     confirmRequired: true,
     riskLevel: "medium"
   },
+  acknowledge_incident: {
+    label: "Acknowledge Incident",
+    description: "Start investigating an incident",
+    requiredParams: ["incidentId"],
+    optionalParams: [],
+    confirmRequired: true,
+    riskLevel: "medium"
+  },
   view_status: {
     label: "View Status",
     description: "Show current release and deployment status",
@@ -179,233 +200,22 @@ const ACTION_DEFINITIONS: Record<ActionType, {
   }
 };
 
-// Intent detection patterns
-const INTENT_PATTERNS: { pattern: RegExp; action: ActionType; paramExtractors?: Record<string, RegExp> }[] = [
-  // Spec to PR
-  { pattern: /(?:create|generate|make|build)\s+(?:a\s+)?(?:pr|pull\s*request)\s+(?:from|for)\s+(?:spec|feature|ticket)/i, action: "spec_to_pr" },
-  { pattern: /spec[- ]?to[- ]?pr/i, action: "spec_to_pr" },
-  { pattern: /draft\s+pr\s+(?:for|from)/i, action: "spec_to_pr" },
+// ─── Legacy intent detection removed ─────────────────────────────────────────
+// Intent detection is now handled by the LLM via tool calling (lib/ai/tools.ts).
 
-  // Deploy preview
-  { pattern: /deploy\s+(?:to\s+)?(?:preview|dev|develop|staging)/i, action: "deploy_preview" },
-  { pattern: /start\s+preview\s+deploy/i, action: "deploy_preview" },
-
-  // Deploy production
-  { pattern: /deploy\s+(?:to\s+)?(?:prod|production|live)/i, action: "deploy_production" },
-  { pattern: /release\s+to\s+(?:prod|production)/i, action: "deploy_production" },
-  { pattern: /push\s+to\s+(?:prod|production)/i, action: "deploy_production" },
-
-  // Approve
-  { pattern: /approve\s+(?:the\s+)?(?:release|deployment|pr)/i, action: "approve_release" },
-  { pattern: /(?:confirm|accept)\s+(?:the\s+)?(?:release|deployment)/i, action: "approve_release" },
-
-  // Rollback
-  { pattern: /rollback\s+(?:to|production)?/i, action: "rollback" },
-  { pattern: /revert\s+(?:to\s+)?(?:previous|last)\s+(?:release|version)/i, action: "rollback" },
-
-  // Hotfix
-  { pattern: /(?:create|start|make)\s+(?:a\s+)?hotfix/i, action: "create_hotfix" },
-  { pattern: /hotfix\s+(?:for|incident)/i, action: "create_hotfix" },
-  { pattern: /(?:approve|merge|deploy)\s+(?:the\s+)?hotfix/i, action: "approve_hotfix" },
-
-  // Incident
-  { pattern: /analyze\s+(?:the\s+)?incident/i, action: "analyze_incident" },
-  { pattern: /(?:resolve|close|fix)\s+(?:the\s+)?incident/i, action: "resolve_incident" },
-
-  // View operations
-  { pattern: /(?:show|view|list|get|what(?:'s| is))\s+(?:the\s+)?(?:status|overview)/i, action: "view_status" },
-  { pattern: /(?:show|view|list|get)\s+(?:my\s+)?(?:open\s+)?prs?/i, action: "view_prs" },
-  { pattern: /(?:show|view|list|get)\s+(?:pending\s+)?deployments?/i, action: "view_deployments" },
-  { pattern: /(?:show|view|list|get)\s+(?:active\s+)?incidents?/i, action: "view_incidents" },
-  { pattern: /(?:show|view|list|get)\s+(?:recent\s+)?releases?/i, action: "view_releases" },
-  { pattern: /(?:show|view|list|get)\s+ci\s+(?:status|runs?)?/i, action: "view_ci" },
-  { pattern: /what(?:'s| is)\s+(?:pending|waiting)/i, action: "view_deployments" }
-];
-
-// Extract IDs and content from user message
-function extractParams(message: string): Record<string, string> {
-  const params: Record<string, string> = {};
-
-  // UUID pattern
-  const uuidMatch = message.match(/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i);
-  if (uuidMatch) {
-    params.specId = uuidMatch[1];
-    params.traceId = uuidMatch[1];
-    params.incidentId = uuidMatch[1];
-  }
-
-  // Short ID pattern (first 8 chars)
-  const shortIdMatch = message.match(/\b([0-9a-f]{8})\b/i);
-  if (shortIdMatch && !uuidMatch) {
-    params.specId = shortIdMatch[1];
-    params.traceId = shortIdMatch[1];
-    params.incidentId = shortIdMatch[1];
-  }
-
-  // Release tag pattern
-  const releaseMatch = message.match(/release[- ]?v?(\d{4}[.\-]\d{2}[.\-]\d{2}[.\-]?\d*)/i);
-  if (releaseMatch) {
-    params.releaseTag = `release-v${releaseMatch[1].replace(/\./g, "-")}`;
-    params.targetReleaseTag = params.releaseTag;
-  }
-
-  // PR number
-  const prMatch = message.match(/#(\d+)|pr[- ]?(\d+)/i);
-  if (prMatch) {
-    params.prNumber = prMatch[1] || prMatch[2];
-  }
-
-  // Extract spec/feature content for spec_to_pr
-  // Look for content after "for:" or "from:" or in quotes or after common prefixes
-  const specContentPatterns = [
-    /(?:for|from|with|spec|feature|ticket|description):\s*["""]?([\s\S]+?)["""]?\s*$/i,
-    /(?:create|generate|make)\s+(?:a\s+)?(?:pr|pull\s*request)\s+(?:for|from)\s+["""]?([\s\S]+?)["""]?\s*$/i,
-    /["""](.+?)["""]$/
-  ];
-
-  for (const pattern of specContentPatterns) {
-    const match = message.match(pattern);
-    if (match && match[1]?.trim()) {
-      params.rawSpec = match[1].trim();
-      break;
-    }
-  }
-
-  return params;
-}
-
-// Detect intent from user message
-export function detectIntent(message: string, context: any): ActionIntent {
-  for (const { pattern, action } of INTENT_PATTERNS) {
-    if (pattern.test(message)) {
-      const definition = ACTION_DEFINITIONS[action];
-      const extractedParams = extractParams(message);
-      const params: Record<string, any> = { ...extractedParams };
-
-      // For spec_to_pr, also store the full message as potential rawSpec if not already extracted
-      if (action === "spec_to_pr" && !params.rawSpec && !params.specId) {
-        // Use the full message as the spec if it's substantial enough
-        const messageWithoutCommand = message
-          .replace(/(?:create|generate|make|build)\s+(?:a\s+)?(?:pr|pull\s*request)\s+(?:from|for)\s+(?:spec|feature|ticket)?/i, "")
-          .replace(/spec[- ]?to[- ]?pr/i, "")
-          .replace(/draft\s+pr\s+(?:for|from)/i, "")
-          .trim();
-
-        if (messageWithoutCommand.length > 20) {
-          params.rawSpec = messageWithoutCommand;
-        }
-      }
-
-      // For deploy_preview, auto-find specId from context if not provided
-      if (action === "deploy_preview" && !params.specId) {
-        const pendingDeployments = context.pendingDeployments ?? context.recentPrs ?? [];
-        // Find spec that's merged to develop and ready for preview (status: merged, base_branch: develop, no preview_url yet)
-        const readyForPreview = pendingDeployments.find((spec: any) =>
-          spec.status === "merged" &&
-          spec.base_branch === "develop" &&
-          !spec.preview_url &&
-          spec.preview_status !== "deploying"
-        );
-        if (readyForPreview) {
-          params.specId = readyForPreview.id;
-          params.prNumber = readyForPreview.pr_number;
-          params.title = readyForPreview.decomposed_tasks?.prTitle || `PR #${readyForPreview.pr_number}`;
-        }
-      }
-
-      // For deploy_production, auto-find specId from context if not provided
-      if (action === "deploy_production" && !params.specId) {
-        const pendingDeployments = context.pendingDeployments ?? context.recentPrs ?? [];
-        // Find spec that's ready for production (preview deployed or release_status ready)
-        const readyForProd = pendingDeployments.find((spec: any) =>
-          spec.release_status === "pending_deploy" ||
-          spec.release_status === "ready_for_prod" ||
-          (spec.status === "merged" && spec.base_branch === "main")
-        );
-        if (readyForProd) {
-          params.specId = readyForProd.id;
-          params.prNumber = readyForProd.pr_number;
-          params.title = readyForProd.decomposed_tasks?.prTitle || `PR #${readyForProd.pr_number}`;
-        }
-      }
-
-      // Determine which params are actually required for this action
-      let requiredParams = definition.requiredParams;
-
-      // For spec_to_pr, rawSpec OR specId is required, not specifically specId
-      if (action === "spec_to_pr") {
-        if (params.rawSpec || params.specId) {
-          requiredParams = []; // We have what we need
-        } else {
-          requiredParams = ["rawSpec"]; // We need the spec content
-        }
-      }
-
-      // Check for missing required params
-      const missingParams = requiredParams.filter(p => !params[p]);
-
-      // Generate clarifying question if params missing
-      let clarifyingQuestion: string | undefined;
-      if (missingParams.length > 0) {
-        clarifyingQuestion = generateClarifyingQuestion(action, missingParams, context);
-      }
-
-      return {
-        detected: true,
-        action,
-        params,
-        missingParams,
-        clarifyingQuestion
-      };
-    }
-  }
-
+/** @deprecated Use LLM tool calling via lib/ai/tools.ts instead */
+export function detectIntent(_message: string, _context: any): ActionIntent {
   return { detected: false, params: {}, missingParams: [] };
 }
 
-// Generate clarifying question based on missing params
-function generateClarifyingQuestion(action: ActionType, missingParams: string[], context: any): string {
-  const questions: Record<string, Record<string, string>> = {
-    spec_to_pr: {
-      specId: "What feature would you like to create a PR for? Please describe the feature or paste the ticket content.",
-      rawSpec: "What feature would you like to create a PR for? Please describe the feature or paste the ticket content."
-    },
-    deploy_preview: {
-      specId: "Which feature would you like to deploy to preview? Please provide the spec ID or PR number."
-    },
-    deploy_production: {
-      specId: "Which release would you like to deploy to production? Please provide the spec ID or release trace."
-    },
-    approve_release: {
-      traceId: "Which release would you like to approve? Please provide the trace ID or release tag."
-    },
-    rollback: {
-      targetReleaseTag: "Which release would you like to rollback to? I can show you the available releases if you'd like."
-    },
-    create_hotfix: {
-      incidentId: "Which incident needs a hotfix? Please provide the incident ID."
-    },
-    approve_hotfix: {
-      incidentId: "Which hotfix would you like to approve and deploy? Please provide the incident ID."
-    },
-    analyze_incident: {
-      incidentId: "Which incident would you like me to analyze? Please provide the incident ID."
-    },
-    resolve_incident: {
-      incidentId: "Which incident would you like to resolve? Please provide the incident ID."
-    }
-  };
-
-  const actionQuestions = questions[action];
-  if (!actionQuestions) return "I need more information to proceed. Could you provide more details?";
-
-  const firstMissing = missingParams[0];
-  return actionQuestions[firstMissing] || "Could you provide more details about what you'd like to do?";
-}
 
 // Generate confirmation message for action
 export function generateConfirmation(action: ActionType, params: Record<string, any>, context: any): string {
   const definition = ACTION_DEFINITIONS[action];
+  // Safety guard: if action is not in ACTION_DEFINITIONS, return a generic prompt
+  if (!definition) {
+    return `Ready to execute **${action}**. Would you like me to proceed? Type **confirm** or **cancel**.`;
+  }
   const riskWarning = definition.riskLevel === "high"
     ? "\n\n⚠️ **This is a production-impacting action.**"
     : "";
@@ -425,8 +235,18 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
     case "deploy_preview":
       return `I'll deploy spec \`${params.specId}\` to the preview environment.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
-    case "deploy_production":
-      return `I'll create a release tag and deploy to production for spec \`${params.specId}\`.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+    case "deploy_production": {
+      const defaultTag = params.releaseTag || (() => {
+        const now = new Date();
+        const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+        const time = now.toISOString().slice(11, 16).replace(":", "");
+        return `release-v${date}-${time}`;
+      })();
+      if (!params.releaseTag) {
+        return `I'll deploy to production for spec \`${params.specId}\`.\n\n**Release Tag:** \`${defaultTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
+      }
+      return `I'll create release tag \`${params.releaseTag}\` and deploy to production for spec \`${params.specId}\`.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+    }
 
     case "approve_release":
       return `I'll approve the release for trace \`${params.traceId}\`.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
@@ -435,13 +255,35 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
       return `I'll rollback production to release \`${params.targetReleaseTag}\`.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
     case "create_hotfix":
-      return `I'll create a hotfix PR for incident \`${params.incidentId}\` on the ${params.baseBranch || "develop"} branch.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+      if (!params.baseBranch) {
+        return `I'll create a hotfix PR for incident \`${params.incidentId}\`.\n\n**Which branch should I target?**\n- **develop** - Standard flow with preview validation\n- **main** - Direct to production (emergency only)\n\nPlease select a branch option above or type "develop" or "main".`;
+      }
+      return `I'll create a hotfix PR for incident \`${params.incidentId}\` on the **${params.baseBranch}** branch.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
-    case "approve_hotfix":
+    case "approve_hotfix": {
+      // Look up the incident from context to check if it targets main (production)
+      const incidents = (context?.incidents ?? []) as any[];
+      const incident = incidents.find((i: any) => i.id === params.incidentId || i.id?.startsWith(params.incidentId));
+      const baseBranch = params.baseBranch || params.targetBranch || incident?.hotfixBaseBranch;
+      const isMainTarget = baseBranch === "main";
+
+      if (isMainTarget && !params.releaseTag) {
+        const defaultHotfixTag = (() => {
+          const now = new Date();
+          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+          const incidentPart = params.incidentId?.slice(0, 8) || "fix";
+          return `hotfix-v${date}-${incidentPart}`;
+        })();
+        return `I'll merge the hotfix for incident \`${params.incidentId}\` and deploy it to **production**.${riskWarning}\n\n**Release Tag:** \`${defaultHotfixTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
+      }
       return `I'll merge the hotfix for incident \`${params.incidentId}\` and deploy it.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+    }
 
     case "resolve_incident":
       return `I'll mark incident \`${params.incidentId}\` as resolved.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+
+    case "acknowledge_incident":
+      return `I'll acknowledge incident \`${params.incidentTitle || params.incidentId}\` to start investigating.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
     default:
       return `I'll execute ${definition.label}.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
@@ -536,7 +378,7 @@ export async function executeAction(
           }
 
           // Create notification
-          await supabase
+          const { error: notifError } = await supabase
             .from("notifications")
             .insert({
               user_id: userId,
@@ -547,8 +389,8 @@ export async function executeAction(
               severity: "info",
               repo_full_name: repoFullName,
               metadata: { prNumber: data.pr.number, branch: data.pr.head?.ref }
-            })
-            .catch((err) => console.error("notification creation failed:", err));
+            });
+          if (notifError) console.error("notification creation failed:", notifError);
         }
 
         return { success: true, result: data };
@@ -599,7 +441,7 @@ export async function executeAction(
         }
 
         // Create notification
-        await supabase
+        const { error: notifError2 } = await supabase
           .from("notifications")
           .insert({
             user_id: userId,
@@ -610,13 +452,20 @@ export async function executeAction(
             severity: "info",
             repo_full_name: spec.repo_full_name,
             metadata: { specId: spec.id, prNumber: spec.pr_number }
-          })
-          .catch((err) => console.error("notification creation failed:", err));
+          });
+        if (notifError2) console.error("notification creation failed:", notifError2);
 
         return { success: true, result: data };
       }
 
       case "deploy_production": {
+        let releaseTag = params.releaseTag;
+        if (!releaseTag) {
+          const now = new Date();
+          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+          const time = now.toISOString().slice(11, 16).replace(":", "");
+          releaseTag = `release-v${date}-${time}`;
+        }
         const response = await fetch(`${baseUrl}/api/deployments/start-production`, {
           method: "POST",
           headers: {
@@ -625,7 +474,7 @@ export async function executeAction(
           },
           body: JSON.stringify({
             specId: params.specId,
-            releaseTag: params.releaseTag,
+            releaseTag,
             internalUserId: userId
           })
         });
@@ -633,7 +482,7 @@ export async function executeAction(
         if (!response.ok) throw new Error(data.error || data.detail || "Failed to start production deployment");
 
         // Create notification
-        await supabase
+        const { error: notifError3 } = await supabase
           .from("notifications")
           .insert({
             user_id: userId,
@@ -644,21 +493,53 @@ export async function executeAction(
             severity: "warning",
             repo_full_name: repoFullName,
             metadata: { specId: params.specId, releaseTag: data.releaseTag }
-          })
-          .catch((err) => console.error("notification creation failed:", err));
+          });
+        if (notifError3) console.error("notification creation failed:", notifError3);
 
         return { success: true, result: data };
       }
 
       case "approve_release": {
-        const response = await fetch(`${baseUrl}/api/deployments/approval`, {
+        // Resolve traceId to specId, then use the same deploy_production flow
+        let specId = params.specId;
+
+        if (!specId && params.traceId) {
+          const { data: trace } = await supabase
+            .from("release_traces")
+            .select("spec_id")
+            .eq("id", params.traceId)
+            .single();
+          specId = trace?.spec_id;
+        }
+
+        if (!specId) {
+          throw new Error("Could not find spec for this release. Please use 'Deploy to Production' from the Deployment Queue instead.");
+        }
+
+        // Use the same production deployment API
+        let releaseTag = params.releaseTag;
+        if (!releaseTag) {
+          const now = new Date();
+          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+          const time = now.toISOString().slice(11, 16).replace(":", "");
+          releaseTag = `release-v${date}-${time}`;
+        }
+
+        const response = await fetch(`${baseUrl}/api/deployments/start-production`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ traceId: params.traceId })
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-User-Id": userId
+          },
+          body: JSON.stringify({
+            specId,
+            releaseTag,
+            internalUserId: userId
+          })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Failed to approve release");
-        return { success: true, result: data };
+        if (!response.ok) throw new Error(data.error || data.detail || "Failed to start production deployment");
+        return { success: true, result: { ...data, nextStep: "Production deployment in progress" } };
       }
 
       case "rollback": {
@@ -678,7 +559,7 @@ export async function executeAction(
         if (!response.ok) throw new Error(data.error || data.detail || "Failed to initiate rollback");
 
         // Create notification
-        await supabase
+        const { error: notifError4 } = await supabase
           .from("notifications")
           .insert({
             user_id: userId,
@@ -689,8 +570,8 @@ export async function executeAction(
             severity: "warning",
             repo_full_name: repoFullName,
             metadata: { targetReleaseTag: params.targetReleaseTag, rollbackId: data.rollbackId }
-          })
-          .catch((err) => console.error("notification creation failed:", err));
+          });
+        if (notifError4) console.error("notification creation failed:", notifError4);
 
         return { success: true, result: data };
       }
@@ -698,43 +579,93 @@ export async function executeAction(
       case "create_hotfix": {
         const response = await fetch(`${baseUrl}/api/incidents/hotfix`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-User-Id": userId
+          },
           body: JSON.stringify({
             action: "create",
             incidentId: params.incidentId,
-            baseBranch: params.baseBranch || "develop"
+            baseBranch: params.baseBranch || "develop",
+            internalUserId: userId
           })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Failed to create hotfix");
+        if (!response.ok) throw new Error(data.error || data.detail || "Failed to create hotfix");
         return { success: true, result: data };
       }
 
       case "approve_hotfix": {
         const response = await fetch(`${baseUrl}/api/incidents/hotfix`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-User-Id": userId
+          },
           body: JSON.stringify({
             action: "approve",
-            incidentId: params.incidentId
+            incidentId: params.incidentId,
+            releaseTag: params.releaseTag, // Pass custom release tag if provided
+            internalUserId: userId
           })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Failed to approve hotfix");
+        if (!response.ok) throw new Error(data.error || data.detail || "Failed to approve hotfix");
         return { success: true, result: data };
       }
 
       case "analyze_incident": {
         const response = await fetch(`${baseUrl}/api/ai/incident`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-User-Id": userId
+          },
           body: JSON.stringify({
             action: "analyze",
-            incidentId: params.incidentId
+            incidentId: params.incidentId,
+            internalUserId: userId
           })
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Failed to analyze incident");
+        return { success: true, result: data };
+      }
+
+      case "resolve_incident": {
+        const response = await fetch(`${baseUrl}/api/incidents`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-User-Id": userId
+          },
+          body: JSON.stringify({
+            id: params.incidentId,
+            action: "resolve",
+            note: "Resolved via AI Chat",
+            internalUserId: userId
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || data.detail || "Failed to resolve incident");
+        return { success: true, result: data };
+      }
+
+      case "acknowledge_incident": {
+        const response = await fetch(`${baseUrl}/api/incidents`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-User-Id": userId
+          },
+          body: JSON.stringify({
+            id: params.incidentId,
+            action: "acknowledge",
+            internalUserId: userId
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || data.detail || "Failed to acknowledge incident");
         return { success: true, result: data };
       }
 
@@ -804,16 +735,58 @@ export function formatActionResult(action: ActionType, result: any): string {
 
     case "create_hotfix":
       return `✅ **Hotfix PR Created!**\n\n` +
-        `- PR: [#${result.pr?.number}](${result.pr?.url})\n` +
-        `- Branch: \`${result.branch}\``;
+        `- PR: [#${result.pr?.number}](${result.pr?.url || result.pr?.html_url || "#"})\n` +
+        `- Branch: \`${result.pr?.branch || result.incident?.hotfixBranch || result.branch || "unknown"}\``;
 
     case "approve_hotfix":
       return `✅ **Hotfix Approved & Deploying!**\n\n` +
-        `- Merged: PR #${result.pr?.number}\n` +
-        `- Deployment: ${result.environment || "In progress"}`;
+        `- Merged: PR #${result.pr?.number || result.hotfixPrNumber}\n` +
+        `${result.releaseTag ? `- Release Tag: \`${result.releaseTag}\`\n` : ""}` +
+        `- Deployment: ${result.environment || (result.deployment ? "Production" : result.deployment?.workflowUrl ? "In progress" : "Preview")}`;
 
-    case "analyze_incident":
-      return `📊 **Incident Analysis**\n\n${result.analysis || "Analysis complete."}`;
+    case "analyze_incident": {
+      const rollbackText = result.rollbackSteps?.length
+        ? result.rollbackSteps.map((step: string) => `  - ${step}`).join("\n")
+        : "  - No specific rollback steps recommended.";
+
+      const commitsText = result.implicatedCommits?.length
+        ? result.implicatedCommits.map((c: any) => `  - \`${String(c.sha).slice(0, 7)}\`: ${c.message}\n    *Reason*: ${c.reason}\n    *Risk*: ${c.risk}`).join("\n")
+        : "  - No commits directly implicated.";
+
+      const confidencePct = typeof result.confidence === "number" ? Math.round(result.confidence * 100) : null;
+      const confidenceText = confidencePct !== null ? `${confidencePct}%` : "n/a";
+
+      return `📊 **Incident Analysis Complete**
+
+- **Root Cause**:
+  ${result.rootCause || "Under investigation."}
+
+- **Fix Proposal**:
+  ${result.fixProposal || "No fix proposed yet."}
+
+- **Rollback Steps**:
+${rollbackText}
+
+- **Implicated Commits**:
+${commitsText}
+
+- **Change Summary**:
+  ${result.changeSummary || "Analysis completed."}
+
+- **Confidence Score**: \`${confidenceText}\``;
+    }
+
+    case "resolve_incident":
+      return `✅ **Incident Resolved Successfully!**\n\n` +
+        `- Incident: \`${result.title || result.id}\`\n` +
+        `- Status: \`resolved\`\n` +
+        `- Note: ${result.resolutionNote || "Resolved via AI Chat"}`;
+
+    case "acknowledge_incident":
+      return `✅ **Incident Acknowledged Successfully!**\n\n` +
+        `- Incident: \`${result.title || result.id}\`\n` +
+        `- Status: \`investigating\`\n` +
+        `- Assigned to: \`${result.acknowledgedBy || "operator"}\``;
 
     default:
       return `✅ Action completed successfully.`;

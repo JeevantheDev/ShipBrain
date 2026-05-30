@@ -3,16 +3,27 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
+  Activity,
   AlertTriangle,
   Bot,
+  Bug,
   Check,
   ChevronDown,
   ChevronUp,
   Clock,
+  FilePlus,
+  GitMerge,
+  GitPullRequest,
+  Globe,
+  Layers,
   Loader2,
   MessageSquare,
   Plus,
+  Rocket,
+  RotateCcw,
+  Search,
   Send,
+  ShieldCheck,
   Sparkles,
   Trash2,
   UserRound,
@@ -36,6 +47,14 @@ type ChatThread = {
   updated_at: string;
 };
 
+type ActionOption = {
+  label: string;
+  sublabel?: string;
+  /** Message text auto-sent when the user clicks this chip */
+  value: string;
+  badge?: string;
+};
+
 type ChatAction = {
   type: string;
   status: "pending_confirmation" | "executing" | "completed" | "failed" | "needs_input";
@@ -44,6 +63,8 @@ type ChatAction = {
   confirmationMessage?: string;
   result?: any;
   error?: string;
+  /** Selectable option chips returned by the backend */
+  options?: ActionOption[];
 };
 
 type RecipeOption = {
@@ -61,12 +82,36 @@ type ChatDrawerProps = {
   onClose: () => void;
 };
 
-const starterPrompts = [
-  "Show my open PRs and what needs attention.",
-  "What is pending for production deployment?",
-  "Summarize the latest release trace.",
-  "Are there any active incidents or hotfixes?",
-  "Deploy my feature to preview."
+type QuickPrompt = {
+  label: string;
+  prompt: string;
+  Icon: React.ComponentType<{ size?: number | string }>;
+  category: "info" | "deploy" | "release" | "incident" | "pr";
+};
+
+const quickPrompts: QuickPrompt[] = [
+  // ── Info / Read ──────────────────────────────────────────────────────
+  { Icon: Clock,          category: "info",     label: "What's pending?",         prompt: "What's pending deployment?" },
+  { Icon: GitPullRequest, category: "pr",       label: "My recent PRs",           prompt: "Show my recent PRs." },
+  { Icon: Activity,       category: "info",     label: "CI status",               prompt: "Show CI status." },
+  { Icon: Layers,         category: "release",  label: "Release pipeline",        prompt: "Show release trace status." },
+  { Icon: AlertTriangle,  category: "incident", label: "Active incidents",        prompt: "Show active incidents." },
+
+  // ── PR & Spec ─────────────────────────────────────────────────────────
+  { Icon: FilePlus,       category: "pr",       label: "Create PR from spec",     prompt: "Create a draft PR from a sample ticket." },
+
+  // ── Deploy ────────────────────────────────────────────────────────────
+  { Icon: Rocket,         category: "deploy",   label: "Deploy to preview",       prompt: "Deploy my merged PR to preview." },
+  { Icon: Globe,          category: "deploy",   label: "Deploy to production",    prompt: "Deploy to production." },
+
+  // ── Release ───────────────────────────────────────────────────────────
+  { Icon: RotateCcw,      category: "release",  label: "Rollback production",     prompt: "Rollback production to previous version." },
+
+  // ── Incidents ─────────────────────────────────────────────────────────
+  { Icon: Bug,            category: "incident", label: "Create hotfix",           prompt: "Create a hotfix for the active incident." },
+  { Icon: GitMerge,       category: "incident", label: "Approve hotfix",          prompt: "Approve and deploy the hotfix." },
+  { Icon: Search,         category: "incident", label: "Analyze incident",        prompt: "Analyze the active incident." },
+  { Icon: ShieldCheck,    category: "incident", label: "Resolve incident",        prompt: "Resolve the active incident." },
 ];
 
 const welcomeMessage: ChatMessage = {
@@ -123,7 +168,8 @@ function getActionLabel(type: string): string {
     create_hotfix: "Create Hotfix",
     approve_hotfix: "Approve Hotfix",
     analyze_incident: "Analyze Incident",
-    resolve_incident: "Resolve Incident"
+    resolve_incident: "Resolve Incident",
+    acknowledge_incident: "Acknowledge Incident"
   };
   return labels[type] || type;
 }
@@ -131,10 +177,33 @@ function getActionLabel(type: string): string {
 // Get risk level styling
 function getRiskClass(type: string): string {
   const highRisk = ["deploy_production", "rollback", "approve_release", "approve_hotfix"];
-  const mediumRisk = ["spec_to_pr", "deploy_preview", "create_hotfix", "resolve_incident"];
+  const mediumRisk = ["spec_to_pr", "deploy_preview", "create_hotfix", "resolve_incident", "acknowledge_incident"];
   if (highRisk.includes(type)) return "high-risk";
   if (mediumRisk.includes(type)) return "medium-risk";
   return "low-risk";
+}
+
+/**
+ * During streaming the LLM outputs single `\n` newlines.
+ * Markdown treats these as spaces (not paragraph breaks), so the text renders
+ * as one continuous line until streaming is done.
+ *
+ * This normalizes content FOR DISPLAY ONLY during streaming:
+ *  - Preserves existing \n\n paragraph breaks
+ *  - Converts orphan \n (not inside a fenced code block) → \n\n
+ *  - Does NOT touch ``` code blocks so indentation is preserved
+ */
+function normalizeMarkdown(text: string): string {
+  // Split on fenced code blocks to avoid mangling them
+  const segments = text.split(/(```[\s\S]*?(?:```|$))/g);
+  return segments
+    .map((segment, i) => {
+      // Even indices are outside code fences, odd are inside
+      if (i % 2 === 1) return segment;
+      // Replace single \n (not already preceded/followed by \n) with \n\n
+      return segment.replace(/([^\n])\n(?!\n)/g, "$1\n\n");
+    })
+    .join("");
 }
 
 export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
@@ -151,6 +220,8 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
   const [activeRepo, setActiveRepo] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const prevOpenRef = useRef(open);
+  /** Tracks the message ID currently being streamed so we can normalise its markdown */
+  const streamingMessageIdRef = useRef<string | null>(null);
 
   const canSend = input.trim().length > 0 && !loading;
   const placeholder = useMemo(
@@ -323,6 +394,7 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
     setMessages((items) => [...items, userMessage, { id: assistantId, role: "assistant", content: "" }]);
     setInput("");
     setLoading(true);
+    streamingMessageIdRef.current = assistantId;
 
     try {
       const response = await fetch("/api/chat/stream", {
@@ -393,6 +465,7 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
           : item
       ));
     } finally {
+      streamingMessageIdRef.current = null;
       setLoading(false);
     }
   }
@@ -408,6 +481,10 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
 
   function handleCancel() {
     void sendMessage("cancel");
+  }
+
+  function handleSelectActionOption(optionValue: string) {
+    void sendMessage(optionValue);
   }
 
   async function handleSelectRecipe(recipeId: string) {
@@ -668,7 +745,11 @@ Please try again or check the console for more details.`;
                           h3: ({ children }) => <strong className="chat-heading">{children}</strong>,
                         }}
                       >
-                        {message.content}
+                        {/* Normalise single \n → \n\n during streaming so ReactMarkdown
+                            creates visible paragraph breaks instead of collapsing them */}
+                        {streamingMessageIdRef.current === message.id
+                          ? normalizeMarkdown(message.content)
+                          : message.content}
                       </ReactMarkdown>
                     </div>
                   ) : (
@@ -679,6 +760,35 @@ Please try again or check the console for more details.`;
             );
             })}
           </div>
+
+          {/* Guided Action Options — selectable chips for write tool params */}
+          {pendingAction?.status === "pending_confirmation" &&
+           Array.isArray(pendingAction.options) &&
+           pendingAction.options.length > 0 && (
+            <div className="chat-action-options" aria-label={`Options for ${getActionLabel(pendingAction.type)}`}>
+              <div className="chat-action-options-head">
+                <Layers size={13} />
+                <span>Select which {pendingAction.type.includes("incident") ? "incident" : pendingAction.type.includes("release") || pendingAction.type === "approve_release" ? "release" : "PR"} to {getActionLabel(pendingAction.type).toLowerCase()}</span>
+              </div>
+              <div className="chat-action-options-list">
+                {pendingAction.options.map((opt, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className={`chat-action-option-chip ${getRiskClass(pendingAction.type)}`}
+                    onClick={() => handleSelectActionOption(opt.value)}
+                    disabled={loading}
+                  >
+                    <span className="chat-option-chip-body">
+                      <strong>{opt.label}</strong>
+                      {opt.sublabel && <small>{opt.sublabel}</small>}
+                    </span>
+                    {opt.badge && <span className="chat-option-chip-badge">{opt.badge}</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Action Confirmation Bar */}
           {pendingAction && pendingAction.status === "pending_confirmation" && (
@@ -773,9 +883,19 @@ Please try again or check the console for more details.`;
             </button>
             {suggestionsExpanded && (
               <div className="chat-suggestions">
-                {starterPrompts.map((prompt) => (
-                  <button type="button" key={prompt} onClick={() => void sendMessage(prompt)} disabled={loading}>
-                    {prompt}
+                {quickPrompts.map(({ label, prompt, Icon, category }) => (
+                  <button
+                    type="button"
+                    key={prompt}
+                    className={`chat-suggestion-btn cat-${category}`}
+                    onClick={() => void sendMessage(prompt)}
+                    disabled={loading}
+                    title={prompt}
+                  >
+                    <span className="chat-suggestion-icon">
+                      <Icon size={13} />
+                    </span>
+                    <span className="chat-suggestion-label">{label}</span>
                   </button>
                 ))}
               </div>

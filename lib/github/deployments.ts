@@ -84,6 +84,8 @@ export type DispatchDevelopPreviewInput = {
   sourcePrNumber?: number | null;
   workflowId?: string;
   token?: string;
+  /** If true, don't fall back to default branch - fail if target branch workflow not found */
+  noFallback?: boolean;
 };
 
 export async function dispatchDevelopPreviewDeploy(input: DispatchDevelopPreviewInput) {
@@ -96,38 +98,64 @@ export async function dispatchDevelopPreviewDeploy(input: DispatchDevelopPreview
   const defaultBranch = input.defaultBranch || "main";
   const octokit = getOctokit(input.token);
   let usedWorkflowId = workflowCandidates[0];
+  let actualDispatchRef = ref;
 
   for (const workflowId of workflowCandidates) {
+    // Different inputs for new vs old workflow
+    // Always pass the target branch in inputs so workflow can checkout correct branch
+    const inputs = workflowId === "shipbrain-preview.yml"
+      ? {
+          branch: ref,
+          source_pr_number: input.sourcePrNumber ? String(input.sourcePrNumber) : ""
+        }
+      : {
+          force_fail: "false",
+          deploy_preview: "true",
+          deploy_branch: ref, // Added: ensure the workflow knows which branch to deploy
+          source_pr_number: input.sourcePrNumber ? String(input.sourcePrNumber) : ""
+        };
+
     try {
-      // IMPORTANT: Use defaultBranch for dispatch ref because workflow files
-      // may only exist on main/master after the setup PR is merged.
-      // The workflow itself will checkout the correct branch to deploy.
-      const dispatchRef = defaultBranch;
-
-      // Different inputs for new vs old workflow
-      const inputs = workflowId === "shipbrain-preview.yml"
-        ? {
-            branch: ref,
-            source_pr_number: input.sourcePrNumber ? String(input.sourcePrNumber) : ""
-          }
-        : {
-            force_fail: "false",
-            deploy_preview: "true",
-            source_pr_number: input.sourcePrNumber ? String(input.sourcePrNumber) : ""
-          };
-
+      // Try dispatching on the specific target ref first so the checkout step uses the correct branch
       await octokit.actions.createWorkflowDispatch({
         owner: input.owner,
         repo: input.repo,
         workflow_id: workflowId,
-        ref: dispatchRef,
+        ref: ref,
         inputs
       });
       usedWorkflowId = workflowId;
+      actualDispatchRef = ref;
       break;
     } catch (error) {
       const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
       const message = typeof error === "object" && error && "message" in error ? (error as { message?: string }).message : "";
+
+      // If dispatch on target ref fails (e.g. branch or workflow not found on that branch),
+      // try falling back to the default branch (unless noFallback is set).
+      if ((status === 404 || status === 422) && !input.noFallback) {
+        try {
+          // When falling back to default branch, still pass the correct target branch in inputs
+          await octokit.actions.createWorkflowDispatch({
+            owner: input.owner,
+            repo: input.repo,
+            workflow_id: workflowId,
+            ref: defaultBranch,
+            inputs // inputs still contain the correct target branch
+          });
+          usedWorkflowId = workflowId;
+          actualDispatchRef = defaultBranch;
+          console.warn(`Preview deploy: workflow dispatched from ${defaultBranch} but targeting ${ref}`);
+          break;
+        } catch (fallbackError) {
+          // If fallback fails as well, and there are more candidates, continue. Otherwise throw.
+          if (workflowCandidates.indexOf(workflowId) < workflowCandidates.length - 1) {
+            continue;
+          }
+          throw fallbackError;
+        }
+      }
+
       // If workflow not found (404) or doesn't have dispatch trigger (422), try next candidate
       if ((status === 404 || status === 422 || message?.includes("does not have")) && workflowCandidates.indexOf(workflowId) < workflowCandidates.length - 1) {
         continue;
@@ -140,6 +168,7 @@ export async function dispatchDevelopPreviewDeploy(input: DispatchDevelopPreview
     workflowId: usedWorkflowId,
     workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/${usedWorkflowId}`,
     ref,
+    actualDispatchRef, // Added: indicates which branch the workflow was actually dispatched from
     sourcePrNumber: input.sourcePrNumber ?? null
   };
 }

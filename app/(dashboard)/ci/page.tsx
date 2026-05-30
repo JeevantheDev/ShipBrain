@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ChevronLeft, ChevronRight, Copy, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, SearchCode, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -52,16 +52,6 @@ type RepoSecretState = {
   full_name: string;
   setup_metadata?: { skipVercel?: boolean; vercelSettingsUrl?: string };
   vercel_preview_env_confirmed?: boolean;
-};
-
-type Analysis = {
-  summary: string;
-  rootCause: string;
-  fixSuggestion: string;
-  severity: "low" | "medium" | "high";
-  isFlaky: boolean;
-  affectedFiles?: string[];
-  errorType?: string;
 };
 
 type DeploymentAudit = {
@@ -131,7 +121,6 @@ export default function CiPage() {
   const requestedRunId = searchParams.get("run");
   const [runs, setRuns] = useState<CiRun[]>([]);
   const [selected, setSelected] = useState<CiRun | null>(null);
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [busy, setBusy] = useState(false);
   const [gateOpen, setGateOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -382,7 +371,6 @@ export default function CiPage() {
 
   function selectRun(run: CiRun) {
     setSelected(run);
-    setAnalysis(null);
     setReleaseTag(run.releaseTag ?? defaultReleaseTag());
     setDeploymentMessage("");
     setDeploymentError("");
@@ -407,20 +395,6 @@ export default function CiPage() {
     if (run.conclusion === "success") return "This workflow completed successfully, but it is not the active production approval gate.";
     if (run.conclusion) return "This workflow completed with a non-success conclusion. Review details or ask ShipBrain to explain it.";
     return "This workflow is still running or queued. ShipBrain will update it as GitHub sends more webhook events.";
-  }
-
-  async function analyze(run: CiRun) {
-    setSelected(run);
-    setBusy(true);
-    setAnalysis(null);
-    const response = await fetch("/api/ai/ci-analysis", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(run)
-    });
-    const json = await response.json();
-    setAnalysis(json);
-    setBusy(false);
   }
 
   async function loadAudits(run: CiRun) {
@@ -924,9 +898,6 @@ export default function CiPage() {
                     <p style={{ fontSize: 12, margin: "0 0 6px" }}>
                       Completed with: <code>{selected.conclusion}</code> {selected.workflowName ? ` (${selected.workflowName})` : ""}
                     </p>
-                    <p style={{ fontSize: 11, color: "var(--text-muted)", margin: 0 }}>
-                      Click &ldquo;Explain run&rdquo; for AI analysis, or check raw logs below.
-                    </p>
                   </div>
                 )}
 
@@ -939,13 +910,6 @@ export default function CiPage() {
                     border: "1px solid var(--line)",
                     borderColor: selected.conclusion && selected.conclusion !== "success" ? "var(--red)" : undefined
                   }}>{selected.logs}</pre>
-                </div>
-
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  <button className="btn-primary" onClick={() => analyze(selected)} disabled={busy} style={{ flex: 1, justifyContent: "center" }}>
-                    {busy ? <Loader2 size={12} className="spin" /> : <SearchCode size={12} />}
-                    {busy ? "Analyzing..." : selected.conclusion === "success" ? "Review run with AI" : "Explain run"}
-                  </button>
                 </div>
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
@@ -1000,42 +964,6 @@ export default function CiPage() {
               </div>
             )}
 
-            {analysis && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 16, borderTop: "1px solid var(--line-muted)", paddingTop: 16 }}>
-                <div className="card" style={{ padding: 12 }}>
-                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                    <span className={`status-pill ${analysis.severity === "high" ? "danger" : ""}`}>{analysis.severity}</span>
-                    {analysis.errorType && <span className="status-pill">{analysis.errorType}</span>}
-                    {analysis.isFlaky && <span className="status-pill"><span className="dot"></span>flaky</span>}
-                  </div>
-                  <strong style={{ fontSize: 13, display: "block" }}>AI Summary</strong>
-                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px" }}>{analysis.summary}</p>
-
-                  <strong style={{ fontSize: 13, display: "block" }}>Root Cause</strong>
-                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px", whiteSpace: "pre-wrap" }}>{analysis.rootCause}</p>
-
-                  {analysis.affectedFiles?.length ? (
-                    <>
-                      <strong style={{ fontSize: 13, display: "block" }}>Affected Files</strong>
-                      <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12 }}>
-                        {analysis.affectedFiles.map((file, i) => (
-                          <li key={i}><code className="mono" style={{ fontSize: 11 }}>{file}</code></li>
-                        ))}
-                      </ul>
-                    </>
-                  ) : null}
-                </div>
-
-                <div className="card" style={{ padding: 12 }}>
-                  <strong style={{ fontSize: 13, display: "block" }}>Fix Suggestion</strong>
-                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "4px 0 10px", whiteSpace: "pre-wrap" }}>{analysis.fixSuggestion}</p>
-                  <button className="btn subtle" onClick={() => navigator.clipboard.writeText(analysis.fixSuggestion)}>
-                    <Copy size={12} style={{ marginRight: 4 }} />
-                    Copy fix code
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </aside>
       </section>
