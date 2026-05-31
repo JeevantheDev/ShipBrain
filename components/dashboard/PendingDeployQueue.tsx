@@ -68,6 +68,14 @@ export function PendingDeployQueue() {
     return () => window.clearInterval(interval);
   }, [pending]);
 
+  useEffect(() => {
+    const handleRefetch = () => {
+      void loadPending();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => window.removeEventListener("shipbrain-refetch", handleRefetch);
+  }, []);
+
   async function loadPending() {
     try {
       const response = await fetch("/api/deployments/pending", { cache: "no-store" });

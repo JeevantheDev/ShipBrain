@@ -205,10 +205,17 @@ export default function SpecToPrPage() {
     void loadRecentRuns();
     const interval = window.setInterval(() => void loadRecentRuns(), 30000);
     window.addEventListener("shipbrain:active-repo", handleActiveRepo);
+    const handleRefetch = () => {
+      void loadActiveRepo();
+      void loadRecipes();
+      void loadRecentRuns();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
       window.removeEventListener("shipbrain:active-repo", handleActiveRepo);
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
     };
   }, []);
 

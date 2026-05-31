@@ -38,6 +38,21 @@ export function DashboardShell({ children, provider, user }: DashboardShellProps
   }, [pathname]);
 
   useEffect(() => {
+    let focusTimer: number | null = null;
+    const handleFocus = () => {
+      if (focusTimer) window.clearTimeout(focusTimer);
+      focusTimer = window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("shipbrain-refetch"));
+      }, 150);
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      if (focusTimer) window.clearTimeout(focusTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     document.body.classList.toggle("mobile-sidebar-open", sidebarOpen);
     return () => document.body.classList.remove("mobile-sidebar-open");
   }, [sidebarOpen]);

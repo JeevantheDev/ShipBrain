@@ -307,6 +307,7 @@ function resolveWriteToolParams(
     case "resolve_incident":
     case "acknowledge_incident": {
       const incidentId = args.incident_id ?? args.incidentId;
+      const note = args.note ?? args.resolution_note ?? args.resolutionNote ?? args.audit_message ?? args.auditMessage;
       const incidents = (context.incidents ?? []) as any[];
       let found: any = null;
       if (incidentId) {
@@ -318,6 +319,9 @@ function resolveWriteToolParams(
       if (found) {
         params.incidentId = found.id;
         params.incidentTitle = found.title;
+        if (note) {
+          params.note = note;
+        }
         // For approve_hotfix, capture the base branch and set default release tag if targeting main
         if (toolName === "approve_hotfix") {
           const baseBranch = found.hotfixBaseBranch || args.base_branch || args.baseBranch;

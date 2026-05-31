@@ -130,7 +130,7 @@ export async function POST(request: Request) {
       }
 
       const incidentUpdate: Record<string, unknown> = {
-        status: releaseStatus === "deployed" ? "resolved" : "investigating",
+        status: "investigating",
         reverse_sync_pr_number: reverseSyncPrNumber,
         reverse_sync_pr_status: reverseSyncStatus,
         reverse_sync_error: reverseSyncError,

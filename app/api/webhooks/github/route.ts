@@ -630,7 +630,7 @@ export async function POST(request: Request) {
           hotfix_base_branch: pullRequest.base?.ref ?? null,
           hotfix_pr_url: pullRequest.html_url ?? null,
           hotfix_merge_sha: nextStatus === "merged" ? pullRequest.merge_commit_sha ?? null : undefined,
-          status: nextStatus === "merged" ? "resolved" : "investigating",
+          status: "investigating",
           fix_approved_at: nextStatus === "merged" ? pullRequest.merged_at ?? new Date().toISOString() : undefined,
           updated_at: new Date().toISOString()
         })

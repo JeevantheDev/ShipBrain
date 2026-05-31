@@ -144,7 +144,6 @@ export default function CiPage() {
   const pageSize = 10;
   const selectedHasRejectionAudit = selected ? audits.some((audit) => audit.action === "deploy_rejected") : false;
   const previewRepo = repos.find((repo) => !repo.vercel_preview_env_confirmed && !repo.setup_metadata?.skipVercel);
-
   useEffect(() => {
     void loadRuns();
     void loadRepos();
@@ -153,7 +152,16 @@ export default function CiPage() {
       void loadRuns();
       void loadPendingDeploys();
     }, 15000);
-    return () => window.clearInterval(interval);
+    const handleRefetch = () => {
+      void loadRuns();
+      void loadRepos();
+      void loadPendingDeploys();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
+    };
   }, []);
 
   async function loadRuns(page = currentPage) {

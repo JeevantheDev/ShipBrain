@@ -47,7 +47,14 @@ export function DashboardPrOverview() {
   useEffect(() => {
     void loadRuns();
     const interval = window.setInterval(() => void loadRuns(), 30000);
-    return () => window.clearInterval(interval);
+    const handleRefetch = () => {
+      void loadRuns();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
+    };
   }, []);
 
   async function loadRuns() {

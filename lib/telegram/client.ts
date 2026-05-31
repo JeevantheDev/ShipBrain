@@ -82,6 +82,7 @@ export async function setTelegramCommands() {
         { command: "create_hotfix", description: "Create hotfix Draft PR by incident id" },
         { command: "sync_hotfix", description: "Refresh hotfix PR commits by incident id" },
         { command: "approve_fix", description: "Approve and merge incident hotfix by id" },
+        { command: "resolve", description: "Manually resolve incident by id with a note" },
         { command: "postmortem", description: "Generate incident post-mortem by id" },
         { command: "releases", description: "Recent releases" },
         { command: "ci", description: "Latest CI workflow runs" },

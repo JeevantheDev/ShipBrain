@@ -121,6 +121,12 @@ export async function runTelegramCommand(user: TelegramUser, text: string) {
     const tag = text.trim().split(/\s+/).slice(1).join(" ");
     return initiateRollbackFromTelegram(user, tag);
   }
+  if (input.startsWith("/resolve ")) {
+    const resolveParts = text.trim().split(/\s+/);
+    const incidentId = resolveParts[1];
+    const note = resolveParts.slice(2).join(" ") || "Resolved via Telegram";
+    return resolveTelegramIncident(user, incidentId, note);
+  }
   if (input === "/help" || input === "help" || input === "/start") return helpText();
   if (input.startsWith("/incident ") || input.startsWith("incident ")) return getIncidentDetail(user, parts[1]);
   if (input.startsWith("/incidents")) return getIncidents(user);
@@ -1405,7 +1411,7 @@ export async function approveTelegramIncidentFix(user: TelegramUser, token?: str
   });
 
   await db.from("incidents").update({
-    status: "resolved",
+    status: "investigating",
     hotfix_pr_status: "merged",
     hotfix_branch: merge.headBranch,
     hotfix_base_branch: merge.baseBranch,
@@ -2012,5 +2018,24 @@ export async function initiateRollbackFromTelegram(user: TelegramUser, token?: s
     `Workflow: ${deployment.workflowUrl}`,
     "",
     "Check progress: /rollback_status"
+  ].join("\n");
+}
+
+export async function resolveTelegramIncident(user: TelegramUser, token?: string, note: string = "Resolved via Telegram") {
+  const db = getSupabaseAdminClient();
+  const incident = await findIncident(user, token);
+  
+  await db.from("incidents").update({
+    status: "resolved",
+    resolved_at: new Date().toISOString(),
+    resolution_note: note,
+    updated_at: new Date().toISOString()
+  }).eq("id", incident.id);
+
+  return [
+    "✅ *Incident resolved manually*",
+    `Incident: \`${shortId(incident.id)}\` · ${escapeTelegram(incident.title ?? "Incident")}`,
+    `Status: \`resolved\``,
+    `Audit message: _${escapeTelegram(note)}_`
   ].join("\n");
 }

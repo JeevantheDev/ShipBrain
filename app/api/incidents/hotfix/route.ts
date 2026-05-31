@@ -499,7 +499,7 @@ export async function POST(request: Request) {
     const { data, error } = await db
       .from("incidents")
       .update({
-        status: "resolved",
+        status: "investigating",
         hotfix_pr_status: "merged",
         hotfix_branch: merge.headBranch,
         hotfix_base_branch: merge.baseBranch,

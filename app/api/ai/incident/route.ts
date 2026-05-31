@@ -49,9 +49,15 @@ async function getIncidentReleaseContext(incident: any, db: any, user: any) {
   const repoParts = splitRepo(repoFullName);
   const [featureCommits, releaseCommits] = repoParts
     ? await Promise.all([
-        listPullRequestCommits({ ...repoParts, pullNumber: spec.pr_number }),
-        listPullRequestCommits({ ...repoParts, pullNumber: spec.release_pr_number })
-      ]).catch(() => [[], []] as const)
+        listPullRequestCommits({ ...repoParts, pullNumber: spec.pr_number }).catch((err) => {
+          console.error("Error fetching feature PR commits:", err);
+          return [];
+        }),
+        listPullRequestCommits({ ...repoParts, pullNumber: spec.release_pr_number }).catch((err) => {
+          console.error("Error fetching release PR commits:", err);
+          return [];
+        })
+      ])
     : [[], []];
 
   return {

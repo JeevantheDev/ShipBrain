@@ -35,3 +35,34 @@ describe("getModel factory", () => {
     expect(getProvider()).toBe("google");
   });
 });
+
+describe("hasActiveProviderKey", () => {
+  afterEach(() => {
+    vi.resetModules();
+    delete process.env.LLM_PROVIDER;
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.AZURE_AI_FOUNDRY_API_KEY;
+    delete process.env.AZURE_AI_FOUNDRY_ENDPOINT;
+    delete process.env.AZURE_AI_FOUNDRY_DEPLOYMENT_NAME;
+  });
+
+  it("returns true when default provider is microsoft_foundry and keys are present", async () => {
+    process.env.AZURE_AI_FOUNDRY_API_KEY = "key";
+    process.env.AZURE_AI_FOUNDRY_ENDPOINT = "http://endpoint";
+    process.env.AZURE_AI_FOUNDRY_DEPLOYMENT_NAME = "deploy";
+    const { hasActiveProviderKey } = await import("@/lib/ai/model");
+    expect(hasActiveProviderKey()).toBe(true);
+  });
+
+  it("falls back to google when microsoft_foundry is missing keys but GOOGLE_API_KEY is present", async () => {
+    process.env.GOOGLE_API_KEY = "gkey";
+    const { hasActiveProviderKey } = await import("@/lib/ai/model");
+    expect(hasActiveProviderKey()).toBe(true);
+  });
+
+  it("returns false when no provider keys are available", async () => {
+    const { hasActiveProviderKey } = await import("@/lib/ai/model");
+    expect(hasActiveProviderKey()).toBe(false);
+  });
+});

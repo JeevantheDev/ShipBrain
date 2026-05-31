@@ -103,17 +103,28 @@ export function getModel(options?: { temperature?: number; streaming?: boolean }
 }
 
 export function hasActiveProviderKey() {
-  switch (getProvider()) {
-    case "microsoft_foundry": {
-      const foundry = getFoundryConfig();
-      return Boolean(foundry.apiKey && foundry.endpoint && foundry.deploymentName);
+  let provider = getProvider();
+  if (provider === "microsoft_foundry") {
+    const foundry = getFoundryConfig();
+    if (foundry.apiKey && foundry.endpoint && foundry.deploymentName) {
+      return true;
     }
+    const fallback = getFallbackProvider();
+    if (fallback) {
+      provider = fallback;
+    } else {
+      return false;
+    }
+  }
+
+  switch (provider) {
     case "openai":
       return Boolean(process.env.OPENAI_API_KEY);
     case "google":
       return Boolean(process.env.GOOGLE_API_KEY);
     case "anthropic":
-    default:
       return Boolean(process.env.ANTHROPIC_API_KEY);
+    default:
+      return false;
   }
 }

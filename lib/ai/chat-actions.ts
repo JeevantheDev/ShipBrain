@@ -138,7 +138,7 @@ const ACTION_DEFINITIONS: Record<ActionType, {
     label: "Resolve Incident",
     description: "Mark an incident as resolved",
     requiredParams: ["incidentId"],
-    optionalParams: [],
+    optionalParams: ["note"],
     confirmRequired: true,
     riskLevel: "medium"
   },
@@ -264,7 +264,7 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
     }
 
     case "resolve_incident":
-      return `I'll mark incident \`${params.incidentId}\` as resolved.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+      return `I'll mark incident \`${params.incidentId}\` as resolved with note: "${params.note || "Resolved via AI Chat"}".${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
     case "acknowledge_incident":
       return `I'll acknowledge incident \`${params.incidentTitle || params.incidentId}\` to start investigating.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;

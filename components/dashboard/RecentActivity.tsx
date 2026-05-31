@@ -22,7 +22,14 @@ export function RecentActivity() {
   useEffect(() => {
     void loadActivity();
     const interval = window.setInterval(() => void loadActivity(), 30000);
-    return () => window.clearInterval(interval);
+    const handleRefetch = () => {
+      void loadActivity();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
+    };
   }, []);
 
   async function loadActivity() {

@@ -284,6 +284,10 @@ const RESOLVE_INCIDENT: ShipBrainTool = {
       incident_id: {
         type: "string",
         description: "UUID of the incident to resolve. If not provided, the most recent active incident is used."
+      },
+      note: {
+        type: "string",
+        description: "Audit message or explanation of why the incident is resolved. Example: 'Confirmed fix verified on sandbox.'"
       }
     },
     required: []

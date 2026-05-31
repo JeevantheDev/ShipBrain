@@ -247,6 +247,14 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
   }, []);
 
   useEffect(() => {
+    const handleRefetch = () => {
+      refreshBoard("manual");
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => window.removeEventListener("shipbrain-refetch", handleRefetch);
+  }, [refreshBoard]);
+
+  useEffect(() => {
     if (selectedId && !traces.some((trace) => trace.id === selectedId)) {
       setSelectedId(null);
     }

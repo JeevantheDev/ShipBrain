@@ -30,6 +30,37 @@ export async function generatePostmortem(input: {
 - **Date**: ${new Date(p.created_at).toLocaleDateString()}`).join("\n\n")
       : "No past resolved incidents were found for this repository/service.";
 
+    const releaseContextObj = input.releaseContext as any;
+    let prFeatureHistorySection = "No PR/feature history was identified for this incident.";
+    if (releaseContextObj) {
+      const featurePr = releaseContextObj.draftPr;
+      const releasePr = releaseContextObj.release;
+      const featureCommits = releaseContextObj.commits?.featurePr || [];
+      const releaseCommits = releaseContextObj.commits?.releasePr || [];
+
+      const formattedFeatureCommits = featureCommits.length
+        ? featureCommits.map((c: any) => `- \`${c.sha?.slice(0, 7) || "unknown"}\` ${c.message || c.commit?.message || ""}`).join("\n")
+        : "- No commits in feature PR";
+
+      const formattedReleaseCommits = releaseCommits.length
+        ? releaseCommits.map((c: any) => `- \`${c.sha?.slice(0, 7) || "unknown"}\` ${c.message || c.commit?.message || ""}`).join("\n")
+        : "- No commits in release PR";
+
+      prFeatureHistorySection = [
+        `- **Feature Branch**: \`${releaseContextObj.featureBranch || "N/A"}\``,
+        `- **Base Branch**: \`${releaseContextObj.baseBranch || "N/A"}\``,
+        `- **Feature PR**: ${featurePr ? `[PR #${featurePr.number}](${featurePr.url}) (${featurePr.status || "unknown"})` : "N/A"}`,
+        `- **Release Tag**: \`${releasePr?.tag || "N/A"}\``,
+        `- **Release PR**: ${releasePr?.releasePrNumber ? `[PR #${releasePr.releasePrNumber}](${releasePr.releasePrUrl}) (${releasePr.releasePrStatus || "unknown"})` : "N/A"}`,
+        "",
+        "### Feature PR Commits",
+        formattedFeatureCommits,
+        "",
+        "### Release PR Commits",
+        formattedReleaseCommits
+      ].join("\n");
+    }
+
     return `# Incident Post-Mortem: ${input.incident.title}
 
 **Date**: ${new Date().toLocaleDateString()}
@@ -71,15 +102,18 @@ ${input.analysis?.rootCause || "A detailed root cause analysis is pending furthe
 - **Linked Commits**:
 ${formattedCommits}
 
-## 6. Historical Context & Past Incidents
+## 6. PR & Feature History
+${prFeatureHistorySection}
+
+## 7. Historical Context & Past Incidents
 ${pastIncidentsSection}
 
-## 7. Action Items (Preventative Actions)
+## 8. Action Items (Preventative Actions)
 - **Prevent (Avoid in Future)**: Add comprehensive automated test coverage for the regression path. Establish strict code review guidelines for similar configuration patterns.
 - **Detect**: Add specific monitoring and alert rules to catch this error pattern instantly.
 - **Mitigate**: Enhance rollback scripts and staging verification pipelines to minimize the blast radius of future regressions.
 
-## 8. Lessons Learned
+## 9. Lessons Learned
 - Auto-assisted log analysis significantly reduces MTTR (Mean Time To Resolution).
 - Gaps in regression test suites present the highest risk of recurring bug patterns.
 `;
@@ -111,11 +145,13 @@ ${pastIncidentsSection}
         "Perform a 5 Whys analysis (Why 1 through Why 5) to trace the chain of causes. Follow this with a detailed Root Cause Description.",
         "## 5. Resolution & Current Fix",
         "Describe the fix applied and list the current fix commits (commit SHA and message).",
-        "## 6. Historical Context & Past Incidents",
+        "## 6. PR & Feature History",
+        "Provide detailed information about the associated feature branch, base branch, and Pull Request (PR) details, along with the list of commits from the feature PR and release PR if available in the Release Context. Format this cleanly using markdown lists.",
+        "## 7. Historical Context & Past Incidents",
         "Review the past incidents provided. Compare them to the current incident: Is this a recurring pattern? How does the current fix relate to past issues? What common threads exist?",
-        "## 7. Action Items (Preventative Actions)",
+        "## 8. Action Items (Preventative Actions)",
         "List concrete action items categorized by Prevent (Avoid in Future), Detect, and Mitigate. Discuss how to specifically avoid similar issues in the future.",
-        "## 8. Lessons Learned",
+        "## 9. Lessons Learned",
         "Describe what went well, what went poorly, and where we got lucky."
       ].join("\n")
     ],
