@@ -235,6 +235,22 @@ export async function POST(request: Request) {
       })
       .eq("id", spec.id);
 
+    // Also update all feature specs associated with this release PR
+    // This ensures they all get marked as deploying and can be found by webhooks
+    if (spec.release_pr_number) {
+      await db
+        .from("specs")
+        .update({
+          release_tag: releaseTag,
+          release_sha: releaseSha,
+          release_status: "deploying",
+          updated_at: new Date().toISOString()
+        })
+        .eq("repo_full_name", spec.repo_full_name)
+        .eq("release_pr_number", spec.release_pr_number)
+        .neq("id", spec.id);
+    }
+
     if (isMergedDirectMainHotfix && spec.incident_id) {
       await db
         .from("incidents")

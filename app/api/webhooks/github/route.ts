@@ -175,6 +175,67 @@ export async function POST(request: Request) {
 
       await supabase.from("specs").update(specUpdate).eq("id", spec.id);
 
+      // When production deploy completes successfully, also update all associated feature specs
+      if (isVercelDeploy && workflowRun.status === "completed" && workflowRun.conclusion === "success") {
+        // Get the spec's release_pr_number to find all associated features
+        const { data: fullSpec } = await supabase
+          .from("specs")
+          .select("release_pr_number, release_tag, repo_full_name")
+          .eq("id", spec.id)
+          .maybeSingle();
+
+        if (fullSpec) {
+          // Update all specs with the same release_pr_number OR release_tag
+          const deployedAt = new Date().toISOString();
+          const deployedUpdate = {
+            release_status: "deployed",
+            deployment_url: workflowRun.html_url ?? null,
+            deployed_at: deployedAt,
+            updated_at: deployedAt
+          };
+
+          if (fullSpec.release_pr_number) {
+            await supabase
+              .from("specs")
+              .update(deployedUpdate)
+              .eq("repo_full_name", fullSpec.repo_full_name)
+              .eq("release_pr_number", fullSpec.release_pr_number)
+              .neq("id", spec.id);
+          }
+
+          if (fullSpec.release_tag) {
+            await supabase
+              .from("specs")
+              .update(deployedUpdate)
+              .eq("repo_full_name", fullSpec.repo_full_name)
+              .eq("release_tag", fullSpec.release_tag)
+              .neq("id", spec.id);
+          }
+
+          // Also update all feature traces linked to this release to production_live
+          if (fullSpec.release_pr_number) {
+            await supabase
+              .from("release_traces")
+              .update({
+                status: "production_live",
+                current_phase: "live",
+                production_deployment: {
+                  status: "deployed",
+                  url: workflowRun.html_url,
+                  sha: workflowRun.head_sha,
+                  timestamp: deployedAt,
+                  runId: workflowRun.id
+                },
+                completed_at: deployedAt,
+                updated_at: deployedAt
+              })
+              .eq("repo_full_name", fullSpec.repo_full_name)
+              .eq("release_pr_number", fullSpec.release_pr_number)
+              .eq("type", "feature");
+          }
+        }
+      }
+
       if (isVercelDeploy || isPreviewDeploy) {
         await updateTraceBySpecOrPr({
           specId: spec.id,

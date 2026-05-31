@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { addTraceEvent, recomputePendingAction } from "@/lib/orchestrator";
+import { addTraceEvent, recomputePendingAction, associateFeaturesWithRelease } from "@/lib/orchestrator";
 import { phaseForStatus } from "@/lib/orchestrator/state-machine";
 import { createReleasePullRequest, mergePullRequest } from "@/lib/github/pr";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -105,6 +105,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
       release_pr_status: pr.state,
       updated_at: new Date().toISOString()
     }).eq("id", trace.spec_id);
+
+    // Associate all merged feature specs with this release PR
+    // This ensures they get marked as deployed when production deploy completes
+    await associateFeaturesWithRelease(
+      trace.repo_full_name,
+      pr.number,
+      pr.html_url,
+      pr.state
+    ).catch((err) => console.error("Failed to associate features with release:", err));
 
     nextStatus = "release_pending";
     update.status = nextStatus;

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { generateScaffold } from "@/lib/ai/chains/code-scaffold";
-import { decomposeSpec, specPlanSchema } from "@/lib/ai/chains/spec-decompose";
+import { decomposeSpec, specPlanSchema, type PrHistoryContext } from "@/lib/ai/chains/spec-decompose";
 import { createDraftPR } from "@/lib/github/pr";
 import { createOrUpdateTrace } from "@/lib/orchestrator";
 import { DEFAULT_SPEC_PR_RECIPES } from "@/lib/spec-recipes";
@@ -51,6 +51,65 @@ function getAiRetryError(error: unknown) {
   };
 }
 
+async function fetchPrHistoryContext(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  userId: string,
+  repoFullName: string
+): Promise<PrHistoryContext> {
+  const history: PrHistoryContext = {};
+
+  // Fetch recent merged specs/PRs for this repo
+  const { data: recentSpecs } = await supabase
+    .from("specs")
+    .select("pr_number, title, branch_name, status, merged_at, release_tag")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .in("status", ["merged", "draft_created", "approved"])
+    .order("updated_at", { ascending: false })
+    .limit(10);
+
+  if (recentSpecs?.length) {
+    history.recentPrs = recentSpecs.map(spec => ({
+      number: spec.pr_number ?? 0,
+      title: spec.title ?? `PR #${spec.pr_number}`,
+      branch: spec.branch_name ?? undefined,
+      status: spec.status ?? undefined,
+      mergedAt: spec.merged_at ?? undefined
+    })).filter(pr => pr.number > 0);
+
+    // Extract release tags from merged specs
+    const releases = recentSpecs
+      .filter(spec => spec.release_tag)
+      .map(spec => ({
+        tag: spec.release_tag!,
+        deployedAt: spec.merged_at ?? undefined
+      }));
+    if (releases.length) {
+      history.recentReleases = releases;
+    }
+  }
+
+  // Fetch recent incidents for this repo
+  const { data: recentIncidents } = await supabase
+    .from("incidents")
+    .select("id, title, severity, status")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (recentIncidents?.length) {
+    history.relatedIncidents = recentIncidents.map(incident => ({
+      id: incident.id,
+      title: incident.title ?? "Incident",
+      severity: incident.severity ?? undefined,
+      status: incident.status ?? undefined
+    }));
+  }
+
+  return history;
+}
+
 export async function POST(request: Request) {
   const supabase = getSupabaseServerClient();
   const {
@@ -78,7 +137,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "rawSpec or recipeId is required" }, { status: 400 });
     }
 
-    const plan = body.plan ? specPlanSchema.parse(body.plan) : await decomposeSpec(rawSpec, body.repoFullName ?? "shipbrain-sandbox");
+    // Fetch PR history context for better AI-generated plans
+    const repoFullName = body.repoFullName ?? "shipbrain-sandbox";
+    let historyContext: PrHistoryContext | undefined;
+    if (user) {
+      historyContext = await fetchPrHistoryContext(supabase, user.id, repoFullName).catch(() => undefined);
+    }
+
+    const plan = body.plan ? specPlanSchema.parse(body.plan) : await decomposeSpec(rawSpec, repoFullName, historyContext);
     const handoffOnly = /shipbrain-codegen:\s*handoff-only/i.test(rawSpec) || /shipbrain-codegen:\s*handoff-only/i.test(plan.prBody ?? "");
     const scaffold = handoffOnly
       ? await generateScaffold({

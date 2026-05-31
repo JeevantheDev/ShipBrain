@@ -6,6 +6,7 @@ import { createOrUpdateTrace, updateTraceByIncident } from "@/lib/orchestrator";
 import { resolvePagerDutyIncident } from "@/lib/pagerduty/incidents";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import type { PrHistoryContext } from "@/lib/ai/chains/spec-decompose";
 
 export const runtime = "nodejs";
 
@@ -67,11 +68,107 @@ function toIncident(row: any) {
   };
 }
 
-function renderHotfixHandoff(input: { incident: any; analysis: any; releaseContext: any }) {
+async function fetchPrHistoryContext(
+  db: ReturnType<typeof getSupabaseServerClient>,
+  userId: string,
+  repoFullName: string
+): Promise<PrHistoryContext> {
+  const history: PrHistoryContext = {};
+
+  // Fetch recent merged specs/PRs for this repo
+  const { data: recentSpecs } = await db
+    .from("specs")
+    .select("pr_number, title, branch_name, status, merged_at, release_tag")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .in("status", ["merged", "draft_created", "approved"])
+    .order("updated_at", { ascending: false })
+    .limit(10);
+
+  if (recentSpecs?.length) {
+    history.recentPrs = recentSpecs.map(spec => ({
+      number: spec.pr_number ?? 0,
+      title: spec.title ?? `PR #${spec.pr_number}`,
+      branch: spec.branch_name ?? undefined,
+      status: spec.status ?? undefined,
+      mergedAt: spec.merged_at ?? undefined
+    })).filter(pr => pr.number > 0);
+
+    // Extract release tags from merged specs
+    const releases = recentSpecs
+      .filter(spec => spec.release_tag)
+      .map(spec => ({
+        tag: spec.release_tag!,
+        deployedAt: spec.merged_at ?? undefined
+      }));
+    if (releases.length) {
+      history.recentReleases = releases;
+    }
+  }
+
+  // Fetch recent incidents for this repo
+  const { data: recentIncidents } = await db
+    .from("incidents")
+    .select("id, title, severity, status")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (recentIncidents?.length) {
+    history.relatedIncidents = recentIncidents.map(incident => ({
+      id: incident.id,
+      title: incident.title ?? "Incident",
+      severity: incident.severity ?? undefined,
+      status: incident.status ?? undefined
+    }));
+  }
+
+  return history;
+}
+
+function formatHistoryForHotfix(history?: PrHistoryContext): string {
+  if (!history) return "";
+
+  const sections: string[] = [];
+
+  if (history.recentPrs?.length) {
+    sections.push("### Recent PRs in this repository");
+    for (const pr of history.recentPrs.slice(0, 5)) {
+      const status = pr.status ? ` (${pr.status})` : "";
+      sections.push(`- PR #${pr.number}: ${pr.title}${status}`);
+    }
+  }
+
+  if (history.recentReleases?.length) {
+    sections.push("");
+    sections.push("### Recent releases");
+    for (const release of history.recentReleases.slice(0, 3)) {
+      const deployed = release.deployedAt ? ` - deployed ${release.deployedAt}` : "";
+      sections.push(`- ${release.tag}${deployed}`);
+    }
+  }
+
+  if (history.relatedIncidents?.length) {
+    sections.push("");
+    sections.push("### Related incidents");
+    for (const incident of history.relatedIncidents.slice(0, 3)) {
+      const severity = incident.severity ? ` [${incident.severity}]` : "";
+      const status = incident.status ? ` (${incident.status})` : "";
+      sections.push(`- ${incident.title}${severity}${status}`);
+    }
+  }
+
+  return sections.length ? `\n\n${sections.join("\n")}` : "";
+}
+
+function renderHotfixHandoff(input: { incident: any; analysis: any; releaseContext: any; historyContext?: PrHistoryContext }) {
   const commits = [
     ...(input.releaseContext?.commits?.featurePr ?? []),
     ...(input.releaseContext?.commits?.releasePr ?? [])
   ];
+
+  const historySection = formatHistoryForHotfix(input.historyContext);
 
   return [
     `# ShipBrain Incident Hotfix`,
@@ -92,6 +189,7 @@ function renderHotfixHandoff(input: { incident: any; analysis: any; releaseConte
     commits.length
       ? commits.map((commit: any) => `- ${commit.shortSha ?? commit.sha?.slice(0, 7)} ${commit.message}`).join("\n")
       : `- No linked release commits were found.`,
+    historySection ? `${historySection}` : "",
     ``,
     `## Developer instructions`,
     ``,
@@ -100,7 +198,7 @@ function renderHotfixHandoff(input: { incident: any; analysis: any; releaseConte
     `3. When the PR is reviewed, approve the incident fix in ShipBrain to merge this PR and trigger CI.`,
     ``,
     `ShipBrain-codegen: incident-hotfix-handoff-only`
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 async function getUserOr401(request?: Request, body?: any) {
@@ -159,7 +257,12 @@ export async function POST(request: Request) {
     const base = String(body.baseBranch ?? "develop").trim() || "develop";
     const analysis = body.analysis ?? {};
     const releaseContext = body.releaseContext ?? analysis.releaseContext ?? null;
-    const handoff = renderHotfixHandoff({ incident, analysis, releaseContext });
+
+    // Fetch PR history context for better AI-generated handoff
+    const historyContext = await fetchPrHistoryContext(db, user.id, incident.repo_full_name).catch(() => undefined);
+    const handoff = renderHotfixHandoff({ incident, analysis, releaseContext, historyContext });
+    const historySection = formatHistoryForHotfix(historyContext);
+
     const prTitle = `hotfix: ${incident.title ?? "incident fix"}`;
     const prBody = [
       `## ShipBrain incident hotfix`,
@@ -172,10 +275,10 @@ export async function POST(request: Request) {
       ``,
       `### Fix direction`,
       analysis.fixProposal ?? "Pending developer implementation.",
-      ``,
+      historySection,
       `### Manager approval expectation`,
       `After the developer pushes the fix commits, ShipBrain will show the PR commit list in Incident Commander before approval. Approval merges this PR into \`${base}\` and lets CI run from GitHub.`
-    ].join("\n");
+    ].filter(Boolean).join("\n");
 
     const pr = await createDraftPR({
       owner,
