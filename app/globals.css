@@ -3196,6 +3196,10 @@ p {
   flex-direction: column;
   position: sticky;
   top: 64px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 .ai-plan-head {
   display: flex;
@@ -3214,6 +3218,7 @@ p {
 .progress-strip {
   padding: 14px 16px 16px;
   border-bottom: 1px solid var(--line-muted);
+  overflow: hidden;
 }
 .progress-pct {
   font-family: "IBM Plex Sans", sans-serif;
@@ -3256,6 +3261,9 @@ p {
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
   letter-spacing: 0.03em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .plan-body {
@@ -3263,6 +3271,8 @@ p {
   display: flex;
   flex-direction: column;
   padding: 24px 20px 20px;
+  min-width: 0;
+  overflow: hidden;
 }
 .plan-empty-title {
   font-size: 15px;
