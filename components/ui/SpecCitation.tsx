@@ -47,7 +47,14 @@ export function SpecCitation({ specId, children }: SpecCitationProps) {
     try {
       const response = await fetch(`/api/specs/${specId}`);
       if (!response.ok) {
-        throw new Error("Spec not found");
+        let message = "Spec not found";
+        try {
+          const data = await response.json();
+          if (data?.error) {
+            message = data.error;
+          }
+        } catch (_) {}
+        throw new Error(message);
       }
       const data = await response.json();
       const specDetails: SpecDetails = {
@@ -223,10 +230,11 @@ export function SpecCitation({ specId, children }: SpecCitationProps) {
 
 // Helper to detect if a string is a UUID (spec ID)
 export function isSpecId(text: string): boolean {
-  // Match full UUID or short UUID (8 chars)
-  const fullUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const shortUuid = /^[0-9a-f]{8}$/i;
-  return fullUuid.test(text) || shortUuid.test(text);
+  const clean = text.trim();
+  // Match full UUID or short UUID prefix (8 to 36 hex chars with optional hyphens)
+  const uuidPattern = /^[0-9a-f]{8}(-[0-9a-f]{4}){0,3}(-[0-9a-f]{12})?$/i;
+  const hexPattern = /^[0-9a-f]{8,36}$/i;
+  return uuidPattern.test(clean) || hexPattern.test(clean);
 }
 
 // Clear the spec cache (useful when specs are updated)

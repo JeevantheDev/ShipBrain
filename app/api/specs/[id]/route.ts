@@ -3,6 +3,9 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
+const FULL_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PARTIAL_UUID_REGEX = /^[0-9a-f-]{7,36}$/i;
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -18,30 +21,51 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Try to find the spec by full ID or short ID prefix
-  let query = supabase
-    .from("specs")
-    .select(
-      "id, status, repo_full_name, branch_name, base_branch, pr_number, pr_url, preview_url, release_tag, release_sha, release_status, deployment_status, preview_status, decomposed_tasks, updated_at, created_at"
-    )
-    .eq("user_id", user.id);
+  const cleanId = id.trim().toLowerCase();
 
-  // If it's a short ID (8 chars), use prefix matching
-  if (id.length === 8) {
-    query = query.ilike("id", `${id}%`);
-  } else {
-    query = query.eq("id", id);
+  // 1. If it's a full UUID, query directly
+  if (FULL_UUID_REGEX.test(cleanId)) {
+    const { data: spec, error } = await supabase
+      .from("specs")
+      .select("*")
+      .eq("id", cleanId)
+      .maybeSingle();
+
+    if (error) {
+      return NextResponse.json({ error: "Failed to fetch spec", detail: error.message }, { status: 500 });
+    }
+
+    if (!spec) {
+      return NextResponse.json({ error: "Spec not found" }, { status: 404 });
+    }
+
+    return NextResponse.json(spec);
   }
 
-  const { data: spec, error } = await query.maybeSingle();
+  // 2. If it's a partial UUID prefix, fetch and search in JS
+  if (PARTIAL_UUID_REGEX.test(cleanId)) {
+    const { data: allSpecs, error: specError } = await supabase
+      .from("specs")
+      .select("*");
 
-  if (error) {
-    return NextResponse.json({ error: "Failed to fetch spec", detail: error.message }, { status: 500 });
+    if (specError) {
+      return NextResponse.json({ error: "Failed to fetch specs", detail: specError.message }, { status: 500 });
+    }
+
+    const searchTarget = cleanId.replace(/-/g, "");
+    const spec = allSpecs?.find(s => {
+      const cleanDbId = s.id.replace(/-/g, "").toLowerCase();
+      return cleanDbId.startsWith(searchTarget);
+    }) ?? null;
+
+    if (!spec) {
+      return NextResponse.json({ error: "Spec not found" }, { status: 404 });
+    }
+
+    return NextResponse.json(spec);
   }
 
-  if (!spec) {
-    return NextResponse.json({ error: "Spec not found" }, { status: 404 });
-  }
-
-  return NextResponse.json(spec);
+  // 3. Invalid format
+  return NextResponse.json({ error: "Invalid spec ID format" }, { status: 400 });
 }
+
