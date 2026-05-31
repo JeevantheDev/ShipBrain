@@ -177,10 +177,10 @@ export async function POST(request: Request) {
 
       // When production deploy completes successfully, also update all associated feature specs
       if (isVercelDeploy && workflowRun.status === "completed" && workflowRun.conclusion === "success") {
-        // Get the spec's release_pr_number to find all associated features
+        // Get the spec's release_pr_number and pr_number to find all associated features
         const { data: fullSpec } = await supabase
           .from("specs")
-          .select("release_pr_number, release_tag, repo_full_name")
+          .select("pr_number, release_pr_number, release_tag, repo_full_name")
           .eq("id", spec.id)
           .maybeSingle();
 
@@ -194,12 +194,14 @@ export async function POST(request: Request) {
             updated_at: deployedAt
           };
 
-          if (fullSpec.release_pr_number) {
+          const relPrNumber = fullSpec.release_pr_number || fullSpec.pr_number;
+
+          if (relPrNumber) {
             await supabase
               .from("specs")
               .update(deployedUpdate)
               .eq("repo_full_name", fullSpec.repo_full_name)
-              .eq("release_pr_number", fullSpec.release_pr_number)
+              .eq("release_pr_number", relPrNumber)
               .neq("id", spec.id);
           }
 
@@ -213,7 +215,7 @@ export async function POST(request: Request) {
           }
 
           // Also update all feature traces linked to this release to production_live
-          if (fullSpec.release_pr_number) {
+          if (relPrNumber) {
             await supabase
               .from("release_traces")
               .update({
@@ -230,7 +232,7 @@ export async function POST(request: Request) {
                 updated_at: deployedAt
               })
               .eq("repo_full_name", fullSpec.repo_full_name)
-              .eq("release_pr_number", fullSpec.release_pr_number)
+              .eq("release_pr_number", relPrNumber)
               .eq("type", "feature");
           }
         }
@@ -541,60 +543,27 @@ export async function POST(request: Request) {
 
         if (isShipBrainSetupPr) {
           // Onboarding/setup PRs configure ShipBrain itself; they are not product release traces.
-        } else if (isReleasePromotionPr && syncedSpecId) {
-          const traceUpdated = await updateTraceBySpecOrPr({
-            specId: syncedSpecId,
+        } else if (isReleasePromotionPr) {
+          await createOrUpdateTrace({
             repoFullName,
-            prNumber: pullRequest.number,
-            branchName: headBranch,
-            patch: {
-              status: traceStatus,
-              release_pr_number: pullRequest.number,
-              release_pr_url: pullRequest.html_url,
-              merged_to_main: nextStatus === "merged"
-                ? {
-                    sha: pullRequest.merge_commit_sha ?? null,
-                    mergedAt: pullRequest.merged_at ?? new Date().toISOString(),
-                    prNumber: pullRequest.number
-                  }
-                : null
-            },
-            event: {
-              eventType: nextStatus === "merged" ? "pr_merged" : nextStatus === "closed" ? "status_changed" : json.action === "opened" ? "pr_opened" : "pr_updated",
-              source: "github",
-              actor: pullRequest.user?.login ?? "github",
-              actorType: "github",
-              details: {
-                action: json.action,
-                merged: pullRequest.merged ?? false,
-                mergeCommitSha: pullRequest.merge_commit_sha ?? null,
-                prNumber: pullRequest.number
-              }
+            type: "release",
+            title: pullRequest.title ?? `Release PR #${pullRequest.number}`,
+            description: pullRequest.body ?? null,
+            status: traceStatus,
+            sourceBranch: headBranch,
+            targetBranch: baseBranch,
+            releasePrNumber: pullRequest.number,
+            releasePrUrl: pullRequest.html_url,
+            specId: syncedSpecId,
+            source: "github",
+            actor: pullRequest.user?.login ?? "github",
+            eventType: nextStatus === "merged" ? "pr_merged" : nextStatus === "closed" ? "status_changed" : json.action === "opened" ? "pr_opened" : "pr_updated",
+            details: {
+              action: json.action,
+              merged: pullRequest.merged ?? false,
+              prNumber: pullRequest.number
             }
-          });
-
-          if (!traceUpdated) {
-            await createOrUpdateTrace({
-              repoFullName,
-              type: "release",
-              title: pullRequest.title ?? `Release PR #${pullRequest.number}`,
-              description: pullRequest.body ?? null,
-              status: traceStatus,
-              sourceBranch: headBranch,
-              targetBranch: baseBranch,
-              releasePrNumber: pullRequest.number,
-              releasePrUrl: pullRequest.html_url,
-              specId: syncedSpecId,
-              source: "github",
-              actor: pullRequest.user?.login ?? "github",
-              eventType: "trace_created",
-              details: {
-                action: json.action,
-                merged: pullRequest.merged ?? false,
-                prNumber: pullRequest.number
-              }
-            }).catch((err) => console.error("Error creating release trace:", err));
-          }
+          }).catch((err) => console.error("Error syncing release trace:", err));
         } else {
           await createOrUpdateTrace({
             repoFullName,

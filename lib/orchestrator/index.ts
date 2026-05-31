@@ -127,6 +127,15 @@ export async function createOrUpdateTrace(input: TraceInput) {
       .maybeSingle();
     trace = existing.data;
   }
+  if (!trace && input.releasePrNumber) {
+    const existing = await db
+      .from("release_traces")
+      .select("*")
+      .eq("repo_full_name", input.repoFullName)
+      .eq("release_pr_number", input.releasePrNumber)
+      .maybeSingle();
+    trace = existing.data;
+  }
   if (!trace && input.specId) {
     const existing = await db.from("release_traces").select("*").eq("spec_id", input.specId).maybeSingle();
     trace = existing.data;
