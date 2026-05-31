@@ -11,10 +11,21 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (!error && data.user) {
-      const token = data.session?.provider_token;
+      // Try to get token from multiple sources
+      let token = data.session?.provider_token;
+
+      // If no provider_token in session, try to get from provider_refresh_token
+      // or from the user's GitHub identity
+      if (!token) {
+        const githubIdentity = data.user.identities?.find(id => id.provider === "github");
+        // The access_token might be in identity_data for some Supabase versions
+        token = (githubIdentity?.identity_data as any)?.access_token ?? null;
+      }
+
       let githubLogin = data.user.user_metadata?.user_name ?? data.user.user_metadata?.preferred_username ?? null;
       let avatarUrl = data.user.user_metadata?.avatar_url ?? null;
 
+      // Only update profile if we have a valid token
       if (token) {
         try {
           const { getOctokit } = await import("@/lib/github/client");
@@ -24,15 +35,41 @@ export async function GET(request: NextRequest) {
           avatarUrl = githubUser.avatar_url;
         } catch (e) {
           console.error("Failed to fetch GitHub user details in callback:", e);
+          // Token might be invalid, don't store it
+          token = null;
+        }
+
+        if (token) {
+          await supabase.from("profiles").upsert({
+            id: data.user.id,
+            github_login: githubLogin,
+            github_access_token: token,
+            avatar_url: avatarUrl
+          });
+          console.log(`GitHub token stored for user ${data.user.id} (${githubLogin})`);
+        }
+      } else {
+        // No token available - just update login/avatar if we have them, don't clear existing token
+        console.warn("No GitHub provider_token in session for user:", data.user.id);
+
+        // Check if user already has a token stored, don't overwrite it
+        const { data: existingProfile } = await supabase
+          .from("profiles")
+          .select("github_access_token")
+          .eq("id", data.user.id)
+          .maybeSingle();
+
+        if (!existingProfile?.github_access_token) {
+          // Only update non-token fields if no existing token
+          await supabase.from("profiles").upsert({
+            id: data.user.id,
+            github_login: githubLogin,
+            avatar_url: avatarUrl
+          });
         }
       }
-
-      await supabase.from("profiles").upsert({
-        id: data.user.id,
-        github_login: githubLogin,
-        github_access_token: token ?? null,
-        avatar_url: avatarUrl
-      });
+    } else if (error) {
+      console.error("Auth callback error:", error.message);
     }
   }
 
