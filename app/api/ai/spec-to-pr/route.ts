@@ -143,26 +143,69 @@ export async function POST(request: Request) {
     // Save to specs table for Recent AI PRs
     const repoFullName = body.repoFullName ?? `${owner}/${repo}`;
     if (user) {
-      const { error: specError } = await supabase
-        .from("specs")
-        .insert({
-          user_id: user.id,
-          raw_spec: rawSpec,
-          decomposed_tasks: plan,
-          scaffold_code: scaffold,
-          status: "draft_created",
-          repo_full_name: repoFullName,
-          branch_name: branch,
-          base_branch: base,
-          pr_number: pr.number,
-          pr_url: pr.html_url,
-          updated_at: new Date().toISOString()
-        });
+      const specData = {
+        user_id: user.id,
+        raw_spec: rawSpec,
+        decomposed_tasks: plan,
+        scaffold_code: scaffold,
+        status: "draft_created",
+        repo_full_name: repoFullName,
+        branch_name: branch,
+        base_branch: base,
+        pr_number: pr.number,
+        pr_url: pr.html_url,
+        updated_at: new Date().toISOString()
+      };
 
-      if (specError) {
-        console.error("spec save failed:", specError.message, specError.details);
-      } else {
-        console.log("spec saved successfully for PR #" + pr.number);
+      let updated = false;
+
+      // 1. Try updating by specId if provided
+      if (body.specId) {
+        const { data: updateData, error: updateError } = await supabase
+          .from("specs")
+          .update(specData)
+          .eq("id", body.specId)
+          .eq("user_id", user.id)
+          .select("id");
+
+        if (!updateError && updateData && updateData.length > 0) {
+          updated = true;
+          console.log(`spec updated successfully by specId ${body.specId} for PR #${pr.number}`);
+        } else if (updateError) {
+          console.error(`Failed to update spec by ID ${body.specId}:`, updateError.message);
+        }
+      }
+
+      // 2. If not updated by specId, try matching by branch name fallback
+      if (!updated) {
+        const { data: branchData, error: branchError } = await supabase
+          .from("specs")
+          .update(specData)
+          .eq("repo_full_name", repoFullName)
+          .eq("branch_name", branch)
+          .eq("user_id", user.id)
+          .or("pr_number.is.null,pr_number.eq.42")
+          .select("id");
+
+        if (!branchError && branchData && branchData.length > 0) {
+          updated = true;
+          console.log(`spec updated successfully by branch fallback for PR #${pr.number}`);
+        } else if (branchError) {
+          console.error(`Failed to update spec by branch fallback:`, branchError.message);
+        }
+      }
+
+      // 3. Fallback to insert only if not updated
+      if (!updated) {
+        const { error: specError } = await supabase
+          .from("specs")
+          .insert(specData);
+
+        if (specError) {
+          console.error("spec save failed:", specError.message, specError.details);
+        } else {
+          console.log("spec saved successfully (inserted new) for PR #" + pr.number);
+        }
       }
 
       // Create notification

@@ -696,7 +696,8 @@ export default function SpecToPrPage() {
         plan: finalPlan,
         branchOverride: branchName.trim(),
         baseBranchOverride: baseBranch.trim(),
-        useExistingSourceBranch
+        useExistingSourceBranch,
+        specId: currentRunId
       })
     });
     const json = await response.json();
