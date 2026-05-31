@@ -66,6 +66,13 @@ export function EnvVarsWidget() {
     if (repo) {
       void loadEnvVars();
     }
+    const handleRefetch = () => {
+      if (repo) void loadEnvVars();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => {
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
+    };
   }, [repo]);
 
   async function loadEnvVars() {

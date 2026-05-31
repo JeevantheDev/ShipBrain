@@ -34,6 +34,8 @@ type WorkflowInput = {
   packageJson: boolean;
   buildOutputDir: string;
   buildCommand?: string | null;
+  /** When true, overwrite existing workflow files (useful for re-onboarding) */
+  forceOverwrite?: boolean;
 };
 
 function splitRepo(repoFullName: string) {
@@ -171,27 +173,28 @@ function branchList(input: WorkflowInput) {
 
 export function workflowFiles(input: WorkflowInput) {
   const files: Record<string, string> = {};
+  const force = input.forceOverwrite === true;
 
   // Always include the minimal CI workflow (smoke test only)
-  if (!input.ciExists) {
+  if (force || !input.ciExists) {
     files[".github/workflows/shipbrain-ci.yml"] = shipbrainCiWorkflowMinimal(input);
   }
 
   // Include preview workflow if Cloudflare is enabled and develop branch exists
-  // Skip if preview workflow already exists
-  if (input.includeCloudflare && input.devBranch && !input.previewExists) {
+  // Skip if preview workflow already exists (unless force overwrite)
+  if (input.includeCloudflare && input.devBranch && (force || !input.previewExists)) {
     files[".github/workflows/shipbrain-preview.yml"] = shipbrainPreviewWorkflow(input);
   }
 
-  // Include production workflow (handles both normal releases and hotfixes with reverse sync)
-  // Skip if production or legacy deploy workflow already exists
-  if (input.includeCloudflare && !input.deployExists && !input.productionExists) {
+  // Include production workflow (handles both normal releases and hotfixes)
+  // Skip if production or legacy deploy workflow already exists (unless force overwrite)
+  if (input.includeCloudflare && (force || (!input.deployExists && !input.productionExists))) {
     files[".github/workflows/shipbrain-production.yml"] = shipbrainProductionWorkflow(input);
   }
 
   // Unified notification workflow (combines CI notify + incident alerting)
-  // Skip if notify workflow already exists
-  if (!input.notifyExists) {
+  // Skip if notify workflow already exists (unless force overwrite)
+  if (force || !input.notifyExists) {
     files[".github/workflows/shipbrain-notify.yml"] = shipbrainNotifyWorkflow(input);
   }
 
@@ -404,14 +407,6 @@ on:
         options:
           - "false"
           - "true"
-      reverse_sync:
-        description: After hotfix, sync changes back to develop?
-        required: false
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
 
 concurrency:
   group: shipbrain-production
@@ -516,79 +511,6 @@ jobs:
               \\"is_hotfix\\": \\"\${{ inputs.is_hotfix }}\\",
               \\"deploy_url\\": \\"\${{ steps.deploy.outputs.url }}\\",
               \\"run_url\\": \\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\\"
-            }"
-
-  reverse-sync:
-    name: Sync hotfix to develop
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: \${{ needs.deploy.result == 'success' && inputs.is_hotfix == 'true' && inputs.reverse_sync == 'true' }}
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${input.prodBranch}
-          fetch-depth: 0
-          token: \${{ secrets.GITHUB_TOKEN }}
-      - name: Create reverse sync PR
-        id: reverse_sync
-        env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          EXISTING=$(gh pr list \\
-            --base "${devBranch}" \\
-            --head "${input.prodBranch}" \\
-            --state open \\
-            --json number,url \\
-            --jq '.[0] // empty')
-
-          if [ -n "$EXISTING" ]; then
-            PR_NUMBER=$(echo "$EXISTING" | jq -r '.number')
-            PR_URL=$(echo "$EXISTING" | jq -r '.url')
-            echo "Existing reverse sync PR found: #$PR_NUMBER"
-          else
-            PR_URL=$(gh pr create \\
-              --base "${devBranch}" \\
-              --head "${input.prodBranch}" \\
-              --title "chore: sync \${{ inputs.release_tag }} hotfix to ${devBranch}" \\
-              --body "## Reverse Sync
-
-          This PR syncs the hotfix **\${{ inputs.release_tag }}** from \`${input.prodBranch}\` back to \`${devBranch}\`.
-
-          **Why?** After a hotfix is deployed to production, the fix needs to be merged back to ${devBranch} to prevent regression.
-
-          ---
-          _Created automatically by ShipBrain_")
-            PR_NUMBER=$(gh pr view "$PR_URL" --json number --jq '.number')
-            echo "Reverse sync PR created: #$PR_NUMBER"
-          fi
-
-          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
-      - name: Notify ShipBrain of reverse sync
-        continue-on-error: true
-        env:
-          SHIPBRAIN_API_URL: \${{ secrets.SHIPBRAIN_API_URL }}
-          SHIPBRAIN_API_KEY: \${{ secrets.SHIPBRAIN_API_KEY }}
-        run: |
-          if [ -z "$SHIPBRAIN_API_URL" ] || [ -z "$SHIPBRAIN_API_KEY" ]; then
-            exit 0
-          fi
-          curl --fail-with-body -sS -X POST "$SHIPBRAIN_API_URL/api/deployments/reverse-sync" \\
-            -H "Authorization: Bearer $SHIPBRAIN_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d "{
-              \\"repo\\": \\"$GITHUB_REPOSITORY\\",
-              \\"release_tag\\": \\"\${{ inputs.release_tag }}\\",
-              \\"sync_branch\\": \\"${input.prodBranch}\\",
-              \\"pr_number\\": \\"\${{ steps.reverse_sync.outputs.pr_number }}\\",
-              \\"pr_url\\": \\"\${{ steps.reverse_sync.outputs.pr_url }}\\",
-              \\"status\\": \\"\${{ job.status }}\\"
             }"
 `;
 }
@@ -697,93 +619,211 @@ ${incidentJobs}`;
 export async function openSetupPullRequest(input: {
   repoFullName: string;
   base: string;
+  head?: string; // Optional: use existing branch as head (e.g., develop → main)
   files: Record<string, string>;
   token?: string;
 }) {
   const octokit = getOctokit(input.token);
   const { owner, repo } = splitRepo(input.repoFullName);
-  const branch = `shipbrain/setup-${Date.now().toString(36)}`;
-  const { data: baseRef } = await octokit.git.getRef({ owner, repo, ref: `heads/${input.base}` });
-  await octokit.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: baseRef.object.sha });
 
-  for (const [path, content] of Object.entries(input.files)) {
-    let sha: string | undefined;
+  // If head branch is provided, use it directly (e.g., develop → main)
+  // Otherwise, create a new setup branch
+  let branch: string;
+  if (input.head) {
+    branch = input.head;
+  } else {
+    branch = `shipbrain/setup-${Date.now().toString(36)}`;
+    const { data: baseRef } = await octokit.git.getRef({ owner, repo, ref: `heads/${input.base}` });
+    await octokit.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: baseRef.object.sha });
 
-    // Check if file exists on the BASE branch first (files are inherited when branch is created)
-    try {
-      const { data } = (await octokit.repos.getContent({
-        owner,
-        repo,
-        path,
-        ref: input.base // Check base branch, not the new branch
-      })) as any;
-      if (data && !Array.isArray(data) && data.sha) {
-        sha = data.sha;
+    // Only commit files to new branch (if using existing head, files should already be committed)
+    for (const [path, content] of Object.entries(input.files)) {
+      let sha: string | undefined;
+
+      // Check if file exists on the BASE branch first (files are inherited when branch is created)
+      try {
+        const { data } = (await octokit.repos.getContent({
+          owner,
+          repo,
+          path,
+          ref: input.base // Check base branch, not the new branch
+        })) as any;
+        if (data && !Array.isArray(data) && data.sha) {
+          sha = data.sha;
+        }
+      } catch (error: any) {
+        // 404 means file doesn't exist - that's fine, we'll create it
+        if (error.status !== 404) {
+          console.error(`Error checking file ${path}:`, error.message);
+          // Don't throw - try to create without sha
+        }
       }
-    } catch (error: any) {
-      // 404 means file doesn't exist - that's fine, we'll create it
-      if (error.status !== 404) {
-        console.error(`Error checking file ${path}:`, error.message);
-        // Don't throw - try to create without sha
-      }
-    }
 
-    try {
-      await octokit.repos.createOrUpdateFileContents({
-        owner,
-        repo,
-        path,
-        branch,
-        message: `chore: add ${path}`,
-        content: Buffer.from(content).toString("base64"),
-        ...(sha ? { sha } : {})
-      });
-    } catch (error: any) {
-      // If we get a sha error, try to get the sha from the branch and retry
-      if (error.message?.includes("sha") && !sha) {
-        try {
-          const { data } = (await octokit.repos.getContent({
-            owner,
-            repo,
-            path,
-            ref: branch
-          })) as any;
-          if (data && !Array.isArray(data) && data.sha) {
-            await octokit.repos.createOrUpdateFileContents({
+      try {
+        await octokit.repos.createOrUpdateFileContents({
+          owner,
+          repo,
+          path,
+          branch,
+          message: `chore: add ${path}`,
+          content: Buffer.from(content).toString("base64"),
+          ...(sha ? { sha } : {})
+        });
+      } catch (error: any) {
+        // If we get a sha error, try to get the sha from the branch and retry
+        if (error.message?.includes("sha") && !sha) {
+          try {
+            const { data } = (await octokit.repos.getContent({
               owner,
               repo,
               path,
-              branch,
-              message: `chore: add ${path}`,
-              content: Buffer.from(content).toString("base64"),
-              sha: data.sha
-            });
-            continue; // Success on retry
+              ref: branch
+            })) as any;
+            if (data && !Array.isArray(data) && data.sha) {
+              await octokit.repos.createOrUpdateFileContents({
+                owner,
+                repo,
+                path,
+                branch,
+                message: `chore: add ${path}`,
+                content: Buffer.from(content).toString("base64"),
+                sha: data.sha
+              });
+              continue; // Success on retry
+            }
+          } catch {
+            // Ignore retry errors
           }
-        } catch {
-          // Ignore retry errors
         }
+        throw error;
       }
-      throw error;
     }
   }
 
   const fileList = Object.keys(input.files).map((file) => `- \`${file}\``).join("\n");
-  const { data: pr } = await octokit.pulls.create({
-    owner,
-    repo,
-    title: "chore: add ShipBrain CI, deploy gate, and incident alerting",
-    head: branch,
-    base: input.base,
-    draft: false,
-    body: `## ShipBrain setup
+  const prTitle = input.head
+    ? `chore: sync ShipBrain workflows from ${input.head} to ${input.base}`
+    : "chore: add ShipBrain CI, deploy gate, and incident alerting";
+  const prBody = input.head
+    ? `## ShipBrain setup sync
+
+This PR syncs ShipBrain workflow files from \`${input.head}\` to \`${input.base}\`:
+
+${fileList || "- No workflow files were missing."}
+
+Merge this PR to ensure both branches have identical workflow configurations.`
+    : `## ShipBrain setup
 
 This PR adds or complements ShipBrain automation:
 
 ${fileList || "- No workflow files were missing."}
 
-Review and merge to activate the pipelines. ShipBrain never overwrites existing workflow files.`
+Review and merge to activate the pipelines. ShipBrain never overwrites existing workflow files.`;
+
+  const { data: pr } = await octokit.pulls.create({
+    owner,
+    repo,
+    title: prTitle,
+    head: branch,
+    base: input.base,
+    draft: false,
+    body: prBody
   });
 
   return { branch, number: pr.number, html_url: pr.html_url };
+}
+
+export async function commitWorkflowsToDefaultBranch(input: {
+  repoFullName: string;
+  base: string;
+  files: Record<string, string>;
+  token?: string;
+}) {
+  const octokit = getOctokit(input.token);
+  const { owner, repo } = splitRepo(input.repoFullName);
+
+  for (const [path, content] of Object.entries(input.files)) {
+    let sha: string | undefined;
+    try {
+      const { data } = (await octokit.repos.getContent({
+        owner,
+        repo,
+        path,
+        ref: input.base
+      })) as any;
+      if (data && !Array.isArray(data) && data.sha) {
+        sha = data.sha;
+      }
+    } catch (error: any) {
+      if (error.status !== 404) {
+        console.error(`Error checking file ${path}:`, error.message);
+      }
+    }
+
+    await octokit.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path,
+      branch: input.base,
+      message: `chore: add ShipBrain workflow ${path}`,
+      content: Buffer.from(content).toString("base64"),
+      ...(sha ? { sha } : {})
+    });
+  }
+}
+
+export async function deleteExistingSetupBranchesAndPRs(repoFullName: string, token?: string) {
+  const octokit = getOctokit(token);
+  const { owner, repo } = splitRepo(repoFullName);
+  const deleted: { branches: string[]; prs: number[] } = { branches: [], prs: [] };
+
+  try {
+    // Find and close any existing setup PRs
+    const { data: prs } = await octokit.pulls.list({
+      owner,
+      repo,
+      state: "open",
+      per_page: 100
+    });
+
+    for (const pr of prs) {
+      if (pr.head.ref.startsWith("shipbrain/setup")) {
+        try {
+          await octokit.pulls.update({
+            owner,
+            repo,
+            pull_number: pr.number,
+            state: "closed"
+          });
+          deleted.prs.push(pr.number);
+        } catch (err: any) {
+          console.warn(`Could not close PR #${pr.number}:`, err.message);
+        }
+      }
+    }
+
+    // Find and delete any existing setup branches
+    const { data: refs } = await octokit.git.listMatchingRefs({
+      owner,
+      repo,
+      ref: "heads/shipbrain/setup"
+    });
+
+    for (const ref of refs) {
+      try {
+        await octokit.git.deleteRef({
+          owner,
+          repo,
+          ref: ref.ref.replace("refs/", "")
+        });
+        deleted.branches.push(ref.ref.replace("refs/heads/", ""));
+      } catch (err: any) {
+        console.warn(`Could not delete branch ${ref.ref}:`, err.message);
+      }
+    }
+  } catch (err: any) {
+    console.warn("Error cleaning up existing setup branches/PRs:", err.message);
+  }
+
+  return deleted;
 }

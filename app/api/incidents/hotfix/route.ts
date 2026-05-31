@@ -5,6 +5,8 @@ import { createDraftPR, createReverseSyncPR, mergePullRequest, tagCommitForRelea
 import { createOrUpdateTrace, updateTraceByIncident } from "@/lib/orchestrator";
 import { resolvePagerDutyIncident } from "@/lib/pagerduty/incidents";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import type { PrHistoryContext } from "@/lib/ai/chains/spec-decompose";
 
 export const runtime = "nodejs";
 
@@ -66,11 +68,107 @@ function toIncident(row: any) {
   };
 }
 
-function renderHotfixHandoff(input: { incident: any; analysis: any; releaseContext: any }) {
+async function fetchPrHistoryContext(
+  db: ReturnType<typeof getSupabaseServerClient>,
+  userId: string,
+  repoFullName: string
+): Promise<PrHistoryContext> {
+  const history: PrHistoryContext = {};
+
+  // Fetch recent merged specs/PRs for this repo
+  const { data: recentSpecs } = await db
+    .from("specs")
+    .select("pr_number, title, branch_name, status, merged_at, release_tag")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .in("status", ["merged", "draft_created", "approved"])
+    .order("updated_at", { ascending: false })
+    .limit(10);
+
+  if (recentSpecs?.length) {
+    history.recentPrs = recentSpecs.map(spec => ({
+      number: spec.pr_number ?? 0,
+      title: spec.title ?? `PR #${spec.pr_number}`,
+      branch: spec.branch_name ?? undefined,
+      status: spec.status ?? undefined,
+      mergedAt: spec.merged_at ?? undefined
+    })).filter(pr => pr.number > 0);
+
+    // Extract release tags from merged specs
+    const releases = recentSpecs
+      .filter(spec => spec.release_tag)
+      .map(spec => ({
+        tag: spec.release_tag!,
+        deployedAt: spec.merged_at ?? undefined
+      }));
+    if (releases.length) {
+      history.recentReleases = releases;
+    }
+  }
+
+  // Fetch recent incidents for this repo
+  const { data: recentIncidents } = await db
+    .from("incidents")
+    .select("id, title, severity, status")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (recentIncidents?.length) {
+    history.relatedIncidents = recentIncidents.map(incident => ({
+      id: incident.id,
+      title: incident.title ?? "Incident",
+      severity: incident.severity ?? undefined,
+      status: incident.status ?? undefined
+    }));
+  }
+
+  return history;
+}
+
+function formatHistoryForHotfix(history?: PrHistoryContext): string {
+  if (!history) return "";
+
+  const sections: string[] = [];
+
+  if (history.recentPrs?.length) {
+    sections.push("### Recent PRs in this repository");
+    for (const pr of history.recentPrs.slice(0, 5)) {
+      const status = pr.status ? ` (${pr.status})` : "";
+      sections.push(`- PR #${pr.number}: ${pr.title}${status}`);
+    }
+  }
+
+  if (history.recentReleases?.length) {
+    sections.push("");
+    sections.push("### Recent releases");
+    for (const release of history.recentReleases.slice(0, 3)) {
+      const deployed = release.deployedAt ? ` - deployed ${release.deployedAt}` : "";
+      sections.push(`- ${release.tag}${deployed}`);
+    }
+  }
+
+  if (history.relatedIncidents?.length) {
+    sections.push("");
+    sections.push("### Related incidents");
+    for (const incident of history.relatedIncidents.slice(0, 3)) {
+      const severity = incident.severity ? ` [${incident.severity}]` : "";
+      const status = incident.status ? ` (${incident.status})` : "";
+      sections.push(`- ${incident.title}${severity}${status}`);
+    }
+  }
+
+  return sections.length ? `\n\n${sections.join("\n")}` : "";
+}
+
+function renderHotfixHandoff(input: { incident: any; analysis: any; releaseContext: any; historyContext?: PrHistoryContext }) {
   const commits = [
     ...(input.releaseContext?.commits?.featurePr ?? []),
     ...(input.releaseContext?.commits?.releasePr ?? [])
   ];
+
+  const historySection = formatHistoryForHotfix(input.historyContext);
 
   return [
     `# ShipBrain Incident Hotfix`,
@@ -91,6 +189,7 @@ function renderHotfixHandoff(input: { incident: any; analysis: any; releaseConte
     commits.length
       ? commits.map((commit: any) => `- ${commit.shortSha ?? commit.sha?.slice(0, 7)} ${commit.message}`).join("\n")
       : `- No linked release commits were found.`,
+    historySection ? `${historySection}` : "",
     ``,
     `## Developer instructions`,
     ``,
@@ -99,27 +198,34 @@ function renderHotfixHandoff(input: { incident: any; analysis: any; releaseConte
     `3. When the PR is reviewed, approve the incident fix in ShipBrain to merge this PR and trigger CI.`,
     ``,
     `ShipBrain-codegen: incident-hotfix-handoff-only`
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
-async function getUserOr401() {
+async function getUserOr401(request?: Request, body?: any) {
   const supabase = getSupabaseServerClient();
   const {
-    data: { user }
+    data: { user: authUser }
   } = await supabase.auth.getUser();
-  return { supabase, user };
+
+  // Support internal server-to-server calls with internalUserId
+  const internalUserId = body?.internalUserId || request?.headers.get("X-Internal-User-Id");
+  const user = authUser || (internalUserId ? { id: internalUserId, email: null } : null);
+  const isInternalCall = !authUser && !!internalUserId;
+
+  return { supabase, user, isInternalCall };
 }
 
 export async function POST(request: Request) {
-  const { supabase, user } = await getUserOr401();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
   const body = await request.json();
+  const { supabase, user, isInternalCall } = await getUserOr401(request, body);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const incidentId = String(body.incidentId ?? "");
   const action = String(body.action ?? "create");
   if (!incidentId) return NextResponse.json({ error: "incidentId is required" }, { status: 400 });
 
-  const { data: incident, error: incidentError } = await supabase
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
+
+  const { data: incident, error: incidentError } = await db
     .from("incidents")
     .select("*")
     .eq("id", incidentId)
@@ -151,7 +257,12 @@ export async function POST(request: Request) {
     const base = String(body.baseBranch ?? "develop").trim() || "develop";
     const analysis = body.analysis ?? {};
     const releaseContext = body.releaseContext ?? analysis.releaseContext ?? null;
-    const handoff = renderHotfixHandoff({ incident, analysis, releaseContext });
+
+    // Fetch PR history context for better AI-generated handoff
+    const historyContext = await fetchPrHistoryContext(db, user.id, incident.repo_full_name).catch(() => undefined);
+    const handoff = renderHotfixHandoff({ incident, analysis, releaseContext, historyContext });
+    const historySection = formatHistoryForHotfix(historyContext);
+
     const prTitle = `hotfix: ${incident.title ?? "incident fix"}`;
     const prBody = [
       `## ShipBrain incident hotfix`,
@@ -164,10 +275,10 @@ export async function POST(request: Request) {
       ``,
       `### Fix direction`,
       analysis.fixProposal ?? "Pending developer implementation.",
-      ``,
+      historySection,
       `### Manager approval expectation`,
       `After the developer pushes the fix commits, ShipBrain will show the PR commit list in Incident Commander before approval. Approval merges this PR into \`${base}\` and lets CI run from GitHub.`
-    ].join("\n");
+    ].filter(Boolean).join("\n");
 
     const pr = await createDraftPR({
       owner,
@@ -181,7 +292,7 @@ export async function POST(request: Request) {
       }
     });
 
-    const { data: spec, error: specError } = await supabase
+    const { data: spec, error: specError } = await db
       .from("specs")
       .insert({
         user_id: user.id,
@@ -201,7 +312,7 @@ export async function POST(request: Request) {
     if (specError) return NextResponse.json({ error: "Hotfix PR was created, but ShipBrain could not save its tracker.", detail: specError.message }, { status: 500 });
 
     const commits = await listPullRequestCommits({ owner, repo, pullNumber: pr.number }).catch(() => []);
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("incidents")
       .update({
         status: "investigating",
@@ -222,6 +333,22 @@ export async function POST(request: Request) {
       .single();
 
     if (error) return NextResponse.json({ error: "Hotfix PR was created, but incident sync failed.", detail: error.message }, { status: 500 });
+
+    // Create notification for hotfix PR created
+    const { error: notifError } = await db
+      .from("notifications")
+      .insert({
+        user_id: user.id,
+        type: "hotfix_created",
+        title: "Hotfix PR Created",
+        body: `Created hotfix PR #${pr.number} for incident: ${incident.title ?? incident.id.slice(0, 8)}`,
+        href: pr.html_url,
+        severity: "warning",
+        repo_full_name: incident.repo_full_name,
+        metadata: { incidentId: incident.id, prNumber: pr.number, branch }
+      });
+    if (notifError) console.error("notification creation failed", notifError);
+
     return NextResponse.json({ incident: toIncident(data), specId: spec.id, pr: { ...pr, branch, base }, commits });
   }
 
@@ -231,7 +358,7 @@ export async function POST(request: Request) {
     }
 
     const commits = await listPullRequestCommits({ owner, repo, pullNumber: incident.hotfix_pr_number });
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("incidents")
       .update({
         hotfix_commits: commits,
@@ -259,7 +386,8 @@ export async function POST(request: Request) {
       commitTitle: `hotfix: resolve ${incident.title ?? incident.id}`
     });
     const isProdDeploy = merge.baseBranch === "main";
-    const releaseTag = hotfixReleaseTag(incident.id);
+    // Use provided release tag or generate default for hotfixes
+    const releaseTag = body.releaseTag || hotfixReleaseTag(incident.id);
     let deployment: any = null;
     let deploymentError: string | null = null;
 
@@ -279,7 +407,7 @@ export async function POST(request: Request) {
           reverseSync: true
         });
       } else {
-        const { data: repoRow } = await supabase
+        const { data: repoRow } = await db
           .from("repos")
           .select("default_branch")
           .eq("full_name", incident.repo_full_name)
@@ -346,7 +474,7 @@ export async function POST(request: Request) {
     }
 
     // Record incident fix audit event
-    await supabase.from("approval_events").insert({
+    await db.from("approval_events").insert({
       entity_type: "incident",
       entity_id: incident.id,
       action: "fix_approved",
@@ -368,10 +496,10 @@ export async function POST(request: Request) {
       }
     });
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("incidents")
       .update({
-        status: "resolved",
+        status: "investigating",
         hotfix_pr_status: "merged",
         hotfix_branch: merge.headBranch,
         hotfix_base_branch: merge.baseBranch,
@@ -418,7 +546,7 @@ export async function POST(request: Request) {
       specUpdate.preview_status = deployment ? "deploying" : "failed";
     }
 
-    await supabase
+    await db
       .from("specs")
       .update(specUpdate)
       .eq("incident_id", incident.id);
@@ -476,6 +604,21 @@ export async function POST(request: Request) {
     } catch (traceError) {
       console.error("hotfix release trace update failed", traceError);
     }
+
+    // Create notification for hotfix approved
+    const { error: notifError2 } = await db
+      .from("notifications")
+      .insert({
+        user_id: user.id,
+        type: "hotfix_approved",
+        title: "Hotfix Approved & Merged",
+        body: `Hotfix for incident "${incident.title ?? incident.id.slice(0, 8)}" merged${isProdDeploy ? ` and deploying to production` : ""}`,
+        href: deployment?.workflowUrl ?? incident.hotfix_pr_url,
+        severity: isProdDeploy ? "warning" : "info",
+        repo_full_name: incident.repo_full_name,
+        metadata: { incidentId: incident.id, mergeSha: merge.sha, releaseTag: isProdDeploy ? releaseTag : null }
+      });
+    if (notifError2) console.error("notification creation failed", notifError2);
 
     return NextResponse.json({
       incident: toIncident(data),

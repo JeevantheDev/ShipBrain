@@ -10,6 +10,11 @@
     "migrate:apply": "node scripts/apply-migrations.mjs apply",
     "migrate:status": "node scripts/apply-migrations.mjs status",
     "db:reset-app": "node scripts/reset-app-data.mjs",
+    "db:reset-full": "node scripts/reset-app-data.mjs --include-auth-users",
+    "db:reset-and-migrate": "node scripts/reset-app-data.mjs --include-auth-users && node scripts/apply-migrations.mjs apply",
+    "prod:build": "npm run lint && next build",
+    "prod:deploy": "npm run prod:build",
+    "prod:reset-sandbox": "node scripts/reset-sandbox-repo.mjs",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
@@ -38,8 +43,10 @@
     "lowlight": "^3.3.0",
     "lucide-react": "^0.468.0",
     "next": "^14.2.33",
+    "openai": "^6.39.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

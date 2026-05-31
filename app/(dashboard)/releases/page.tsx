@@ -55,7 +55,7 @@ export default async function ReleasesPage() {
       </div> */}
 
       {traces?.length ? (
-        <ReleaseTraceBoard traces={traces as any} eventsByTrace={eventsByTrace} />
+        <ReleaseTraceBoard traces={traces as any} eventsByTrace={eventsByTrace} userId={user?.id ?? ""} />
       ) : (
         <section className="panel trace-section">
           <div className="empty-state compact">No release traces yet. Create a Draft PR or connect GitHub webhooks.</div>

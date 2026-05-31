@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
@@ -48,19 +49,26 @@ function toIncident(row: any) {
   };
 }
 
-async function getUserOr401() {
+async function getUserOr401(request?: Request, body?: any) {
   const supabase = getSupabaseServerClient();
   const {
-    data: { user }
+    data: { user: authUser }
   } = await supabase.auth.getUser();
-  return { supabase, user };
+
+  const internalUserId = body?.internalUserId || request?.headers.get("X-Internal-User-Id");
+  const user = authUser || (internalUserId ? { id: internalUserId, email: null } : null);
+  const isInternalCall = !authUser && !!internalUserId;
+
+  return { supabase, user, isInternalCall };
 }
 
-export async function GET() {
-  const { supabase, user } = await getUserOr401();
+export async function GET(request: Request) {
+  const { supabase, user, isInternalCall } = await getUserOr401(request);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabase
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
+
+  const { data, error } = await db
     .from("incidents")
     .select("id, alert_source, status, title, repo_full_name, environment, service, severity, branch, commit_sha, release_version, raw_logs, root_cause, ai_fix_proposal, postmortem_draft, ai_analysis, hotfix_branch, hotfix_base_branch, hotfix_pr_number, hotfix_pr_url, hotfix_pr_status, hotfix_merge_sha, hotfix_commits, fix_approved_at, external_id, acknowledged_at, acknowledged_by, resolved_at, resolution_note, rejected_at, rejection_reason, reverse_sync_pr_number, reverse_sync_pr_url, reverse_sync_pr_status, reverse_sync_branch, reverse_sync_created_at, reverse_sync_merged_at, reverse_sync_error, created_at, updated_at")
     .eq("user_id", user.id)
@@ -72,17 +80,19 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const { supabase, user } = await getUserOr401();
+  const body = await request.json().catch(() => ({}));
+  const { supabase, user, isInternalCall } = await getUserOr401(request, body);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await request.json();
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
+
   const logs = String(body.logs ?? "").trim();
   if (!logs) return NextResponse.json({ error: "logs are required" }, { status: 400 });
 
   // Get user's connected repo if not specified
   let repoFullName = body.repo ?? null;
   if (!repoFullName) {
-    const { data: repos } = await supabase
+    const { data: repos } = await db
       .from("repos")
       .select("full_name")
       .eq("user_id", user.id)
@@ -94,7 +104,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from("incidents")
     .insert({
       user_id: user.id,
@@ -117,16 +127,18 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const { supabase, user } = await getUserOr401();
+  const body = await request.json().catch(() => ({}));
+  const { supabase, user, isInternalCall } = await getUserOr401(request, body);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await request.json();
+  const db = isInternalCall ? getSupabaseAdminClient() : supabase;
+
   const id = String(body.id ?? "");
   const action = String(body.action ?? "").trim();
 
   if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
-  const { data: existing, error: existingError } = await supabase
+  const { data: existing, error: existingError } = await db
     .from("incidents")
     .select("id, alert_source, external_id, status")
     .eq("id", id)
@@ -167,7 +179,7 @@ export async function PATCH(request: Request) {
     if (body.hotfixCommits !== undefined) updates.hotfix_commits = body.hotfixCommits;
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from("incidents")
     .update(updates)
     .eq("id", id)

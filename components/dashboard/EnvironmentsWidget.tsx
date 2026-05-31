@@ -28,7 +28,14 @@ export function EnvironmentsWidget() {
   useEffect(() => {
     void loadEnvironments();
     const interval = window.setInterval(() => void loadEnvironments(), 60000);
-    return () => window.clearInterval(interval);
+    const handleRefetch = () => {
+      void loadEnvironments();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
+    };
   }, []);
 
   async function loadEnvironments() {
