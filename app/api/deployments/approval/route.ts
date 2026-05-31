@@ -83,6 +83,21 @@ export async function POST(request: Request) {
   const isInternalCall = !request.headers.get("cookie") && !!request.headers.get("X-Internal-User-Id");
   const db = isInternalCall ? getSupabaseAdminClient() : supabase;
 
+  // Get user's GitHub token
+  const { data: profile } = await db
+    .from("profiles")
+    .select("github_access_token")
+    .eq("id", user.id)
+    .maybeSingle();
+  const userGitHubToken = profile?.github_access_token;
+
+  if (!userGitHubToken) {
+    return NextResponse.json(
+      { error: "GitHub is not connected.", detail: "Please connect your GitHub account before approving deployments." },
+      { status: 409 }
+    );
+  }
+
   const body = await request.json();
   let runId = String(body.runId ?? "");
   const action = body.action as ApprovalAction;
@@ -130,21 +145,24 @@ export async function POST(request: Request) {
           owner,
           repo,
           sha: specForDeploy.merge_sha,
-          releaseTag
+          releaseTag,
+          token: userGitHubToken
         });
 
         const release = await tagCommitForRelease({
           owner,
           repo,
           sha: specForDeploy.merge_sha,
-          releaseTag
+          releaseTag,
+          token: userGitHubToken
         });
 
         const deployment = await dispatchCloudflareProductionDeploy({
           owner,
           repo,
           releaseTag: release.releaseTag,
-          releaseSha: release.sha
+          releaseSha: release.sha,
+          token: userGitHubToken
         });
 
         // Update spec
@@ -337,7 +355,8 @@ export async function POST(request: Request) {
           owner,
           repo,
           sha: spec.merge_sha ?? ciRun.head_sha ?? "",
-          releaseTag
+          releaseTag,
+          token: userGitHubToken
         });
         // Check if PR is already merged (pending_deploy state)
         if (isPendingDeploy && spec.merge_sha) {
@@ -346,7 +365,8 @@ export async function POST(request: Request) {
             owner,
             repo,
             sha: spec.merge_sha,
-            releaseTag
+            releaseTag,
+            token: userGitHubToken
           });
         } else {
           // PR not merged yet - merge it first
@@ -354,13 +374,15 @@ export async function POST(request: Request) {
             owner,
             repo,
             pullNumber: spec.pr_number,
-            commitTitle: `release: ${releaseTag}`
+            commitTitle: `release: ${releaseTag}`,
+            token: userGitHubToken
           });
           release = await tagCommitForRelease({
             owner,
             repo,
             sha: releaseMerge.destinationSha || releaseMerge.sha,
-            releaseTag
+            releaseTag,
+            token: userGitHubToken
           });
         }
 
@@ -368,7 +390,8 @@ export async function POST(request: Request) {
           owner,
           repo,
           releaseTag: release.releaseTag,
-          releaseSha: release.sha
+          releaseSha: release.sha,
+          token: userGitHubToken
         });
       } catch (error) {
         return NextResponse.json(
@@ -397,7 +420,8 @@ export async function POST(request: Request) {
           repo,
           ref: "develop",
           defaultBranch,
-          sourcePrNumber: spec.pr_number
+          sourcePrNumber: spec.pr_number,
+          token: userGitHubToken
         });
       } catch (error) {
         return NextResponse.json(

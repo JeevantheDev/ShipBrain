@@ -225,6 +225,21 @@ export async function POST(request: Request) {
 
   const db = isInternalCall ? getSupabaseAdminClient() : supabase;
 
+  // Get user's GitHub token
+  const { data: profile } = await db
+    .from("profiles")
+    .select("github_access_token")
+    .eq("id", user.id)
+    .maybeSingle();
+  const userGitHubToken = profile?.github_access_token;
+
+  if (!userGitHubToken) {
+    return NextResponse.json(
+      { error: "GitHub is not connected.", detail: "Please connect your GitHub account before creating hotfix PRs." },
+      { status: 409 }
+    );
+  }
+
   const { data: incident, error: incidentError } = await db
     .from("incidents")
     .select("*")
@@ -289,7 +304,8 @@ export async function POST(request: Request) {
       body: prBody,
       files: {
         "SHIPBRAIN_INCIDENT_HOTFIX.md": handoff
-      }
+      },
+      token: userGitHubToken
     });
 
     const { data: spec, error: specError } = await db
@@ -383,7 +399,8 @@ export async function POST(request: Request) {
       owner,
       repo,
       pullNumber: incident.hotfix_pr_number,
-      commitTitle: `hotfix: resolve ${incident.title ?? incident.id}`
+      commitTitle: `hotfix: resolve ${incident.title ?? incident.id}`,
+      token: userGitHubToken
     });
     const isProdDeploy = merge.baseBranch === "main";
     // Use provided release tag or generate default for hotfixes
@@ -397,14 +414,16 @@ export async function POST(request: Request) {
           owner,
           repo,
           sha: merge.sha,
-          releaseTag
+          releaseTag,
+          token: userGitHubToken
         });
         deployment = await dispatchHotfixDeploy({
           owner,
           repo,
           releaseTag: release.releaseTag,
           releaseSha: release.sha,
-          reverseSync: true
+          reverseSync: true,
+          token: userGitHubToken
         });
       } else {
         const { data: repoRow } = await db
@@ -419,7 +438,8 @@ export async function POST(request: Request) {
           repo,
           ref: merge.baseBranch,
           defaultBranch,
-          sourcePrNumber: incident.hotfix_pr_number
+          sourcePrNumber: incident.hotfix_pr_number,
+          token: userGitHubToken
         });
       }
     } catch (error) {
@@ -466,7 +486,8 @@ export async function POST(request: Request) {
           incidentId: incident.id,
           incidentTitle: incident.title ?? "Incident fix",
           hotfixPrNumber: incident.hotfix_pr_number,
-          releaseTag
+          releaseTag,
+          token: userGitHubToken
         });
       } catch (error) {
         reverseSyncError = error instanceof Error ? error.message : "Failed to create reverse sync PR";

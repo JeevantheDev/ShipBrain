@@ -26,6 +26,21 @@ export async function POST(request: Request, { params }: { params: { id: string 
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Get user's GitHub token
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("github_access_token")
+    .eq("id", user.id)
+    .maybeSingle();
+  const userGitHubToken = profile?.github_access_token;
+
+  if (!userGitHubToken) {
+    return NextResponse.json(
+      { error: "GitHub is not connected.", detail: "Please connect your GitHub account before performing this action." },
+      { status: 409 }
+    );
+  }
+
   const body = await request.json().catch(() => ({}));
   const action = String(body.action ?? "");
   const { data: trace } = await supabase
@@ -94,7 +109,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
         `Trace: \`${trace.id}\``,
         "",
         "This PR promotes the validated develop branch into main. Production deploy will be triggered after merge."
-      ].join("\n")
+      ].join("\n"),
+      token: userGitHubToken
     });
 
     await supabase.from("specs").update({
@@ -130,7 +146,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       owner,
       repo,
       pullNumber: trace.reverse_sync_pr_number,
-      commitTitle: `sync: complete hotfix reverse sync for ${trace.title}`
+      commitTitle: `sync: complete hotfix reverse sync for ${trace.title}`,
+      token: userGitHubToken
     });
 
     await supabase.from("incidents").update({

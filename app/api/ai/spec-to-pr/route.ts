@@ -158,6 +158,24 @@ export async function POST(request: Request) {
       return NextResponse.json(response);
     }
 
+    // Get user's GitHub token for creating PR
+    let userGitHubToken: string | undefined;
+    if (user) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("github_access_token")
+        .eq("id", user.id)
+        .maybeSingle();
+      userGitHubToken = profile?.github_access_token ?? undefined;
+    }
+
+    if (!userGitHubToken) {
+      return NextResponse.json(
+        { error: "GitHub is not connected.", detail: "Please connect your GitHub account in Settings before creating PRs." },
+        { status: 409 }
+      );
+    }
+
     const { owner, repo } = splitRepo(body.repoFullName ?? "shipbrain-sandbox");
     const branch = typeof body.branchOverride === "string" && body.branchOverride.trim()
       ? body.branchOverride.trim()
@@ -185,7 +203,8 @@ export async function POST(request: Request) {
       body: `${plan.prBody}${promotionFooter}\n\nApproval note: ${body.approvalNote ?? ""}`,
       files: scaffold,
       reviewers: plan.suggestedReviewers,
-      useExistingHead: useExistingSourceBranch
+      useExistingHead: useExistingSourceBranch,
+      token: userGitHubToken
     });
 
     await createOrUpdateTrace({
