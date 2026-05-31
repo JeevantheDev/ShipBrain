@@ -199,25 +199,50 @@ async function runSetup({
   });
   await emit?.({ type: "step", label: "Preparing workflow files", status: "done", files: Object.keys(files) });
 
-  // Attempt to commit workflow files directly to the default branch to prevent workflow_dispatch errors
+  // Commit workflow files directly to BOTH main and develop branches
+  // This ensures workflow_dispatch works immediately without waiting for PR merge
+  let workflowsCommittedToMain = false;
+  let workflowsCommittedToDevelop = false;
+
   if (Object.keys(files).length) {
+    // First, commit to production branch (main)
+    await emit?.({ type: "step", label: `Adding workflows to ${prodBranch}`, status: "running" });
     try {
       await commitWorkflowsToDefaultBranch({ repoFullName, base: prodBranch, files, token });
-      console.log("Successfully committed workflow files directly to default branch:", prodBranch);
+      workflowsCommittedToMain = true;
+      await emit?.({ type: "step", label: `Adding workflows to ${prodBranch}`, status: "done" });
     } catch (err: any) {
-      console.warn("Could not commit workflow files directly to default branch (this is normal if branch is protected):", err.message);
+      await emit?.({ type: "step", label: `Adding workflows to ${prodBranch}`, status: "error", detail: err.message });
+      console.warn(`Could not commit workflow files to ${prodBranch}:`, err.message);
+    }
+
+    // Then, commit to develop branch (if it exists and is different from prod)
+    if (devBranch && devBranch !== prodBranch) {
+      await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "running" });
+      try {
+        await commitWorkflowsToDefaultBranch({ repoFullName, base: devBranch, files, token });
+        workflowsCommittedToDevelop = true;
+        await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "done" });
+      } catch (err: any) {
+        await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "error", detail: err.message });
+        console.warn(`Could not commit workflow files to ${devBranch}:`, err.message);
+      }
     }
   }
 
-  // Open setup PR if there are workflow files to add
+  // Open setup PR only if we couldn't commit directly to both branches
   let pr: Awaited<ReturnType<typeof openSetupPullRequest>> | null = null;
-  if (Object.keys(files).length) {
+  const needsPr = Object.keys(files).length > 0 && (!workflowsCommittedToMain || (devBranch && !workflowsCommittedToDevelop));
+
+  if (needsPr) {
     await emit?.({ type: "step", label: "Opening GitHub setup PR", status: "running" });
-    const baseBranch = devBranch || prodBranch;
+    const baseBranch = devBranch && !workflowsCommittedToDevelop ? devBranch : prodBranch;
     pr = await openSetupPullRequest({ repoFullName, base: baseBranch, files, token });
     await emit?.({ type: "step", label: "Opening GitHub setup PR", status: "done", prUrl: pr.html_url });
-  } else {
+  } else if (Object.keys(files).length === 0) {
     await emit?.({ type: "step", label: "Workflow files already configured", status: "done" });
+  } else {
+    await emit?.({ type: "step", label: "Workflows added to both branches", status: "done" });
   }
 
   // Save repo record to database
