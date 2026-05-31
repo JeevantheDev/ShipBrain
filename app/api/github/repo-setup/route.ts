@@ -109,6 +109,7 @@ async function runSetup({
 
   const skipIncidents = Boolean(body.skipIncidents);
   const enableTelegram = Boolean(body.enableTelegram);
+  const forceOverwrite = Boolean(body.forceOverwrite); // Re-onboarding: overwrite existing workflow files
   const buildOutputDir = String(body.buildOutputDir ?? "dist").trim() || "dist";
   const buildCommand = String(body.buildCommand ?? "npm run build").trim() || "npm run build";
   const customProdBranch = String(body.productionBranch ?? "").trim();
@@ -205,7 +206,8 @@ async function runSetup({
     incidentsExists: scan.workflows.incidents,
     packageJson: scan.project.packageJson,
     buildOutputDir,
-    buildCommand
+    buildCommand,
+    forceOverwrite
   });
   await emit?.({ type: "step", label: "Preparing workflow files", status: "done", files: Object.keys(files) });
 

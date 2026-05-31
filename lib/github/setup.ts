@@ -34,6 +34,8 @@ type WorkflowInput = {
   packageJson: boolean;
   buildOutputDir: string;
   buildCommand?: string | null;
+  /** When true, overwrite existing workflow files (useful for re-onboarding) */
+  forceOverwrite?: boolean;
 };
 
 function splitRepo(repoFullName: string) {
@@ -171,27 +173,28 @@ function branchList(input: WorkflowInput) {
 
 export function workflowFiles(input: WorkflowInput) {
   const files: Record<string, string> = {};
+  const force = input.forceOverwrite === true;
 
   // Always include the minimal CI workflow (smoke test only)
-  if (!input.ciExists) {
+  if (force || !input.ciExists) {
     files[".github/workflows/shipbrain-ci.yml"] = shipbrainCiWorkflowMinimal(input);
   }
 
   // Include preview workflow if Cloudflare is enabled and develop branch exists
-  // Skip if preview workflow already exists
-  if (input.includeCloudflare && input.devBranch && !input.previewExists) {
+  // Skip if preview workflow already exists (unless force overwrite)
+  if (input.includeCloudflare && input.devBranch && (force || !input.previewExists)) {
     files[".github/workflows/shipbrain-preview.yml"] = shipbrainPreviewWorkflow(input);
   }
 
-  // Include production workflow (handles both normal releases and hotfixes with reverse sync)
-  // Skip if production or legacy deploy workflow already exists
-  if (input.includeCloudflare && !input.deployExists && !input.productionExists) {
+  // Include production workflow (handles both normal releases and hotfixes)
+  // Skip if production or legacy deploy workflow already exists (unless force overwrite)
+  if (input.includeCloudflare && (force || (!input.deployExists && !input.productionExists))) {
     files[".github/workflows/shipbrain-production.yml"] = shipbrainProductionWorkflow(input);
   }
 
   // Unified notification workflow (combines CI notify + incident alerting)
-  // Skip if notify workflow already exists
-  if (!input.notifyExists) {
+  // Skip if notify workflow already exists (unless force overwrite)
+  if (force || !input.notifyExists) {
     files[".github/workflows/shipbrain-notify.yml"] = shipbrainNotifyWorkflow(input);
   }
 
