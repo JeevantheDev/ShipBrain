@@ -116,7 +116,32 @@ async function runSetup({
   const customDevBranch = String(body.developmentBranch ?? "").trim();
   const userEnvVars = (body.envVars ?? {}) as Record<string, string>;
 
-  // Scan repository first
+  // Verify write access to repository first
+  await emit?.({ type: "step", label: "Verifying repository access", status: "running" });
+  try {
+    const { Octokit } = await import("@octokit/rest");
+    const octokit = new Octokit({ auth: token });
+    const [owner, repoName] = repoFullName.split("/");
+    const { data: repoData } = await octokit.repos.get({ owner, repo: repoName });
+
+    if (!repoData.permissions?.push && !repoData.permissions?.admin) {
+      throw new Error(
+        `You don't have write access to ${repoFullName}. ` +
+        `Please either onboard a repository you own, or ask the repo owner to add you as a collaborator with write access.`
+      );
+    }
+    await emit?.({ type: "step", label: "Verifying repository access", status: "done" });
+  } catch (error: any) {
+    if (error.status === 404) {
+      throw new Error(`Repository ${repoFullName} not found. Make sure it exists and your GitHub account has access to it.`);
+    }
+    if (error.message?.includes("write access")) {
+      throw error;
+    }
+    throw new Error(`Could not verify access to ${repoFullName}: ${error.message}`);
+  }
+
+  // Scan repository
   await emit?.({ type: "step", label: "Scanning repository", status: "running" });
   const scan = await scanRepository(repoFullName, token);
   await emit?.({ type: "step", label: "Scanning repository", status: "done" });

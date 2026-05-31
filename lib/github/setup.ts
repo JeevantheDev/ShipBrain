@@ -626,12 +626,25 @@ export async function openSetupPullRequest(input: {
   const octokit = getOctokit(input.token);
   const { owner, repo } = splitRepo(input.repoFullName);
 
-  // Verify the repository exists and is accessible
+  // Verify the repository exists and user has write access
   try {
-    await octokit.repos.get({ owner, repo });
+    const { data: repoData } = await octokit.repos.get({ owner, repo });
+
+    // Check if user has write/push access
+    if (!repoData.permissions?.push && !repoData.permissions?.admin) {
+      throw new Error(
+        `You don't have write access to ${owner}/${repo}. ` +
+        `Please either:\n` +
+        `1. Onboard a repository you own, or\n` +
+        `2. Ask the repo owner to add you as a collaborator with write access.`
+      );
+    }
   } catch (error: any) {
     if (error.status === 404) {
       throw new Error(`Repository ${owner}/${repo} not found or not accessible with your GitHub token.`);
+    }
+    if (error.message?.includes("write access")) {
+      throw error; // Re-throw our custom permission error
     }
     throw error;
   }
