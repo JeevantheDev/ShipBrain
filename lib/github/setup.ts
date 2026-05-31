@@ -787,3 +787,42 @@ Review and merge to activate the pipelines. ShipBrain never overwrites existing 
 
   return { branch, number: pr.number, html_url: pr.html_url };
 }
+
+export async function commitWorkflowsToDefaultBranch(input: {
+  repoFullName: string;
+  base: string;
+  files: Record<string, string>;
+  token?: string;
+}) {
+  const octokit = getOctokit(input.token);
+  const { owner, repo } = splitRepo(input.repoFullName);
+
+  for (const [path, content] of Object.entries(input.files)) {
+    let sha: string | undefined;
+    try {
+      const { data } = (await octokit.repos.getContent({
+        owner,
+        repo,
+        path,
+        ref: input.base
+      })) as any;
+      if (data && !Array.isArray(data) && data.sha) {
+        sha = data.sha;
+      }
+    } catch (error: any) {
+      if (error.status !== 404) {
+        console.error(`Error checking file ${path}:`, error.message);
+      }
+    }
+
+    await octokit.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path,
+      branch: input.base,
+      message: `chore: add ShipBrain workflow ${path}`,
+      content: Buffer.from(content).toString("base64"),
+      ...(sha ? { sha } : {})
+    });
+  }
+}

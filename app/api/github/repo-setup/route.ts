@@ -3,7 +3,8 @@ import {
   openSetupPullRequest,
   putActionsSecret,
   scanRepository,
-  workflowFiles
+  workflowFiles,
+  commitWorkflowsToDefaultBranch
 } from "@/lib/github/setup";
 import {
   ensureCloudflareProject,
@@ -198,11 +199,22 @@ async function runSetup({
   });
   await emit?.({ type: "step", label: "Preparing workflow files", status: "done", files: Object.keys(files) });
 
+  // Attempt to commit workflow files directly to the default branch to prevent workflow_dispatch errors
+  if (Object.keys(files).length) {
+    try {
+      await commitWorkflowsToDefaultBranch({ repoFullName, base: prodBranch, files, token });
+      console.log("Successfully committed workflow files directly to default branch:", prodBranch);
+    } catch (err: any) {
+      console.warn("Could not commit workflow files directly to default branch (this is normal if branch is protected):", err.message);
+    }
+  }
+
   // Open setup PR if there are workflow files to add
   let pr: Awaited<ReturnType<typeof openSetupPullRequest>> | null = null;
   if (Object.keys(files).length) {
     await emit?.({ type: "step", label: "Opening GitHub setup PR", status: "running" });
-    pr = await openSetupPullRequest({ repoFullName, base: prodBranch, files, token });
+    const baseBranch = devBranch || prodBranch;
+    pr = await openSetupPullRequest({ repoFullName, base: baseBranch, files, token });
     await emit?.({ type: "step", label: "Opening GitHub setup PR", status: "done", prUrl: pr.html_url });
   } else {
     await emit?.({ type: "step", label: "Workflow files already configured", status: "done" });
