@@ -343,18 +343,6 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
                       <div className="trace-branches">
                         <code>{journeyLabel(trace)}</code>
                       </div>
-                      <div className="release-card-footer">
-                        {trace.pending_action ? (
-                          <AlertTriangle size={13} />
-                        ) : (
-                          <CheckCircle2 size={13} />
-                        )}
-                        <span>
-                          {trace.pending_action?.type
-                            ? statusLabel(trace.pending_action.type)
-                            : currentGateLabel(trace)}
-                        </span>
-                      </div>
                       {(trace.status === "rolling_back" || trace.status === "rolled_back") && trace.rollback_target_tag ? (
                         <div className="rollback-indicator">
                           <RefreshCw size={11} className={trace.status === "rolling_back" ? "spin" : ""} />
