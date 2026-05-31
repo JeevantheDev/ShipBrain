@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     const { data: existingCiRunSpec } = (repoFullName && existingCiRun?.spec_id)
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("id", existingCiRun.spec_id)
           .maybeSingle()
       : { data: null };
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     const { data: matchedRunSpec } = repoFullName
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("repo_full_name", repoFullName)
           .or(`latest_ci_run_id.eq.${workflowRun.id},deployment_run_id.eq.${workflowRun.id}`)
           .order("updated_at", { ascending: false })
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
     const { data: pullRequestSpec } = repoFullName && workflowPrNumber
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("repo_full_name", repoFullName)
           .eq("pr_number", workflowPrNumber)
           .order("updated_at", { ascending: false })
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
     const { data: branchSpec } = repoFullName && branch
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("repo_full_name", repoFullName)
           .eq("branch_name", branch)
           .order("updated_at", { ascending: false })
@@ -83,7 +83,7 @@ export async function POST(request: Request) {
     const { data: releaseSpec } = repoFullName && workflowRun.head_sha
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("repo_full_name", repoFullName)
           .eq("release_sha", workflowRun.head_sha)
           .order("updated_at", { ascending: false })
@@ -93,7 +93,7 @@ export async function POST(request: Request) {
     const { data: releaseTagSpec } = repoFullName && branch
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("repo_full_name", repoFullName)
           .eq("release_tag", branch)
           .order("updated_at", { ascending: false })
@@ -103,7 +103,7 @@ export async function POST(request: Request) {
     const { data: mergedSpec } = repoFullName && workflowRun.head_sha
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("repo_full_name", repoFullName)
           .eq("merge_sha", workflowRun.head_sha)
           .order("updated_at", { ascending: false })
@@ -114,7 +114,7 @@ export async function POST(request: Request) {
     const { data: deployingSpec } = isVercelDeploy && repoFullName && !pullRequestSpec && !releaseSpec && !releaseTagSpec && !mergedSpec
       ? await supabase
           .from("specs")
-          .select("id, pr_number")
+          .select("id, pr_number, branch_name")
           .eq("repo_full_name", repoFullName)
           .eq("release_status", "deploying")
           .order("updated_at", { ascending: false })
@@ -239,11 +239,21 @@ export async function POST(request: Request) {
       }
 
       if (isVercelDeploy || isPreviewDeploy) {
+        const isHotfixBranch =
+          (branch && branch.startsWith("hotfix/")) ||
+          (spec?.branch_name && spec.branch_name.startsWith("hotfix/"));
+        const traceType = isHotfixBranch
+          ? "hotfix"
+          : isVercelDeploy
+            ? "release"
+            : "feature";
+
         await updateTraceBySpecOrPr({
           specId: spec.id,
           repoFullName,
           prNumber: spec.pr_number ?? workflowPrNumber,
           branchName: branch,
+          type: traceType,
           patch: {
             status: isVercelDeploy
               ? workflowRun.status === "completed"
@@ -343,45 +353,51 @@ export async function POST(request: Request) {
         }
       }
 
-      // For release PRs (develop → main), find the latest ready_for_prod spec and update it
-      if (isReleasePromotionPr && nextStatus === "merged") {
-        const { data: readySpec } = await supabase
+      // For release PRs (develop → main), find the linked spec and update it
+      if (isReleasePromotionPr) {
+        let specId: string | null = null;
+        const { data: specByReleasePr } = await supabase
           .from("specs")
           .select("id")
           .eq("repo_full_name", repoFullName)
-          .eq("base_branch", "develop")
-          .eq("status", "merged")
-          .eq("release_status", "ready_for_prod")
-          .order("updated_at", { ascending: false })
+          .eq("release_pr_number", pullRequest.number)
           .limit(1)
           .maybeSingle();
 
-        if (readySpec?.id) {
-          syncedSpecId = readySpec.id;
+        if (specByReleasePr) {
+          specId = specByReleasePr.id;
+        } else {
+          const { data: readySpec } = await supabase
+            .from("specs")
+            .select("id")
+            .eq("repo_full_name", repoFullName)
+            .eq("base_branch", "develop")
+            .eq("status", "merged")
+            .eq("release_status", "ready_for_prod")
+            .order("updated_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (readySpec) {
+            specId = readySpec.id;
+          }
+        }
+
+        if (specId) {
+          syncedSpecId = specId;
+          const releasePrStatus = nextStatus === "merged" ? "merged" : (pullRequest.state || "open");
+          const releaseStatus = nextStatus === "merged" ? "pending_deploy" : "ready_for_prod";
           await supabase
             .from("specs")
             .update({
               release_pr_number: pullRequest.number,
               release_pr_url: pullRequest.html_url,
-              release_pr_status: "merged",
-              release_status: "pending_deploy",
-              release_sha: pullRequest.merge_commit_sha ?? null,
+              release_pr_status: releasePrStatus,
+              release_status: releaseStatus,
+              ...(nextStatus === "merged" ? { release_sha: pullRequest.merge_commit_sha ?? null } : {}),
               updated_at: new Date().toISOString()
             })
-            .eq("id", readySpec.id);
+            .eq("id", specId);
         }
-      }
-
-      if (isReleasePromotionPr && (nextStatus === "merged" || nextStatus === "closed")) {
-        await supabase
-          .from("specs")
-          .update({
-            status: nextStatus,
-            ...(nextStatus === "merged" ? { merged_at: pullRequest.merged_at ?? new Date().toISOString() } : {}),
-            updated_at: new Date().toISOString()
-          })
-          .eq("repo_full_name", repoFullName)
-          .eq("pr_number", pullRequest.number);
       }
 
       const prUpdate =
@@ -414,7 +430,7 @@ export async function POST(request: Request) {
             };
 
       // Skip standard update for release promotion PRs (already handled above)
-      if (prUpdate) {
+      if (prUpdate && !isReleasePromotionPr) {
         // First try to update existing spec by pr_number
         let { data, error } = await supabase
           .from("specs")

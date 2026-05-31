@@ -178,6 +178,38 @@ function executeReadToolFromContext(toolName: ShipBrainToolName, args: Record<st
       return `**Release Traces (${traces.length})**\n\n${lines.join("\n\n")}`;
     }
 
+    case "prepare_release_handbook": {
+      const traces = (context.releaseTraces ?? []) as any[];
+      const latestRelease = traces.find(
+        (t) => t.type === "release" && (t.status === "production_live" || t.status === "completed")
+      ) || traces[0];
+      if (!latestRelease) {
+        return "No recent completed production release trace found to prepare a handbook from.";
+      }
+      
+      const specs = (context.recentPrs ?? []) as any[];
+      const releaseSpecs = specs.filter(
+        (s) => s.release_tag === latestRelease.title || s.release_pr_number === latestRelease.release_pr_number || s.status === "merged" || s.release_status === "deployed"
+      );
+      
+      const handbookData = {
+        releaseTag: latestRelease.title ?? `Release Trace ${latestRelease.id.slice(0, 8)}`,
+        status: latestRelease.status,
+        updatedAt: latestRelease.updated_at,
+        repo: latestRelease.repo_full_name,
+        prNumber: latestRelease.release_pr_number,
+        features: releaseSpecs.slice(0, 10).map(s => ({
+          title: s.title ?? s.decomposed_tasks?.prTitle ?? `Spec ${s.id.slice(0, 8)}`,
+          prNumber: s.pr_number,
+          prUrl: s.pr_url,
+          branch: s.branch_name,
+          updatedAt: s.updated_at
+        }))
+      };
+      
+      return `Here is the data for the recent release:\n${JSON.stringify(handbookData, null, 2)}\n\nPlease generate a release handbook for Product Managers summarizing these changes in a highly professional and readable format.`;
+    }
+
     default:
       return "Data retrieved from context.";
   }
@@ -340,6 +372,13 @@ function resolveWriteToolParams(
         }
       } else if (incidentId) {
         params.incidentId = incidentId;
+      }
+      break;
+    }
+
+    case "create_release_pr": {
+      if (args.release_tag || args.releaseTag) {
+        params.releaseTag = args.release_tag || args.releaseTag;
       }
       break;
     }

@@ -6,12 +6,14 @@ import {
   Activity,
   AlertTriangle,
   Bot,
+  BookOpen,
   Bug,
   Check,
   ChevronDown,
   ChevronUp,
   Clock,
   FilePlus,
+  GitBranch,
   GitMerge,
   GitPullRequest,
   Globe,
@@ -31,6 +33,7 @@ import {
   Zap
 } from "lucide-react";
 import { SpecCitation, isSpecId } from "@/components/ui/SpecCitation";
+import { InputModal } from "@/components/ui/InputModal";
 
 type ChatMessage = {
   id: string;
@@ -96,10 +99,12 @@ const quickPrompts: QuickPrompt[] = [
   { Icon: GitPullRequest, category: "pr",       label: "My recent PRs",           prompt: "Show my recent PRs." },
   { Icon: Activity,       category: "info",     label: "CI status",               prompt: "Show CI status." },
   { Icon: Layers,         category: "release",  label: "Release pipeline",        prompt: "Show release trace status." },
+  { Icon: BookOpen,       category: "release",  label: "Release handbook",        prompt: "Prepare a release handbook based on the recent production release." },
   { Icon: AlertTriangle,  category: "incident", label: "Active incidents",        prompt: "Show active incidents." },
 
   // ── PR & Spec ─────────────────────────────────────────────────────────
   { Icon: FilePlus,       category: "pr",       label: "Create PR from spec",     prompt: "Create a draft PR from a sample ticket." },
+  { Icon: GitBranch,      category: "release",  label: "Draft release PR",        prompt: "Create a release draft PR from develop to main." },
 
   // ── Deploy ────────────────────────────────────────────────────────────
   { Icon: Rocket,         category: "deploy",   label: "Deploy to preview",       prompt: "Deploy my merged PR to preview." },
@@ -219,6 +224,8 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
   const [suggestionsExpanded, setSuggestionsExpanded] = useState(true);
   const [pendingAction, setPendingAction] = useState<ChatAction | null>(null);
   const [activeRepo, setActiveRepo] = useState<string | null>(null);
+  const [showTagModal, setShowTagModal] = useState(false);
+  const [tagValue, setTagValue] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const prevOpenRef = useRef(open);
   /** Tracks the message ID currently being streamed so we can normalise its markdown */
@@ -485,7 +492,25 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
   }
 
   function handleConfirm() {
-    void sendMessage("confirm");
+    const isProdRelease = pendingAction?.type === "deploy_production" || 
+                         (pendingAction?.type === "approve_hotfix" && pendingAction?.params?.baseBranch === "main");
+    
+    if (isProdRelease) {
+      const suggestedTag = pendingAction?.params?.releaseTag || "";
+      setTagValue(suggestedTag);
+      setShowTagModal(true);
+    } else {
+      void sendMessage("confirm");
+    }
+  }
+
+  function handleModalConfirm(customTag: string) {
+    setShowTagModal(false);
+    if (customTag.trim()) {
+      void sendMessage(`confirm tag ${customTag.trim()}`);
+    } else {
+      void sendMessage("confirm");
+    }
   }
 
   function handleCancel() {
@@ -941,6 +966,18 @@ Please try again or check the console for more details.`;
               {loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
             </button>
           </form>
+          <InputModal
+            open={showTagModal}
+            title="Confirm Production Release Tag"
+            label="Production Release Tag Name"
+            placeholder="e.g. release-v2026.06.01"
+            defaultValue={tagValue}
+            confirmLabel="Confirm Deployment"
+            cancelLabel="Cancel"
+            required={true}
+            onClose={() => setShowTagModal(false)}
+            onConfirm={handleModalConfirm}
+          />
         </section>
       </aside>
     </>

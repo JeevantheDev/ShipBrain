@@ -4748,7 +4748,7 @@ p {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-2);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .chat-message.user .chat-bubble {
@@ -5828,6 +5828,30 @@ p {
   transform: translateX(-50%);
   border: 6px solid transparent;
   border-top-color: var(--line);
+}
+
+.spec-citation-tooltip.bottom {
+  bottom: auto;
+  top: calc(100% + 8px);
+  animation: spec-tooltip-in-bottom 0.15s ease;
+}
+
+@keyframes spec-tooltip-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.spec-citation-tooltip.bottom::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: var(--line);
 }
 
 .spec-citation-loading,

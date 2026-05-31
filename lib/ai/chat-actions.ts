@@ -10,6 +10,9 @@
 
 import { SupabaseClient } from "@supabase/supabase-js";
 import { DEFAULT_SPEC_PR_RECIPES } from "@/lib/spec-recipes";
+import { createReleasePullRequest } from "@/lib/github/pr";
+import { addTraceEvent, associateFeaturesWithRelease, createOrUpdateTrace } from "@/lib/orchestrator";
+import { phaseForStatus } from "@/lib/orchestrator/state-machine";
 
 export type ActionType =
   | "spec_to_pr"
@@ -22,6 +25,7 @@ export type ActionType =
   | "analyze_incident"
   | "resolve_incident"
   | "acknowledge_incident"
+  | "create_release_pr"
   | "view_status"
   | "view_prs"
   | "view_deployments"
@@ -75,6 +79,14 @@ const ACTION_DEFINITIONS: Record<ActionType, {
     description: "Generate a Draft PR from a specification or feature request",
     requiredParams: ["specId"],
     optionalParams: ["handoffOnly"],
+    confirmRequired: true,
+    riskLevel: "medium"
+  },
+  create_release_pr: {
+    label: "Create Release Draft PR",
+    description: "Create a draft release promotion Pull Request from develop to main branch",
+    requiredParams: [],
+    optionalParams: ["releaseTag"],
     confirmRequired: true,
     riskLevel: "medium"
   },
@@ -232,6 +244,11 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
       return `I'll create a Draft PR from ${specPreview}.${riskWarning}\n\nThis will:\n- Analyze the spec with AI\n- Generate implementation code\n- Create a draft PR on GitHub\n\nWould you like me to proceed?`;
     }
 
+    case "create_release_pr": {
+      const tagInfo = params.releaseTag ? ` with tag \`${params.releaseTag}\`` : "";
+      return `I'll create a Draft Release PR from **develop** to **main** branch${tagInfo}.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+    }
+
     case "deploy_preview":
       return `I'll deploy spec \`${params.specId}\` to the preview environment.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
 
@@ -368,6 +385,136 @@ export async function executeAction(
         if (!response.ok) throw new Error(data.error || data.detail || "Failed to create PR");
 
         return { success: true, result: data };
+      }
+
+      case "create_release_pr": {
+        if (!repoFullName) {
+          throw new Error("No active repository selected.");
+        }
+
+        const { data: traces, error: tracesError } = await supabase
+          .from("release_traces")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("repo_full_name", repoFullName)
+          .order("updated_at", { ascending: false });
+
+        if (tracesError) throw new Error(`Failed to query release traces: ${tracesError.message}`);
+
+        let trace = traces?.find(t => t.status === "preview_live" || t.status === "merged_develop") || traces?.[0];
+        
+        if (!trace) {
+          throw new Error("No active release trace found to create a promotion PR for.");
+        }
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("github_access_token")
+          .eq("id", userId)
+          .maybeSingle();
+        const userGitHubToken = profile?.github_access_token;
+        if (!userGitHubToken) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        const { data: mergedSpecs } = await supabase
+          .from("specs")
+          .select("id, title, pr_number, pr_url, branch_name")
+          .eq("repo_full_name", repoFullName)
+          .eq("user_id", userId)
+          .eq("status", "merged")
+          .eq("base_branch", "develop")
+          .is("release_pr_number", null)
+          .order("merged_at", { ascending: false });
+
+        const featuresSection = mergedSpecs?.length
+          ? [
+              "### Features included in this release",
+              "",
+              ...mergedSpecs.map((s) =>
+                s.pr_number
+                  ? `- ${s.title} ([#${s.pr_number}](${s.pr_url}))`
+                  : `- ${s.title}`
+              ),
+              ""
+            ]
+          : [];
+
+        const releaseTag = params.releaseTag || trace.release_tag || `release-v${new Date().toISOString().slice(0, 10).replace(/-/g, ".")}-${Date.now().toString().slice(-6)}`;
+        
+        const [owner, repo] = repoFullName.split("/");
+        const pr = await createReleasePullRequest({
+          owner,
+          repo,
+          head: "develop",
+          base: "main",
+          releaseTag,
+          body: [
+            "## ShipBrain production release",
+            "",
+            `**Release tag:** \`${releaseTag}\``,
+            "",
+            ...featuresSection,
+            "---",
+            "",
+            `Trace: \`${trace.id}\``,
+            "",
+            "This PR promotes the validated develop branch into main. Production deploy will be triggered after merge."
+          ].join("\n"),
+          token: userGitHubToken
+        });
+
+        if (trace.spec_id) {
+          await supabase.from("specs").update({
+            release_tag: releaseTag,
+            release_status: "ready_for_prod",
+            release_pr_number: pr.number,
+            release_pr_url: pr.html_url,
+            release_pr_status: pr.state,
+            updated_at: new Date().toISOString()
+          }).eq("id", trace.spec_id);
+        }
+
+        await associateFeaturesWithRelease(
+          repoFullName,
+          pr.number,
+          pr.html_url,
+          pr.state
+        ).catch((err) => console.error("Failed to associate features with release:", err));
+
+        const nextStatus = "release_pending";
+        const newTrace = await createOrUpdateTrace({
+          userId,
+          repoFullName,
+          type: "release",
+          title: `Release: Promote develop to production`,
+          description: `Create a production release PR from develop branch to main.`,
+          status: nextStatus,
+          sourceBranch: "develop",
+          targetBranch: "main",
+          releasePrNumber: pr.number,
+          releasePrUrl: pr.html_url,
+          specId: trace.spec_id,
+          source: "manual",
+          actor: userId,
+          eventType: "pr_opened",
+          details: {
+            message: `Release PR #${pr.number} created to promote develop to main.`,
+            prNumber: pr.number,
+            prUrl: pr.html_url,
+            releaseTag
+          }
+        });
+
+        return {
+          success: true,
+          result: {
+            prNumber: pr.number,
+            prUrl: pr.html_url,
+            releaseTag,
+            traceId: newTrace.id
+          }
+        };
       }
 
       case "deploy_preview": {
@@ -687,6 +834,12 @@ export function formatActionResult(action: ActionType, result: any): string {
         `- Files: ${filesCount} files generated\n\n` +
         `The PR is ready for review on GitHub.`;
     }
+
+    case "create_release_pr":
+      return `✅ **Release Draft PR Created Successfully!**\n\n` +
+        `- PR: [#${result.prNumber}](${result.prUrl})\n` +
+        `- Release Tag: \`${result.releaseTag}\`\n\n` +
+        `The PR promotes develop to main and is ready for review on GitHub.`;
 
     case "deploy_preview":
       return `✅ **Preview Deployment Started!**\n\n` +

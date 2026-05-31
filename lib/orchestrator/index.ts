@@ -124,6 +124,7 @@ export async function createOrUpdateTrace(input: TraceInput) {
       .select("*")
       .eq("repo_full_name", input.repoFullName)
       .eq("draft_pr_number", input.draftPrNumber)
+      .eq("type", type)
       .maybeSingle();
     trace = existing.data;
   }
@@ -133,15 +134,26 @@ export async function createOrUpdateTrace(input: TraceInput) {
       .select("*")
       .eq("repo_full_name", input.repoFullName)
       .eq("release_pr_number", input.releasePrNumber)
+      .eq("type", type)
       .maybeSingle();
     trace = existing.data;
   }
   if (!trace && input.specId) {
-    const existing = await db.from("release_traces").select("*").eq("spec_id", input.specId).maybeSingle();
+    const existing = await db
+      .from("release_traces")
+      .select("*")
+      .eq("spec_id", input.specId)
+      .eq("type", type)
+      .maybeSingle();
     trace = existing.data;
   }
   if (!trace && input.incidentId) {
-    const existing = await db.from("release_traces").select("*").eq("incident_id", input.incidentId).maybeSingle();
+    const existing = await db
+      .from("release_traces")
+      .select("*")
+      .eq("incident_id", input.incidentId)
+      .eq("type", type)
+      .maybeSingle();
     trace = existing.data;
   }
 
@@ -196,6 +208,7 @@ export async function updateTraceBySpecOrPr(input: {
   repoFullName?: string | null;
   prNumber?: number | null;
   branchName?: string | null;
+  type?: ReleaseTraceType;
   patch: TracePatch;
   event: {
     eventType: TraceEventType;
@@ -209,16 +222,24 @@ export async function updateTraceBySpecOrPr(input: {
   let trace: any = null;
 
   if (input.specId) {
-    const result = await db.from("release_traces").select("*").eq("spec_id", input.specId).maybeSingle();
+    let query = db.from("release_traces").select("*").eq("spec_id", input.specId);
+    if (input.type) {
+      query = query.eq("type", input.type);
+    }
+    const result = await query.maybeSingle();
     trace = result.data;
   }
 
   if (!trace && input.repoFullName && input.prNumber) {
-    const result = await db
+    let query = db
       .from("release_traces")
       .select("*")
       .eq("repo_full_name", input.repoFullName)
-      .or(`draft_pr_number.eq.${input.prNumber},release_pr_number.eq.${input.prNumber}`)
+      .or(`draft_pr_number.eq.${input.prNumber},release_pr_number.eq.${input.prNumber}`);
+    if (input.type) {
+      query = query.eq("type", input.type);
+    }
+    const result = await query
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -226,11 +247,15 @@ export async function updateTraceBySpecOrPr(input: {
   }
 
   if (!trace && input.repoFullName && input.branchName) {
-    const result = await db
+    let query = db
       .from("release_traces")
       .select("*")
       .eq("repo_full_name", input.repoFullName)
-      .eq("source_branch", input.branchName)
+      .eq("source_branch", input.branchName);
+    if (input.type) {
+      query = query.eq("type", input.type);
+    }
+    const result = await query
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();

@@ -13,7 +13,8 @@ import {
   dispatchDevelopPreviewDeploy
 } from "@/lib/github/deployments";
 import { createDraftPR, createReleasePullRequest, createReverseSyncPR, mergePullRequest, tagCommitForRelease } from "@/lib/github/pr";
-import { createOrUpdateTrace, updateTraceByIncident, updateTraceBySpec, initiateRollback, addTraceEvent } from "@/lib/orchestrator";
+import { createOrUpdateTrace, updateTraceByIncident, updateTraceBySpec, initiateRollback, addTraceEvent, associateFeaturesWithRelease } from "@/lib/orchestrator";
+import { phaseForStatus } from "@/lib/orchestrator/state-machine";
 import { resolvePagerDutyIncident } from "@/lib/pagerduty/incidents";
 import { escapeTelegram } from "@/lib/telegram/formatter";
 
@@ -127,6 +128,16 @@ export async function runTelegramCommand(user: TelegramUser, text: string) {
     const note = resolveParts.slice(2).join(" ") || "Resolved via Telegram";
     return resolveTelegramIncident(user, incidentId, note);
   }
+  if (input === "/handbook" || input === "/release_handbook" || input === "/releasehandbook") {
+    return prepareTelegramReleaseHandbook(user);
+  }
+  if (input.startsWith("/release_pr ") || input.startsWith("/create_release_pr ") || input.startsWith("/releasepr ")) {
+    const tag = text.trim().split(/\s+/).slice(1).join(" ");
+    return createReleasePrFromTelegram(user, tag);
+  }
+  if (input === "/release_pr" || input === "/create_release_pr" || input === "/releasepr") {
+    return createReleasePrFromTelegram(user);
+  }
   if (input === "/help" || input === "help" || input === "/start") return helpText();
   if (input.startsWith("/incident ") || input.startsWith("incident ")) return getIncidentDetail(user, parts[1]);
   if (input.startsWith("/incidents")) return getIncidents(user);
@@ -226,6 +237,8 @@ function helpText() {
     "• /prs - pending Draft PRs and release PRs",
     "• /plan <ticket> - analyze a spec and save an AI plan",
     "• /draft_pr <id or ticket> - create a Draft PR from a saved plan or ticket",
+    "• /release_pr [tag] - create release draft PR from develop to main",
+    "• /handbook - prepare release handbook for Product Managers",
     "• /incidents - open and investigating incidents",
     "• /analyze_incident <id> - AI incident analysis with release context",
     "• /create_hotfix <id> [develop|main] - create incident hotfix Draft PR",
@@ -2038,4 +2051,188 @@ export async function resolveTelegramIncident(user: TelegramUser, token?: string
     `Status: \`resolved\``,
     `Audit message: _${escapeTelegram(note)}_`
   ].join("\n");
+}
+
+export async function prepareTelegramReleaseHandbook(user: TelegramUser) {
+  const db = getSupabaseAdminClient();
+  const repoFullName = await activeRepo(user.user_id);
+  if (!repoFullName) return "No active repository selected.";
+
+  const { data: traces } = await db
+    .from("release_traces")
+    .select("*")
+    .eq("user_id", user.user_id)
+    .eq("repo_full_name", repoFullName)
+    .eq("type", "release")
+    .order("updated_at", { ascending: false });
+
+  const latestRelease = traces?.find(
+    (t) => t.status === "production_live" || t.status === "completed"
+  ) || traces?.[0];
+
+  if (!latestRelease) {
+    return "No recent completed production release trace found.";
+  }
+
+  const { data: specs } = await db
+    .from("specs")
+    .select("title, pr_number, pr_url, branch_name, status, release_status, release_tag, release_pr_number")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", user.user_id);
+
+  const releaseSpecs = (specs ?? []).filter(
+    (s) => s.release_tag === latestRelease.title || s.release_pr_number === latestRelease.release_pr_number || s.status === "merged" || s.release_status === "deployed"
+  );
+
+  const features = releaseSpecs.slice(0, 10).map((s, idx) => {
+    const title = s.title ?? `Feature #${idx + 1}`;
+    const prStr = s.pr_number ? ` (PR #${s.pr_number})` : "";
+    return `• *${escapeTelegram(title)}*${escapeTelegram(prStr)}`;
+  }).join("\n");
+
+  const date = latestRelease.updated_at ? new Date(latestRelease.updated_at).toLocaleDateString() : "recent";
+
+  return [
+    `📘 *Product Manager Release Handbook*`,
+    `-----------------------------------------`,
+    `*Repository:* \`${escapeTelegram(repoFullName)}\``,
+    `*Release Tag:* \`${escapeTelegram(latestRelease.title ?? latestRelease.id.slice(0, 8))}\``,
+    `*Deployed At:* \`${escapeTelegram(date)}\``,
+    `*Release PR:* \`${latestRelease.release_pr_number ? "#" + latestRelease.release_pr_number : "N/A"}\``,
+    `*Status:* \`${escapeTelegram(latestRelease.status)}\``,
+    ``,
+    `🚀 *Key Features Delivered:*`,
+    features || "• No feature specs found in this release.",
+    ``,
+    `💡 *PM Notes:*`,
+    `All features have been successfully verified on preview and are now live in production. Ready for customer communication and verification.`
+  ].join("\n");
+}
+
+export async function createReleasePrFromTelegram(user: TelegramUser, customTag?: string) {
+  const db = getSupabaseAdminClient();
+  const repoFullName = await activeRepo(user.user_id);
+  if (!repoFullName) return "No active repository selected.";
+
+  const { data: traces } = await db
+    .from("release_traces")
+    .select("*")
+    .eq("user_id", user.user_id)
+    .eq("repo_full_name", repoFullName)
+    .eq("type", "release")
+    .order("updated_at", { ascending: false });
+
+  let trace = traces?.find(t => t.status === "preview_live") || traces?.[0];
+  if (!trace) {
+    return "No active release trace found to promote.";
+  }
+
+  const { data: profile } = await db
+    .from("profiles")
+    .select("github_access_token")
+    .eq("id", user.user_id)
+    .maybeSingle();
+  const userGitHubToken = profile?.github_access_token;
+  if (!userGitHubToken) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
+  }
+
+  const { data: mergedSpecs } = await db
+    .from("specs")
+    .select("id, title, pr_number, pr_url, branch_name")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", user.user_id)
+    .eq("status", "merged")
+    .eq("base_branch", "develop")
+    .is("release_pr_number", null)
+    .order("merged_at", { ascending: false });
+
+  const featuresSection = mergedSpecs?.length
+    ? [
+        "### Features included in this release",
+        "",
+        ...mergedSpecs.map((s) =>
+          s.pr_number
+            ? `- ${s.title} ([#${s.pr_number}](${s.pr_url}))`
+            : `- ${s.title}`
+        ),
+        ""
+      ]
+    : [];
+
+  const releaseTag = customTag?.trim() || trace.release_tag || `release-v${new Date().toISOString().slice(0, 10).replace(/-/g, ".")}-${Date.now().toString().slice(-6)}`;
+  const [owner, repo] = repoFullName.split("/");
+
+  try {
+    const pr = await createReleasePullRequest({
+      owner,
+      repo,
+      head: "develop",
+      base: "main",
+      releaseTag,
+      body: [
+        "## ShipBrain production release",
+        "",
+        `**Release tag:** \`${releaseTag}\``,
+        "",
+        ...featuresSection,
+        "---",
+        "",
+        `Trace: \`${trace.id}\``,
+        "",
+        "This PR promotes the validated develop branch into main. Production deploy will be triggered after merge."
+      ].join("\n"),
+      token: userGitHubToken
+    });
+
+    if (trace.spec_id) {
+      await db.from("specs").update({
+        release_tag: releaseTag,
+        release_status: "ready_for_prod",
+        release_pr_number: pr.number,
+        release_pr_url: pr.html_url,
+        release_pr_status: pr.state,
+        updated_at: new Date().toISOString()
+      }).eq("id", trace.spec_id);
+    }
+
+    await associateFeaturesWithRelease(
+      repoFullName,
+      pr.number,
+      pr.html_url,
+      pr.state
+    ).catch((err) => console.error("Failed to associate features with release:", err));
+
+    const nextStatus = "release_pending";
+    await db.from("release_traces").update({
+      status: nextStatus,
+      current_phase: phaseForStatus(nextStatus),
+      release_pr_number: pr.number,
+      release_pr_url: pr.html_url,
+      updated_at: new Date().toISOString()
+    }).eq("id", trace.id);
+
+    await addTraceEvent({
+      traceId: trace.id,
+      eventType: "status_changed",
+      actor: user.user_id,
+      actorType: "user",
+      source: "manual",
+      details: {
+        message: `Release PR #${pr.number} created to promote develop to main.`,
+        prNumber: pr.number,
+        prUrl: pr.html_url,
+        releaseTag
+      }
+    });
+
+    return [
+      `✅ *Release Draft PR Created!*`,
+      `Repository: \`${escapeTelegram(repoFullName)}\``,
+      `PR: [#${pr.number}](${pr.html_url})`,
+      `Release Tag: \`${escapeTelegram(releaseTag)}\``
+    ].join("\n");
+  } catch (error: any) {
+    return `❌ *Failed to create Release PR:* ${escapeTelegram(error.message)}`;
+  }
 }

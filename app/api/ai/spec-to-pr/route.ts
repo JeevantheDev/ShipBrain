@@ -213,16 +213,18 @@ export async function POST(request: Request) {
       token: userGitHubToken
     });
 
+    const isRelease = useExistingSourceBranch;
     await createOrUpdateTrace({
       repoFullName: body.repoFullName ?? "shipbrain-sandbox",
-      type: useExistingSourceBranch ? "release" : "feature",
+      type: isRelease ? "release" : "feature",
       title: plan.prTitle,
       description: rawSpec,
       status: "draft",
       sourceBranch: branch,
       targetBranch: base,
-      draftPrNumber: pr.number,
-      draftPrUrl: pr.html_url,
+      ...(isRelease
+        ? { releasePrNumber: pr.number, releasePrUrl: pr.html_url }
+        : { draftPrNumber: pr.number, draftPrUrl: pr.html_url }),
       source: "manual",
       actor: "ShipBrain",
       eventType: "pr_opened",

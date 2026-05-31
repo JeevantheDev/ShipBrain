@@ -30,7 +30,9 @@ export type ShipBrainToolName =
   | "analyze_incident"
   | "resolve_incident"
   | "acknowledge_incident"
-  | "spec_to_pr";
+  | "spec_to_pr"
+  | "create_release_pr"
+  | "prepare_release_handbook";
 
 export interface ShipBrainTool {
   name: ShipBrainToolName;
@@ -342,6 +344,46 @@ const CREATE_SPEC_TO_PR: ShipBrainTool = {
   riskLevel: "medium"
 };
 
+const CREATE_RELEASE_PR: ShipBrainTool = {
+  name: "create_release_pr",
+  label: "Create Release Draft PR",
+  description:
+    "Creates a release promotion Draft Pull Request from develop to main branch. " +
+    "Use when the user wants to promote develop to main, or create a release draft PR.",
+  parameters: {
+    type: "object",
+    properties: {
+      release_tag: {
+        type: "string",
+        description: "An explicit release tag, e.g. 'release-v2025.05.30'. Auto-generated if not provided."
+      }
+    },
+    required: []
+  },
+  isRead: false,
+  riskLevel: "medium"
+};
+
+const PREPARE_RELEASE_HANDBOOK: ShipBrainTool = {
+  name: "prepare_release_handbook",
+  label: "Prepare Release Handbook",
+  description:
+    "Prepares a detailed release handbook or release notes based on the recent release to production. " +
+    "Helpful for Product Managers.",
+  parameters: {
+    type: "object",
+    properties: {
+      trace_id: {
+        type: "string",
+        description: "The UUID of the release trace to generate the handbook for. Optional."
+      }
+    },
+    required: []
+  },
+  isRead: true,
+  riskLevel: "low"
+};
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const ALL_TOOLS: ShipBrainTool[] = [
@@ -359,7 +401,9 @@ export const ALL_TOOLS: ShipBrainTool[] = [
   ANALYZE_INCIDENT,
   RESOLVE_INCIDENT,
   ACKNOWLEDGE_INCIDENT,
-  CREATE_SPEC_TO_PR
+  CREATE_SPEC_TO_PR,
+  CREATE_RELEASE_PR,
+  PREPARE_RELEASE_HANDBOOK
 ];
 
 export const READ_TOOL_NAMES = new Set<ShipBrainToolName>(

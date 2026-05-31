@@ -67,6 +67,8 @@ export async function setTelegramCommands() {
         { command: "approve", description: "Approve pending release action by id" },
         { command: "plan", description: "Analyze a spec and save an AI plan" },
         { command: "draft_pr", description: "Create Draft PR from spec id or ticket" },
+        { command: "release_pr", description: "Create Draft release PR develop to main" },
+        { command: "handbook", description: "Prepare release handbook for PMs" },
         { command: "deployments", description: "Pending dev/prod deployment queue" },
         { command: "deploy", description: "Deploy the next valid stage by id" },
         { command: "deploy_dev", description: "Deploy a pending develop preview by id" },
