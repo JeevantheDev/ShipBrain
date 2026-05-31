@@ -42,7 +42,42 @@ export async function GET() {
   const octokit = getOctokit();
   const queue: any[] = [];
 
-  for (const rawSpec of specs ?? []) {
+  // Deduplicate specs by pr_number + repo_full_name to prevent showing same PR twice
+  // Keep the most recently updated spec when duplicates exist
+  const seenPrs = new Map<string, typeof specs[0]>();
+  const deduplicatedSpecs: typeof specs = [];
+
+  for (const spec of specs ?? []) {
+    if (!spec.pr_number) {
+      // No PR number, can't be a duplicate
+      deduplicatedSpecs.push(spec);
+      continue;
+    }
+
+    const key = `${spec.repo_full_name}:${spec.pr_number}`;
+    const existing = seenPrs.get(key);
+
+    if (!existing) {
+      seenPrs.set(key, spec);
+      deduplicatedSpecs.push(spec);
+    } else {
+      // Keep the one with more complete data or more recent update
+      const existingScore = (existing.merge_sha ? 1 : 0) + (existing.release_tag ? 1 : 0) + (existing.preview_url ? 1 : 0);
+      const newScore = (spec.merge_sha ? 1 : 0) + (spec.release_tag ? 1 : 0) + (spec.preview_url ? 1 : 0);
+
+      if (newScore > existingScore || (newScore === existingScore && new Date(spec.updated_at) > new Date(existing.updated_at))) {
+        // Replace the existing one with this more complete/recent one
+        const idx = deduplicatedSpecs.findIndex(s => s.id === existing.id);
+        if (idx !== -1) {
+          deduplicatedSpecs[idx] = spec;
+        }
+        seenPrs.set(key, spec);
+      }
+      // Otherwise keep the existing one (do nothing)
+    }
+  }
+
+  for (const rawSpec of deduplicatedSpecs) {
     const spec = { ...rawSpec };
 
     if (spec.pr_number && spec.repo_full_name && ["draft_created", "pending_pr"].includes(spec.status)) {
