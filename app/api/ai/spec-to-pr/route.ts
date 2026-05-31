@@ -175,11 +175,6 @@ export async function POST(request: Request) {
       userGitHubToken = profile?.github_access_token ?? undefined;
     }
 
-    // Fallback: use the OAuth session provider_token for browser requests
-    if (!userGitHubToken && !isInternalCall) {
-      const { data: { session } } = await supabase.auth.getSession();
-      userGitHubToken = session?.provider_token ?? undefined;
-    }
 
     if (!userGitHubToken) {
       return NextResponse.json(

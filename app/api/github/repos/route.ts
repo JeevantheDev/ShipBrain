@@ -18,7 +18,7 @@ export async function GET() {
     .eq("id", user.id)
     .maybeSingle();
 
-  const token = profile?.github_access_token ?? session?.provider_token;
+  const token = profile?.github_access_token;
 
   if (!token) {
     return NextResponse.json({ error: "GitHub is not connected.", requiresGithub: true }, { status: 409 });

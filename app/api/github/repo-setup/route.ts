@@ -33,7 +33,7 @@ async function getContext() {
     .select("github_access_token")
     .eq("id", user.id)
     .maybeSingle();
-  const token = profile?.github_access_token ?? session?.provider_token;
+  const token = profile?.github_access_token ?? null;
   return { supabase, user, token };
 }
 

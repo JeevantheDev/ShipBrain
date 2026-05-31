@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       .select("github_access_token")
       .eq("id", user.id)
       .maybeSingle();
-    token = profile?.github_access_token ?? session?.provider_token ?? null;
+    token = profile?.github_access_token ?? null;
   }
 
   const { owner, repo } = splitRepo(repoFullName);
