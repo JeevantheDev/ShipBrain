@@ -29,15 +29,24 @@ export async function GET() {
   });
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const { supabase, user } = await getUserOr401();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const token = process.env.GITHUB_TOKEN ?? process.env.GITHUB_TEST_TOKEN;
+  const body = await request.json().catch(() => ({}));
+  
+  // Only allow system GITHUB_TOKEN fallback if user is the owner (jeevan@gmail.com)
+  const isOwner = user.email === "jeevan@gmail.com" || user.email?.toLowerCase().startsWith("jeevan");
+  
+  let token = body.token;
+  if (!token && isOwner) {
+    token = process.env.GITHUB_TOKEN || process.env.GITHUB_TEST_TOKEN;
+  }
+
   if (!token) {
     return NextResponse.json(
-      { error: "GitHub token is not configured. Add GITHUB_TOKEN or GITHUB_TEST_TOKEN to .env.local." },
-      { status: 500 }
+      { error: "GitHub Personal Access Token is required to connect your account." },
+      { status: 400 }
     );
   }
 
@@ -66,4 +75,24 @@ export async function POST() {
       { status: 500 }
     );
   }
+}
+
+export async function DELETE() {
+  const { supabase, user } = await getUserOr401();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      github_login: null,
+      github_access_token: null,
+      avatar_url: null
+    })
+    .eq("id", user.id);
+
+  if (error) {
+    return NextResponse.json({ error: "Unable to disconnect GitHub.", detail: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }

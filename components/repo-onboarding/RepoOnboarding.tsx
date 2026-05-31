@@ -4,6 +4,7 @@ import { Check, ChevronDown, Copy, ExternalLink, Github, Lock, RefreshCw, Search
 import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePasswordConfirmation } from "@/components/ui/usePasswordConfirmation";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Repo = {
   id: number;
@@ -42,6 +43,7 @@ export function RepoOnboarding() {
   const [loading, setLoading] = useState(true);
   const [githubConnected, setGithubConnected] = useState(false);
   const [githubLogin, setGithubLogin] = useState("");
+  const [userEmail, setUserEmail] = useState("");
   const [error, setError] = useState("");
   const [scan, setScan] = useState<RepoScan | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
@@ -102,6 +104,16 @@ export function RepoOnboarding() {
   }, [modalOpen, setupDone, githubConnected]);
 
   async function bootstrap() {
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.email) {
+        setUserEmail(user.email);
+      }
+    } catch (e) {
+      console.error("Failed to fetch user email during bootstrap:", e);
+    }
+
     const connected = await loadConnection();
     if (connected) {
       await loadRepos();
@@ -129,14 +141,37 @@ export function RepoOnboarding() {
     setError("");
     setLoading(true);
     try {
-      const response = await fetch("/api/github/connection", { method: "POST" });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to connect GitHub");
-      setGithubConnected(true);
-      setGithubLogin(json.githubLogin ?? "");
-      await loadRepos();
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.linkIdentity({
+        provider: "github",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(window.location.pathname)}`,
+          scopes: "repo read:user user:email"
+        }
+      });
+      if (error) throw error;
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Unable to connect GitHub");
+      setError(nextError instanceof Error ? nextError.message : "Unable to initiate GitHub connection");
+      setLoading(false);
+    }
+  }
+
+  async function disconnectGithub() {
+    if (!confirm("Disconnect from GitHub? This will clear your GitHub credentials in ShipBrain.")) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/github/connection", { method: "DELETE" });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error ?? "Unable to disconnect GitHub");
+      setGithubConnected(false);
+      setGithubLogin("");
+      setRepos([]);
+      setSelectedRepos([]);
+      setSelectedRepo("");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to disconnect GitHub");
+    } finally {
       setLoading(false);
     }
   }
@@ -544,6 +579,11 @@ export function RepoOnboarding() {
                 <div className="card">
                   <strong>Step 1: GitHub integration</strong>
                   <p>Connect GitHub so ShipBrain can list repos, write GitHub Actions secrets, and open the setup PR.</p>
+                  
+                  <p style={{ fontSize: "11.5px", color: "var(--text-muted)", margin: "12px 0 16px", textAlign: "left", lineHeight: "1.4" }}>
+                    You will be redirected to the GitHub authorization page to connect your account.
+                  </p>
+
                   <button className="button primary" onClick={connectGithub}>
                     <Github size={16} />
                     {loading ? "Connecting..." : "Connect GitHub"}
@@ -583,7 +623,29 @@ export function RepoOnboarding() {
 
                 <div className="repo-connect-group">
                   <div className="eyebrow">Repository</div>
-                  <label className="field-label">{connectedRepos.length ? "Connect another repository" : "Search your repositories"}</label>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <label className="field-label" style={{ margin: 0 }}>
+                      {connectedRepos.length ? "Connect another repository" : "Search your repositories"}
+                    </label>
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                      Connected as <strong>{githubLogin || "GitHub User"}</strong>{" "}
+                      <button 
+                        type="button" 
+                        onClick={disconnectGithub} 
+                        style={{ 
+                          background: "none", 
+                          border: "none", 
+                          color: "var(--red)", 
+                          cursor: "pointer", 
+                          textDecoration: "underline", 
+                          padding: 0,
+                          marginLeft: 6
+                        }}
+                      >
+                        Disconnect
+                      </button>
+                    </span>
+                  </div>
                   <div className="repo-combobox">
                     <Search size={16} />
                     <input ref={repoSearchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your repositories..." />
