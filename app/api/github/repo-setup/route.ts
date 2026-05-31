@@ -211,38 +211,32 @@ async function runSetup({
   });
   await emit?.({ type: "step", label: "Preparing workflow files", status: "done", files: Object.keys(files) });
 
-  // Flow: Commit workflows to develop branch first, then open PR to main
-  // This ensures both branches start with the same workflow files after PR merge
-  let workflowsCommittedToDevelop = false;
+  // Flow: Always create a fresh setup branch with workflow files, then open PR to main
+  // This ensures the PR can always be created even if workflows already exist on branches
   let pr: Awaited<ReturnType<typeof openSetupPullRequest>> | null = null;
 
   if (Object.keys(files).length) {
-    // Step 1: Commit workflows to develop branch first (if develop branch exists)
-    const targetBranch = devBranch || prodBranch;
-    await emit?.({ type: "step", label: `Adding workflows to ${targetBranch}`, status: "running" });
+    // Step 1: Create setup PR with workflow files (always creates a fresh branch)
+    await emit?.({ type: "step", label: `Opening setup PR → ${prodBranch}`, status: "running" });
     try {
-      await commitWorkflowsToDefaultBranch({ repoFullName, base: targetBranch, files, token });
-      workflowsCommittedToDevelop = true;
-      await emit?.({ type: "step", label: `Adding workflows to ${targetBranch}`, status: "done" });
+      // Don't pass head - this creates a fresh shipbrain/setup-xxx branch with the files
+      pr = await openSetupPullRequest({ repoFullName, base: prodBranch, files, token });
+      await emit?.({ type: "step", label: `Opening setup PR → ${prodBranch}`, status: "done", prUrl: pr.html_url });
     } catch (err: any) {
-      await emit?.({ type: "step", label: `Adding workflows to ${targetBranch}`, status: "error", detail: err.message });
-      console.warn(`Could not commit workflow files to ${targetBranch}:`, err.message);
+      await emit?.({ type: "step", label: `Opening setup PR → ${prodBranch}`, status: "error", detail: err.message });
+      console.warn(`Could not open setup PR:`, err.message);
     }
 
-    // Step 2: Open PR from develop → main (if develop branch exists and is different from prod)
-    // This ensures main branch gets the same workflow files when PR is merged
-    if (devBranch && devBranch !== prodBranch && workflowsCommittedToDevelop) {
-      await emit?.({ type: "step", label: `Opening PR: ${devBranch} → ${prodBranch}`, status: "running" });
+    // Step 2: Also commit workflows to develop branch if it exists (so both branches have them)
+    if (devBranch && devBranch !== prodBranch) {
+      await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "running" });
       try {
-        pr = await openSetupPullRequest({ repoFullName, base: prodBranch, head: devBranch, files, token });
-        await emit?.({ type: "step", label: `Opening PR: ${devBranch} → ${prodBranch}`, status: "done", prUrl: pr.html_url });
+        await commitWorkflowsToDefaultBranch({ repoFullName, base: devBranch, files, token });
+        await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "done" });
       } catch (err: any) {
-        await emit?.({ type: "step", label: `Opening PR: ${devBranch} → ${prodBranch}`, status: "error", detail: err.message });
-        console.warn(`Could not open setup PR:`, err.message);
+        await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "error", detail: err.message });
+        console.warn(`Could not commit workflow files to ${devBranch}:`, err.message);
       }
-    } else if (!devBranch || devBranch === prodBranch) {
-      // If no develop branch, workflows are committed directly to prod
-      await emit?.({ type: "step", label: "Workflows added to main branch", status: "done" });
     }
   } else {
     await emit?.({ type: "step", label: "Workflow files already configured", status: "done" });
