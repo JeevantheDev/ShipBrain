@@ -5100,6 +5100,12 @@ p {
   cursor: pointer;
 }
 
+.chat-composer textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: var(--panel-3);
+}
+
 .chat-composer button:disabled,
 .chat-suggestion-btn:disabled,
 .chat-suggestions button:disabled {

@@ -224,11 +224,19 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
   /** Tracks the message ID currently being streamed so we can normalise its markdown */
   const streamingMessageIdRef = useRef<string | null>(null);
 
-  const canSend = input.trim().length > 0 && !loading;
-  const placeholder = useMemo(
-    () => loading ? "ShipBrain AI is processing..." : "Ask about PRs, deployments, or request an action...",
-    [loading]
-  );
+  // Disable input when action requires UI interaction (buttons/options)
+  const actionRequiresUiInput = pendingAction?.status === "pending_confirmation" ||
+                                 pendingAction?.status === "needs_input" ||
+                                 pendingAction?.status === "executing";
+  const inputDisabled = loading || actionRequiresUiInput;
+  const canSend = input.trim().length > 0 && !inputDisabled;
+  const placeholder = useMemo(() => {
+    if (loading) return "ShipBrain AI is processing...";
+    if (pendingAction?.status === "executing") return "Action executing... Please wait.";
+    if (pendingAction?.status === "pending_confirmation") return "Use the buttons above to confirm or cancel the action.";
+    if (pendingAction?.status === "needs_input") return "Select an option above to continue.";
+    return "Ask about PRs, deployments, or request an action...";
+  }, [loading, pendingAction?.status]);
 
   // Auto-collapse suggestions when there are user messages
   const hasUserMessages = messages.some((m) => m.role === "user");
@@ -920,8 +928,10 @@ Please try again or check the console for more details.`;
               onChange={(event) => setInput(event.target.value)}
               placeholder={placeholder}
               rows={2}
+              disabled={inputDisabled}
+              aria-disabled={inputDisabled}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
+                if (event.key === "Enter" && !event.shiftKey && !inputDisabled) {
                   event.preventDefault();
                   void sendMessage();
                 }
