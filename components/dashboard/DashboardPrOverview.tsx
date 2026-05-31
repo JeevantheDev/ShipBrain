@@ -246,7 +246,7 @@ export function DashboardPrOverview() {
             </span>
           </div>
           <div className="metric-row">
-            <span className="metric-version">{latestRelease?.releaseTag ?? "v2026.05.25-beef63cb"}</span>
+            <span className="metric-version">{latestRelease?.releaseTag ?? "NA"}</span>
           </div>
           <div className="metric-foot">
             <span className="metric-aside tag">{runs[0]?.repo.split("/")[1] ?? "main"}</span>
