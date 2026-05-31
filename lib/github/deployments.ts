@@ -131,6 +131,46 @@ export async function dispatchDevelopPreviewDeploy(input: DispatchDevelopPreview
       const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
       const message = typeof error === "object" && error && "message" in error ? (error as { message?: string }).message : "";
 
+      // If the target branch ref does not exist on GitHub, try to create it from the default branch
+      if ((status === 404 || status === 422) && ref !== defaultBranch) {
+        try {
+          // Check if the branch exists
+          await octokit.git.getRef({ owner: input.owner, repo: input.repo, ref: `heads/${ref}` });
+        } catch (refError: any) {
+          if (refError.status === 404) {
+            console.log(`Branch ${ref} does not exist on GitHub. Attempting to create it from ${defaultBranch}...`);
+            try {
+              const { data: defaultRef } = await octokit.git.getRef({
+                owner: input.owner,
+                repo: input.repo,
+                ref: `heads/${defaultBranch}`
+              });
+              await octokit.git.createRef({
+                owner: input.owner,
+                repo: input.repo,
+                ref: `refs/heads/${ref}`,
+                sha: defaultRef.object.sha
+              });
+              console.log(`Successfully created missing branch ${ref} from ${defaultBranch}`);
+
+              // Retry dispatch on the newly created branch
+              await octokit.actions.createWorkflowDispatch({
+                owner: input.owner,
+                repo: input.repo,
+                workflow_id: workflowId,
+                ref: ref,
+                inputs
+              });
+              usedWorkflowId = workflowId;
+              actualDispatchRef = ref;
+              break; // Success! Break out of candidates loop
+            } catch (createOrDispatchError) {
+              console.error(`Failed to create missing branch ${ref} or retry dispatch:`, createOrDispatchError);
+            }
+          }
+        }
+      }
+
       // If dispatch on target ref fails (e.g. branch or workflow not found on that branch),
       // try falling back to the default branch (unless noFallback is set).
       if ((status === 404 || status === 422) && !input.noFallback) {
