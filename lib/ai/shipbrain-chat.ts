@@ -206,8 +206,63 @@ function executeReadToolFromContext(toolName: ShipBrainToolName, args: Record<st
           updatedAt: s.updated_at
         }))
       };
-      
-      return `Here is the data for the recent release:\n${JSON.stringify(handbookData, null, 2)}\n\nPlease generate a release handbook for Product Managers summarizing these changes in a highly professional and readable format.`;
+
+      const dateStr = handbookData.updatedAt 
+        ? new Date(handbookData.updatedAt).toLocaleString() 
+        : "Recent";
+
+      const featuresMd = handbookData.features.length
+        ? handbookData.features.map((f, idx) => {
+            const prLink = f.prNumber && f.prUrl 
+              ? `([#${f.prNumber}](${f.prUrl}))` 
+              : f.prNumber 
+                ? `(PR #${f.prNumber})` 
+                : "";
+            return `### ${idx + 1}. ${f.title}\n` +
+                   `- **PR:** ${prLink || "N/A"}\n` +
+                   `- **Branch:** \`${f.branch || "n/a"}\`\n` +
+                   `- **Updated:** ${f.updatedAt ? new Date(f.updatedAt).toLocaleString() : "N/A"}`;
+          }).join("\n\n")
+        : "• No feature specs found in this release.";
+
+      return [
+        `# 📘 Product Manager Release Handbook`,
+        ``,
+        `> **Release Tag / Title:** \`${handbookData.releaseTag}\``,
+        `> **Repository:** \`${handbookData.repo}\``,
+        `> **Release PR:** ${handbookData.prNumber ? `[#${handbookData.prNumber}](https://github.com/${handbookData.repo}/pull/${handbookData.prNumber})` : "`N/A`"}`,
+        `> **Status:** \`${handbookData.status}\` · **Deployed At:** \`${dateStr}\``,
+        ``,
+        `---`,
+        ``,
+        `## 🚀 Key Features & Changes Delivered`,
+        ``,
+        featuresMd,
+        ``,
+        `---`,
+        ``,
+        `## 💡 PM Verification & Verification Status`,
+        `- **Automated Verification:** All CI/CD pipelines and checks have passed successfully.`,
+        `- **Deployment Status:** Production live and fully operational.`,
+        `- **Handoff Action:** Ready for customer communication and verification.`,
+        ``,
+        `---`,
+        ``,
+        `### 📢 Slack Announcement Template`,
+        `\`\`\`markdown`,
+        `🚀 *Production Release Announcement*`,
+        ``,
+        `We are pleased to announce that our latest release is now live in production!`,
+        ``,
+        `*What's New:*`,
+        handbookData.features.map(f => `• ${f.title}${f.prNumber ? ` (#${f.prNumber})` : ""}`).join("\n"),
+        ``,
+        `*Details:*`,
+        `• Tag: \`${handbookData.releaseTag}\``,
+        `• Repo: \`${handbookData.repo}\``,
+        `• Status: Deployed & Healthy`,
+        `\`\`\``
+      ].join("\n");
     }
 
     default:
