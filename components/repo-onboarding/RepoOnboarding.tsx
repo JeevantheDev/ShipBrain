@@ -345,7 +345,8 @@ export function RepoOnboarding() {
           reauthPassword,
           productionBranch: customProdBranch.trim(),
           developmentBranch: customDevBranch.trim(),
-          envVars: envVars.filter(e => e.key.trim()).reduce((acc, e) => ({ ...acc, [e.key.trim()]: e.value }), {} as Record<string, string>)
+          envVars: envVars.filter(e => e.key.trim()).reduce((acc, e) => ({ ...acc, [e.key.trim()]: e.value }), {} as Record<string, string>),
+          forceOverwrite: true // Always regenerate workflow files during onboarding
         })
       });
       if (!response.ok || !response.body) {
