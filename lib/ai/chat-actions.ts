@@ -367,44 +367,6 @@ export async function executeAction(
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || data.detail || "Failed to create PR");
 
-        // Save to specs table for Recent AI PRs (server-to-server call doesn't pass auth cookies)
-        if (data.pr && userId && repoFullName) {
-          const { error: specError } = await supabase
-            .from("specs")
-            .insert({
-              user_id: userId,
-              raw_spec: rawSpec,
-              decomposed_tasks: data,
-              scaffold_code: data.scaffold ?? {},
-              status: "draft_created",
-              repo_full_name: repoFullName,
-              branch_name: data.pr.head?.ref ?? data.suggestedBranch,
-              base_branch: baseBranch || "develop",
-              pr_number: data.pr.number,
-              pr_url: data.pr.html_url,
-              updated_at: new Date().toISOString()
-            });
-
-          if (specError) {
-            console.error("spec save failed in executeAction:", specError.message);
-          }
-
-          // Create notification
-          const { error: notifError } = await supabase
-            .from("notifications")
-            .insert({
-              user_id: userId,
-              type: "pr_created",
-              title: "Draft PR Created",
-              body: `Created draft PR #${data.pr.number}: ${data.prTitle}`,
-              href: data.pr.html_url,
-              severity: "info",
-              repo_full_name: repoFullName,
-              metadata: { prNumber: data.pr.number, branch: data.pr.head?.ref }
-            });
-          if (notifError) console.error("notification creation failed:", notifError);
-        }
-
         return { success: true, result: data };
       }
 
