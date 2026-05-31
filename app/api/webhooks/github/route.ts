@@ -352,8 +352,8 @@ export async function POST(request: Request) {
 
       // Skip standard update for release promotion PRs (already handled above)
       if (prUpdate) {
-        // First try to update existing spec
-        const { data, error } = await supabase
+        // First try to update existing spec by pr_number
+        let { data, error } = await supabase
           .from("specs")
           .update(prUpdate)
           .eq("repo_full_name", repoFullName)
@@ -363,6 +363,22 @@ export async function POST(request: Request) {
         if (error) {
           return NextResponse.json({ error: "Unable to sync pull request webhook.", detail: error.message }, { status: 500 });
         }
+
+        // If no spec matched by pr_number, try to match by branch_name where pr_number is null OR is a mock number (like 42)
+        if ((!data || data.length === 0) && pullRequest.head?.ref) {
+          const { data: branchData, error: branchError } = await supabase
+            .from("specs")
+            .update(prUpdate)
+            .eq("repo_full_name", repoFullName)
+            .eq("branch_name", pullRequest.head.ref)
+            .or("pr_number.is.null,pr_number.eq.42")
+            .select("id");
+
+          if (!branchError && branchData && branchData.length > 0) {
+            data = branchData;
+          }
+        }
+
         updated = data?.length ?? 0;
         syncedSpecId = data?.[0]?.id ?? null;
 
@@ -379,9 +395,16 @@ export async function POST(request: Request) {
 
           if (existingSpec) {
             // Spec already exists, just update it instead of creating a duplicate
-            updated = 1;
-            syncedSpecId = existingSpec.id;
-            console.log(`Spec ${existingSpec.id} already exists for PR #${pullRequest.number}, skipping creation`);
+            const { error: updateExistingError } = await supabase
+              .from("specs")
+              .update(prUpdate)
+              .eq("id", existingSpec.id);
+
+            if (!updateExistingError) {
+              updated = 1;
+              syncedSpecId = existingSpec.id;
+              console.log(`Spec ${existingSpec.id} already exists for PR #${pullRequest.number}, updated status to ${nextStatus}`);
+            }
           } else {
             // Find the user who owns this repo
             const { data: repoOwner } = await supabase
