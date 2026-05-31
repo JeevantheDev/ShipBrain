@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getOctokit } from "@/lib/github/client";
+import { Octokit } from "@octokit/rest";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -30,7 +30,9 @@ export async function GET() {
     .eq("user_id", user.id);
   const connected = new Set((connectedRepos ?? []).map((repo) => repo.full_name));
 
-  const octokit = getOctokit(token);
+  // IMPORTANT: Use the user's token directly, do not fall back to env var
+  // This ensures users see their own repos, not the system owner's repos
+  const octokit = new Octokit({ auth: token });
   const { data } = await octokit.repos.listForAuthenticatedUser({ sort: "updated", per_page: 100 });
 
   return NextResponse.json(
