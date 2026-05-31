@@ -3,18 +3,16 @@
 =================================================================== */
 
 .landing-page-wrapper {
-  background: #161b22;
-  background-image:
-    linear-gradient(var(--border-muted, #21262d) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border-muted, #21262d) 1px, transparent 1px);
-  background-size: 80px 80px;
-  background-position: center top;
+  background: var(--bg, #0d1117);
   color: #e6edf3;
   font-family: "Geist", -apple-system, sans-serif;
   font-size: 17px;
   line-height: 1.6;
   min-height: 100vh;
   width: 100%;
+  position: relative;
+  overflow-x: hidden;
+  z-index: 1;
 
   /* Color tokens scoped to landing page */
   --bg: #0d1117;
@@ -31,6 +29,22 @@
   --warning: #d29922;
   --danger: #f85149;
   --ai-purple: #a371f7;
+}
+
+.landing-page-wrapper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border-muted, #21262d) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-muted, #21262d) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-position: center top;
+  mask-image: radial-gradient(circle at top, rgba(0, 0, 0, 0.7) 10%, transparent 75%);
+  -webkit-mask-image: radial-gradient(circle at top, rgba(0, 0, 0, 0.7) 10%, transparent 75%);
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.8;
 }
 
 body.landing-active {
