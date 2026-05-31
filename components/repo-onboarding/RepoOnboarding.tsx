@@ -142,6 +142,18 @@ export function RepoOnboarding() {
     setLoading(true);
     try {
       const supabase = getSupabaseBrowserClient();
+      
+      // Auto-unlink any stale GitHub identity if it is already in Supabase Auth
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        const githubIdentity = user?.identities?.find((id) => id.provider === "github");
+        if (githubIdentity) {
+          await supabase.auth.unlinkIdentity(githubIdentity);
+        }
+      } catch (e) {
+        console.warn("Could not check/unlink stale GitHub identity during connect:", e);
+      }
+
       const { error } = await supabase.auth.linkIdentity({
         provider: "github",
         options: {
@@ -161,6 +173,19 @@ export function RepoOnboarding() {
     setLoading(true);
     setError("");
     try {
+      const supabase = getSupabaseBrowserClient();
+      
+      // Unlink the GitHub identity from Supabase Auth if it exists
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        const githubIdentity = user?.identities?.find((id) => id.provider === "github");
+        if (githubIdentity) {
+          await supabase.auth.unlinkIdentity(githubIdentity);
+        }
+      } catch (e) {
+        console.error("Failed to unlink GitHub identity from Supabase Auth:", e);
+      }
+
       const response = await fetch("/api/github/connection", { method: "DELETE" });
       const json = await response.json();
       if (!response.ok) throw new Error(json.error ?? "Unable to disconnect GitHub");
