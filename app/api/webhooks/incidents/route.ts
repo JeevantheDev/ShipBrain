@@ -245,14 +245,14 @@ export async function POST(request: Request) {
     }
   }
 
-  // If not found by external_id, check by dedupe_key (only non-resolved)
+  // If not found by external_id, check by dedupe_key (only active incidents - not resolved or rejected)
   if (!existingIncident) {
     const { data: byDedupeKey } = await supabase
       .from("incidents")
       .select("id, status, payload")
       .eq("user_id", repoConnection.user_id)
       .eq("dedupe_key", dedupeKey)
-      .not("status", "eq", "resolved")
+      .not("status", "in", "(resolved,rejected)")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -263,11 +263,13 @@ export async function POST(request: Request) {
   }
 
   if (existingIncident?.id) {
+    // Reopen if the incident was resolved or rejected (terminal states)
+    const isTerminalState = existingIncident.status === "resolved" || existingIncident.status === "rejected";
     const { data, error } = await supabase
       .from("incidents")
       .update({
-        alert_source: existingIncident.status === "resolved" ? body.source ?? "pagerduty-sandbox" : undefined,
-        status: existingIncident.status === "resolved" ? "open" : existingIncident.status,
+        alert_source: isTerminalState ? body.source ?? "pagerduty-sandbox" : undefined,
+        status: isTerminalState ? "open" : existingIncident.status,
         branch: body.branch ?? null,
         commit_sha: body.commit ?? null,
         release_version: releaseVersion || null,

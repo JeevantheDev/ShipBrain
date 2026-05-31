@@ -50,6 +50,31 @@ export async function POST(request: Request, { params }: { params: { id: string 
       .maybeSingle();
     if (!spec) return NextResponse.json({ error: "Linked spec not found." }, { status: 404 });
 
+    // Fetch all merged feature specs that will be included in this release
+    const { data: mergedSpecs } = await supabase
+      .from("specs")
+      .select("id, title, pr_number, pr_url, branch_name")
+      .eq("repo_full_name", trace.repo_full_name)
+      .eq("user_id", user.id)
+      .eq("status", "merged")
+      .eq("base_branch", "develop")
+      .is("release_pr_number", null)
+      .order("merged_at", { ascending: false });
+
+    // Format the list of merged features for the PR body
+    const featuresSection = mergedSpecs?.length
+      ? [
+          "### Features included in this release",
+          "",
+          ...mergedSpecs.map((s) =>
+            s.pr_number
+              ? `- ${s.title} ([#${s.pr_number}](${s.pr_url}))`
+              : `- ${s.title}`
+          ),
+          ""
+        ]
+      : [];
+
     const releaseTag = spec.release_tag || generateReleaseTag();
     const { owner, repo } = splitRepo(trace.repo_full_name);
     const pr = await createReleasePullRequest({
@@ -61,10 +86,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
       body: [
         "## ShipBrain production release",
         "",
-        `Trace: ${trace.id}`,
-        `Source spec: ${trace.spec_id}`,
+        `**Release tag:** \`${releaseTag}\``,
         "",
-        "This PR promotes the validated develop branch into main. Production deploy still requires the release gate."
+        ...featuresSection,
+        "---",
+        "",
+        `Trace: \`${trace.id}\``,
+        "",
+        "This PR promotes the validated develop branch into main. Production deploy will be triggered after merge."
       ].join("\n")
     });
 
