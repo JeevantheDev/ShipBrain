@@ -1075,7 +1075,7 @@ export default function SpecToPrPage() {
             <RichTextEditor
               value={spec}
               onChange={setSpec}
-              placeholder="Paste a Jira ticket, GitHub issue, or plain English spec…"
+              placeholder="Paste a GitHub issue, or plain English spec…"
             />
           </div>
 

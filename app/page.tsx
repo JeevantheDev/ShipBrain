@@ -70,7 +70,7 @@ export default async function LandingPage() {
             with humans still in charge.
           </h1>
           <p className="hero-sub">
-            ShipBrain turns a Jira ticket into a reviewed pull request, explains your red CI in plain English, and drafts the post-mortem before the incident is closed — but never <em>acts</em> without you pressing confirm.
+            ShipBrain turns an engineering task into a reviewed pull request, explains failing CI clearly, and drafts the post-mortem before the incident is closed — but never acts without you pressing confirm.
           </p>
           <div className="cta-row">
             <Link href="/login" className="btn-cta">Get Started →</Link>
@@ -130,7 +130,7 @@ export default async function LandingPage() {
             <article className="move-card">
               <span className="mono-label">move · 01</span>
               <h3 className="move-card-title">Spec <em>→</em> PR</h3>
-              <p className="body">Paste a Jira ticket or a paragraph of English. ShipBrain decomposes it into tasks, scaffolds the files, and prepares a draft PR. You review the plan, hit confirm, and the PR opens on GitHub.</p>
+              <p className="body">Paste a task or a plain-language spec. ShipBrain breaks it into actionable tasks, scaffolds the files, and prepares a draft PR. You review the plan, hit confirm, and the PR opens on GitHub.</p>
               <div className="move-card-foot">gated before opening · default to draft</div>
             </article>
 
@@ -231,7 +231,7 @@ export default async function LandingPage() {
 
           <div className="narrow">
             <p className="body-p">
-              Watch ShipBrain take a real Jira ticket, open a PR, fail CI, explain the failure, suggest a fix, pass CI, deploy, page itself with a fake incident, find the root cause, and draft the post-mortem.
+              Watch ShipBrain take a real engineering task, open a PR, hit a CI failure, explain the issue, suggest a fix, pass CI, deploy, trigger a simulated incident, identify the root cause, and draft the post-mortem.
             </p>
             <p className="body-p">
               Every gate is real. Every confirm is a real click. Nothing is mocked.
