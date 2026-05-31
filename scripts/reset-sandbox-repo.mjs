@@ -109,8 +109,8 @@ async function main() {
   exec("git checkout main", { cwd });
   exec("git pull origin main", { cwd });
 
+  // Only remove generated content files, NOT the workflow files (those are needed for ShipBrain to work)
   const filesToRemove = [
-    ".github/workflows/shipbrain-*.yml",
     "SHIPBRAIN_HANDOFF.md",
     "SHIPBRAIN_INCIDENT_HOTFIX.md",
     "shipbrain/",
