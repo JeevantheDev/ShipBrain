@@ -159,7 +159,7 @@ export function RepoOnboarding() {
         provider: "github",
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          scopes: "repo read:org write:repo_hook",
+          scopes: "repo read:org write:repo_hook workflow",
           queryParams: {
             prompt: "consent"
           }
