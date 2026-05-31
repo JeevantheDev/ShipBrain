@@ -19,51 +19,105 @@ async function getIncidentReleaseContext(incident: any, db: any, user: any) {
   const releaseVersion = String(incident?.releaseVersion ?? "").trim();
   if (!repoFullName || !user) return null;
 
-  let query = db
-    .from("specs")
-    .select("id, raw_spec, pr_number, pr_url, status, repo_full_name, branch_name, base_branch, release_tag, release_status, release_sha, merge_sha, release_pr_number, release_pr_url, release_pr_status, updated_at")
-    .eq("user_id", user.id)
-    .eq("repo_full_name", repoFullName)
-    .order("updated_at", { ascending: false })
-    .limit(1);
+  // Strategy: Find the deployed spec that matches the release tag, or the most recent deployed release
+  let spec = null;
 
+  // 1. Try to find by exact release tag match
   if (releaseVersion) {
-    query = query.eq("release_tag", releaseVersion);
-  }
-
-  let { data: spec } = await query.maybeSingle();
-  if (!spec && releaseVersion) {
-    const fallback = await db
+    const { data } = await db
       .from("specs")
-      .select("id, raw_spec, pr_number, pr_url, status, repo_full_name, branch_name, base_branch, release_tag, release_status, release_sha, merge_sha, release_pr_number, release_pr_url, release_pr_status, updated_at")
+      .select("id, raw_spec, title, pr_number, pr_url, status, repo_full_name, branch_name, base_branch, release_tag, release_status, release_sha, merge_sha, release_pr_number, release_pr_url, release_pr_status, deployed_at, updated_at")
       .eq("user_id", user.id)
       .eq("repo_full_name", repoFullName)
+      .eq("release_tag", releaseVersion)
+      .maybeSingle();
+    spec = data;
+  }
+
+  // 2. Fallback: Get the most recent deployed release for this repo
+  if (!spec) {
+    const { data } = await db
+      .from("specs")
+      .select("id, raw_spec, title, pr_number, pr_url, status, repo_full_name, branch_name, base_branch, release_tag, release_status, release_sha, merge_sha, release_pr_number, release_pr_url, release_pr_status, deployed_at, updated_at")
+      .eq("user_id", user.id)
+      .eq("repo_full_name", repoFullName)
+      .eq("release_status", "deployed")
+      .order("deployed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    spec = data;
+  }
+
+  // 3. Fallback: Get any spec with a release tag for this repo
+  if (!spec) {
+    const { data } = await db
+      .from("specs")
+      .select("id, raw_spec, title, pr_number, pr_url, status, repo_full_name, branch_name, base_branch, release_tag, release_status, release_sha, merge_sha, release_pr_number, release_pr_url, release_pr_status, deployed_at, updated_at")
+      .eq("user_id", user.id)
+      .eq("repo_full_name", repoFullName)
+      .not("release_tag", "is", null)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    spec = fallback.data;
+    spec = data;
   }
 
   if (!spec) return null;
 
   const repoParts = splitRepo(repoFullName);
-  const [featureCommits, releaseCommits] = repoParts
-    ? await Promise.all([
-        listPullRequestCommits({ ...repoParts, pullNumber: spec.pr_number }).catch((err) => {
-          console.error("Error fetching feature PR commits:", err);
-          return [];
-        }),
-        listPullRequestCommits({ ...repoParts, pullNumber: spec.release_pr_number }).catch((err) => {
-          console.error("Error fetching release PR commits:", err);
-          return [];
-        })
-      ])
-    : [[], []];
+
+  // Fetch commits from PR(s) if available
+  let featureCommits: any[] = [];
+  let releaseCommits: any[] = [];
+
+  if (repoParts) {
+    // Fetch feature PR commits
+    if (spec.pr_number) {
+      featureCommits = await listPullRequestCommits({ ...repoParts, pullNumber: spec.pr_number }).catch((err) => {
+        console.error("Error fetching feature PR commits:", err);
+        return [];
+      });
+    }
+
+    // Fetch release PR commits
+    if (spec.release_pr_number) {
+      releaseCommits = await listPullRequestCommits({ ...repoParts, pullNumber: spec.release_pr_number }).catch((err) => {
+        console.error("Error fetching release PR commits:", err);
+        return [];
+      });
+    }
+
+    // Also fetch all feature specs included in this release (by release_pr_number)
+    if (spec.release_pr_number) {
+      const { data: includedSpecs } = await db
+        .from("specs")
+        .select("id, title, pr_number, pr_url, branch_name")
+        .eq("user_id", user.id)
+        .eq("repo_full_name", repoFullName)
+        .eq("release_pr_number", spec.release_pr_number)
+        .neq("id", spec.id);
+
+      // Fetch commits from all included feature PRs
+      if (includedSpecs?.length) {
+        for (const includedSpec of includedSpecs) {
+          if (includedSpec.pr_number) {
+            const commits = await listPullRequestCommits({ ...repoParts, pullNumber: includedSpec.pr_number }).catch(() => []);
+            featureCommits.push(...commits.map((c: any) => ({
+              ...c,
+              fromPr: includedSpec.pr_number,
+              featureTitle: includedSpec.title
+            })));
+          }
+        }
+      }
+    }
+  }
 
   return {
     specId: spec.id,
     repo: spec.repo_full_name,
     requestedSpec: spec.raw_spec,
+    featureTitle: spec.title,
     featureBranch: spec.branch_name,
     baseBranch: spec.base_branch,
     draftPr: spec.pr_number ? { number: spec.pr_number, url: spec.pr_url, status: spec.status } : null,
@@ -74,11 +128,13 @@ async function getIncidentReleaseContext(incident: any, db: any, user: any) {
       mergeSha: spec.merge_sha,
       releasePrNumber: spec.release_pr_number,
       releasePrUrl: spec.release_pr_url,
-      releasePrStatus: spec.release_pr_status
+      releasePrStatus: spec.release_pr_status,
+      deployedAt: spec.deployed_at
     },
     commits: {
       featurePr: featureCommits,
-      releasePr: releaseCommits
+      releasePr: releaseCommits,
+      totalCommits: featureCommits.length + releaseCommits.length
     }
   };
 }
