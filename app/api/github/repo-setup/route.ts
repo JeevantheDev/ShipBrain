@@ -218,14 +218,9 @@ async function runSetup({
   if (Object.keys(files).length) {
     // Step 1: Create setup PR with workflow files (always creates a fresh branch)
     await emit?.({ type: "step", label: `Opening setup PR → ${prodBranch}`, status: "running" });
-    try {
-      // Don't pass head - this creates a fresh shipbrain/setup-xxx branch with the files
-      pr = await openSetupPullRequest({ repoFullName, base: prodBranch, files, token });
-      await emit?.({ type: "step", label: `Opening setup PR → ${prodBranch}`, status: "done", prUrl: pr.html_url });
-    } catch (err: any) {
-      await emit?.({ type: "step", label: `Opening setup PR → ${prodBranch}`, status: "error", detail: err.message });
-      console.warn(`Could not open setup PR:`, err.message);
-    }
+    // Don't pass head - this creates a fresh shipbrain/setup-xxx branch with the files
+    pr = await openSetupPullRequest({ repoFullName, base: prodBranch, files, token });
+    await emit?.({ type: "step", label: `Opening setup PR → ${prodBranch}`, status: "done", prUrl: pr.html_url });
 
     // Step 2: Also commit workflows to develop branch if it exists (so both branches have them)
     if (devBranch && devBranch !== prodBranch) {
@@ -234,12 +229,14 @@ async function runSetup({
         await commitWorkflowsToDefaultBranch({ repoFullName, base: devBranch, files, token });
         await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "done" });
       } catch (err: any) {
+        // Non-fatal: develop commit can fail but PR to main is what matters
         await emit?.({ type: "step", label: `Adding workflows to ${devBranch}`, status: "error", detail: err.message });
         console.warn(`Could not commit workflow files to ${devBranch}:`, err.message);
       }
     }
   } else {
-    await emit?.({ type: "step", label: "Workflow files already configured", status: "done" });
+    // This should not happen with forceOverwrite: true, but handle it as an error
+    throw new Error("No workflow files were generated. Please try again or contact support.");
   }
 
   // Save repo record to database
