@@ -207,7 +207,7 @@ export async function POST(request: Request) {
     });
 
     // Save to specs table for Recent AI PRs
-    const repoFullName = body.repoFullName ?? `${owner}/${repo}`;
+    // Note: repoFullName is already defined above with same value
     if (user) {
       const specData = {
         user_id: user.id,
