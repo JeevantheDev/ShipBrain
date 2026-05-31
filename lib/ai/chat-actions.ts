@@ -349,7 +349,10 @@ export async function executeAction(
 
         const response = await fetch(`${baseUrl}/api/ai/spec-to-pr`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-User-Id": userId
+          },
           body: JSON.stringify({
             rawSpec,
             createPr: true,
@@ -357,7 +360,8 @@ export async function executeAction(
             baseBranchOverride: baseBranch || undefined,
             useExistingSourceBranch: Boolean(sourceBranch),
             branchOverride: sourceBranch || undefined,
-            handoffOnly: params.handoffOnly ?? false
+            handoffOnly: params.handoffOnly ?? false,
+            internalUserId: userId
           })
         });
         const data = await response.json();

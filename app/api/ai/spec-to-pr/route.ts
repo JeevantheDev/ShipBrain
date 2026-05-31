@@ -5,6 +5,7 @@ import { decomposeSpec, specPlanSchema, type PrHistoryContext } from "@/lib/ai/c
 import { createDraftPR } from "@/lib/github/pr";
 import { createOrUpdateTrace } from "@/lib/orchestrator";
 import { DEFAULT_SPEC_PR_RECIPES } from "@/lib/spec-recipes";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -52,7 +53,7 @@ function getAiRetryError(error: unknown) {
 }
 
 async function fetchPrHistoryContext(
-  supabase: ReturnType<typeof getSupabaseServerClient>,
+  supabase: ReturnType<typeof getSupabaseServerClient> | ReturnType<typeof getSupabaseAdminClient>,
   userId: string,
   repoFullName: string
 ): Promise<PrHistoryContext> {
@@ -113,11 +114,17 @@ async function fetchPrHistoryContext(
 export async function POST(request: Request) {
   const supabase = getSupabaseServerClient();
   const {
-    data: { user }
+    data: { user: authUser }
   } = await supabase.auth.getUser();
 
   try {
     const body = await request.json();
+
+    // Support internal server-to-server calls (e.g. from chat-actions executeAction)
+    const internalUserId = request.headers.get("X-Internal-User-Id") ?? body.internalUserId ?? null;
+    const user = authUser ?? (internalUserId ? { id: internalUserId, email: null } : null);
+    const isInternalCall = !authUser && !!internalUserId;
+    const db = isInternalCall ? getSupabaseAdminClient() : supabase;
 
     // Support recipeId as alternative to rawSpec
     let rawSpec = body.rawSpec?.trim();
@@ -141,7 +148,7 @@ export async function POST(request: Request) {
     const repoFullName = body.repoFullName ?? "shipbrain-sandbox";
     let historyContext: PrHistoryContext | undefined;
     if (user) {
-      historyContext = await fetchPrHistoryContext(supabase, user.id, repoFullName).catch(() => undefined);
+      historyContext = await fetchPrHistoryContext(db, user.id, repoFullName).catch(() => undefined);
     }
 
     const plan = body.plan ? specPlanSchema.parse(body.plan) : await decomposeSpec(rawSpec, repoFullName, historyContext);
@@ -158,6 +165,33 @@ export async function POST(request: Request) {
       return NextResponse.json(response);
     }
 
+<<<<<<< Updated upstream
+=======
+    // Get user's GitHub token for creating PR
+    let userGitHubToken: string | undefined;
+    if (user) {
+      const { data: profile } = await db
+        .from("profiles")
+        .select("github_access_token")
+        .eq("id", user.id)
+        .maybeSingle();
+      userGitHubToken = profile?.github_access_token ?? undefined;
+    }
+
+    // Fallback: use the OAuth session provider_token for browser requests
+    if (!userGitHubToken && !isInternalCall) {
+      const { data: { session } } = await supabase.auth.getSession();
+      userGitHubToken = session?.provider_token ?? undefined;
+    }
+
+    if (!userGitHubToken) {
+      return NextResponse.json(
+        { error: "GitHub is not connected.", detail: "Please connect your GitHub account in Settings before creating PRs." },
+        { status: 409 }
+      );
+    }
+
+>>>>>>> Stashed changes
     const { owner, repo } = splitRepo(body.repoFullName ?? "shipbrain-sandbox");
     const branch = typeof body.branchOverride === "string" && body.branchOverride.trim()
       ? body.branchOverride.trim()
@@ -227,7 +261,7 @@ export async function POST(request: Request) {
 
       // 1. Try updating by specId if provided
       if (body.specId) {
-        const { data: updateData, error: updateError } = await supabase
+        const { data: updateData, error: updateError } = await db
           .from("specs")
           .update(specData)
           .eq("id", body.specId)
@@ -244,7 +278,7 @@ export async function POST(request: Request) {
 
       // 2. If not updated by specId, try matching by branch name fallback
       if (!updated) {
-        const { data: branchData, error: branchError } = await supabase
+        const { data: branchData, error: branchError } = await db
           .from("specs")
           .update(specData)
           .eq("repo_full_name", repoFullName)
@@ -263,7 +297,7 @@ export async function POST(request: Request) {
 
       // 3. Fallback to insert only if not updated
       if (!updated) {
-        const { error: specError } = await supabase
+        const { error: specError } = await db
           .from("specs")
           .insert(specData);
 
@@ -275,7 +309,7 @@ export async function POST(request: Request) {
       }
 
       // Create notification
-      const { error: notifyError } = await supabase
+      const { error: notifyError } = await db
         .from("notifications")
         .insert({
           user_id: user.id,
