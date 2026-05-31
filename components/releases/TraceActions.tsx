@@ -2,17 +2,22 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { RollbackSelector } from "@/components/releases/RollbackSelector";
 
 type TraceActionsProps = {
   traceId: string;
   pendingType?: string | null;
   status: string;
+  repoFullName?: string;
+  currentReleaseTag?: string;
+  type?: string;
 };
 
-export function TraceActions({ traceId, pendingType, status }: TraceActionsProps) {
+export function TraceActions({ traceId, pendingType, status, repoFullName, currentReleaseTag, type }: TraceActionsProps) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [showRollback, setShowRollback] = useState(false);
 
   async function run(action: string) {
     setBusy(action);
@@ -31,11 +36,10 @@ export function TraceActions({ traceId, pendingType, status }: TraceActionsProps
     router.refresh();
   }
 
-  const canVerifyPreview = pendingType === "verify_preview" || status === "preview_live";
-  const canVerifyProduction = pendingType === "verify_production" || status === "production_live";
-  const canComplete = status === "production_live" || status === "completed";
   const canCreateReleasePr = pendingType === "create_release_pr";
   const canMergeReverseSync = pendingType === "merge_reverse_sync";
+  const canRollback = ["production_live", "merged_main", "failed"].includes(status) && repoFullName && type === "release";
+  const isRollingBack = status === "rolling_back";
 
   return (
     <div className="trace-actions">
@@ -49,27 +53,38 @@ export function TraceActions({ traceId, pendingType, status }: TraceActionsProps
           {busy === "merge_reverse_sync" ? "Merging..." : "Merge reverse sync"}
         </button>
       ) : null}
-      {canVerifyPreview ? (
-        <button className="btn compact primary" disabled={Boolean(busy)} onClick={() => run("verify_preview")}>
-          {busy === "verify_preview" ? "Verifying..." : "Verify preview"}
-        </button>
-      ) : null}
-      {canVerifyProduction ? (
-        <button className="btn compact primary" disabled={Boolean(busy)} onClick={() => run("verify_production")}>
-          {busy === "verify_production" ? "Verifying..." : "Verify production"}
-        </button>
-      ) : null}
-      {canComplete ? (
-        <button className="btn compact subtle" disabled={Boolean(busy)} onClick={() => run("complete")}>
-          {busy === "complete" ? "Completing..." : "Mark complete"}
-        </button>
-      ) : null}
       {!["completed", "cancelled"].includes(status) ? (
         <button className="btn compact ghost" disabled={Boolean(busy)} onClick={() => run("cancel")}>
           Cancel trace
         </button>
       ) : null}
+      {canRollback && !isRollingBack ? (
+        <button
+          className="btn compact warning"
+          disabled={Boolean(busy)}
+          onClick={() => setShowRollback(!showRollback)}
+        >
+          {showRollback ? "Hide rollback" : "Rollback production"}
+        </button>
+      ) : null}
+      {isRollingBack ? (
+        <span className="rollback-in-progress">Rollback in progress...</span>
+      ) : null}
       {error ? <p className="form-error">{error}</p> : null}
+      {showRollback && repoFullName ? (
+        <div className="rollback-section">
+          <RollbackSelector
+            repoFullName={repoFullName}
+            currentTag={currentReleaseTag}
+            traceId={traceId}
+            onRollback={() => {
+              setShowRollback(false);
+              router.refresh();
+            }}
+            disabled={Boolean(busy)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

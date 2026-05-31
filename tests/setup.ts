@@ -1,1 +1,1 @@
-process.env.LLM_PROVIDER ??= "anthropic";
+process.env.LLM_PROVIDER ??= "microsoft_foundry";

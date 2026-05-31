@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { verifyShipBrainApiKey } from "@/lib/shipbrain/api-keys";
+import { flushPendingTelegramNotifications } from "@/lib/telegram/flush";
 
 export const runtime = "nodejs";
 
@@ -244,14 +245,14 @@ export async function POST(request: Request) {
     }
   }
 
-  // If not found by external_id, check by dedupe_key (only non-resolved)
+  // If not found by external_id, check by dedupe_key (only active incidents - not resolved or rejected)
   if (!existingIncident) {
     const { data: byDedupeKey } = await supabase
       .from("incidents")
       .select("id, status, payload")
       .eq("user_id", repoConnection.user_id)
       .eq("dedupe_key", dedupeKey)
-      .not("status", "eq", "resolved")
+      .not("status", "in", "(resolved,rejected)")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -262,11 +263,13 @@ export async function POST(request: Request) {
   }
 
   if (existingIncident?.id) {
+    // Reopen if the incident was resolved or rejected (terminal states)
+    const isTerminalState = existingIncident.status === "resolved" || existingIncident.status === "rejected";
     const { data, error } = await supabase
       .from("incidents")
       .update({
-        alert_source: existingIncident.status === "resolved" ? body.source ?? "pagerduty-sandbox" : undefined,
-        status: existingIncident.status === "resolved" ? "open" : existingIncident.status,
+        alert_source: isTerminalState ? body.source ?? "pagerduty-sandbox" : undefined,
+        status: isTerminalState ? "open" : existingIncident.status,
         branch: body.branch ?? null,
         commit_sha: body.commit ?? null,
         release_version: releaseVersion || null,
@@ -287,6 +290,7 @@ export async function POST(request: Request) {
       .single();
 
     if (error) return json({ error: "Unable to update incident from webhook.", detail: error.message }, { status: 500 });
+    await flushPendingTelegramNotifications().catch((error) => console.error("telegram notification flush failed", error));
     return json({ ok: true, deduped: true, incident: data }, { status: 200 });
   }
 
@@ -317,5 +321,6 @@ export async function POST(request: Request) {
     return json({ error: "Unable to create incident from webhook.", detail: error.message }, { status: 500 });
   }
 
+  await flushPendingTelegramNotifications().catch((error) => console.error("telegram notification flush failed", error));
   return json({ ok: true, incident: data }, { status: 201 });
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { addTraceEvent, recomputePendingAction } from "@/lib/orchestrator";
+import { addTraceEvent, recomputePendingAction, associateFeaturesWithRelease } from "@/lib/orchestrator";
 import { phaseForStatus } from "@/lib/orchestrator/state-machine";
 import { createReleasePullRequest, mergePullRequest } from "@/lib/github/pr";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -50,6 +50,31 @@ export async function POST(request: Request, { params }: { params: { id: string 
       .maybeSingle();
     if (!spec) return NextResponse.json({ error: "Linked spec not found." }, { status: 404 });
 
+    // Fetch all merged feature specs that will be included in this release
+    const { data: mergedSpecs } = await supabase
+      .from("specs")
+      .select("id, title, pr_number, pr_url, branch_name")
+      .eq("repo_full_name", trace.repo_full_name)
+      .eq("user_id", user.id)
+      .eq("status", "merged")
+      .eq("base_branch", "develop")
+      .is("release_pr_number", null)
+      .order("merged_at", { ascending: false });
+
+    // Format the list of merged features for the PR body
+    const featuresSection = mergedSpecs?.length
+      ? [
+          "### Features included in this release",
+          "",
+          ...mergedSpecs.map((s) =>
+            s.pr_number
+              ? `- ${s.title} ([#${s.pr_number}](${s.pr_url}))`
+              : `- ${s.title}`
+          ),
+          ""
+        ]
+      : [];
+
     const releaseTag = spec.release_tag || generateReleaseTag();
     const { owner, repo } = splitRepo(trace.repo_full_name);
     const pr = await createReleasePullRequest({
@@ -61,10 +86,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
       body: [
         "## ShipBrain production release",
         "",
-        `Trace: ${trace.id}`,
-        `Source spec: ${trace.spec_id}`,
+        `**Release tag:** \`${releaseTag}\``,
         "",
-        "This PR promotes the validated develop branch into main. Production deploy still requires the release gate."
+        ...featuresSection,
+        "---",
+        "",
+        `Trace: \`${trace.id}\``,
+        "",
+        "This PR promotes the validated develop branch into main. Production deploy will be triggered after merge."
       ].join("\n")
     });
 
@@ -76,6 +105,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
       release_pr_status: pr.state,
       updated_at: new Date().toISOString()
     }).eq("id", trace.spec_id);
+
+    // Associate all merged feature specs with this release PR
+    // This ensures they get marked as deployed when production deploy completes
+    await associateFeaturesWithRelease(
+      trace.repo_full_name,
+      pr.number,
+      pr.html_url,
+      pr.state
+    ).catch((err) => console.error("Failed to associate features with release:", err));
 
     nextStatus = "release_pending";
     update.status = nextStatus;
@@ -115,38 +153,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       source: "manual",
       details: { action, merge }
     });
-  } else if (action === "verify_preview") {
-    nextStatus = trace.release_pr_number ? "release_pending" : "preview_live";
-    update.status = nextStatus;
-    update.current_phase = phaseForStatus(nextStatus);
-    update.preview_deployment = {
-      ...(trace.preview_deployment ?? {}),
-      verified: true,
-      verifiedAt: new Date().toISOString(),
-      verifiedBy: user.email ?? user.id
-    };
-    eventType = "status_changed";
-  } else if (action === "verify_production") {
-    nextStatus = trace.reverse_sync_pr_number && trace.reverse_sync_status !== "merged" ? "production_live" : "completed";
-    update.status = nextStatus;
-    update.current_phase = phaseForStatus(nextStatus);
-    update.completed_at = nextStatus === "completed" ? new Date().toISOString() : null;
-    update.production_deployment = {
-      ...(trace.production_deployment ?? {}),
-      verified: true,
-      verifiedAt: new Date().toISOString(),
-      verifiedBy: user.email ?? user.id
-    };
-    eventType = "status_changed";
   } else if (action === "cancel") {
     nextStatus = "cancelled";
-    update.status = nextStatus;
-    update.current_phase = phaseForStatus(nextStatus);
-    update.pending_action = null;
-    update.completed_at = new Date().toISOString();
-    eventType = "status_changed";
-  } else if (action === "complete") {
-    nextStatus = "completed";
     update.status = nextStatus;
     update.current_phase = phaseForStatus(nextStatus);
     update.pending_action = null;

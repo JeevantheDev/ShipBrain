@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { closePullRequest } from "@/lib/github/pr";
+import { updateTraceBySpecOrPr } from "@/lib/orchestrator";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -66,6 +67,29 @@ export async function POST(request: Request) {
     .single();
 
   if (error) return NextResponse.json({ error: "GitHub PR closed, but ShipBrain failed to update local status.", detail: error.message }, { status: 500 });
+
+  await updateTraceBySpecOrPr({
+    specId: spec.id,
+    repoFullName: spec.repo_full_name,
+    prNumber: spec.pr_number,
+    branchName: spec.branch_name,
+    patch: {
+      status: "cancelled"
+    },
+    event: {
+      eventType: "status_changed",
+      source: "manual",
+      actor: user.email ?? "ShipBrain user",
+      actorType: "user",
+      details: {
+        reason: deleteBranch && pr.branchDeleted ? "pr_closed_and_branch_deleted" : "pr_closed",
+        prNumber: spec.pr_number,
+        branchDeleted: pr.branchDeleted
+      }
+    }
+  }).catch((traceError) => {
+    console.error("Unable to sync release trace after PR close", traceError);
+  });
 
   return NextResponse.json({ ok: true, pr, spec: data });
 }

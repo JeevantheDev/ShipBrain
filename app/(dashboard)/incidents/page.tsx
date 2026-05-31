@@ -165,6 +165,13 @@ export default function IncidentsPage() {
 
   useEffect(() => {
     void loadIncidents();
+    const handleRefetch = () => {
+      void loadIncidents();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => {
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
+    };
   }, []);
 
   useEffect(() => {
@@ -1047,7 +1054,7 @@ Authorization: Bearer <SHIPBRAIN_API_KEY>
                       {analysisProgress < 40
                         ? "Ingesting Alert Payload metadata logs."
                         : analysisProgress < 76
-                          ? "Querying Gemini trace analyzer."
+                          ? "Querying Microsoft Foundry trace analyzer."
                           : "Formatting fix proposals."}
                     </div>
                   </div>

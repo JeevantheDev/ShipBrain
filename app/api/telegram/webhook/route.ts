@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { sendTelegramMessage } from "@/lib/telegram/client";
 import { runTelegramCommand } from "@/lib/telegram/tools";
+import { toTelegramMarkdown } from "@/lib/telegram/formatter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,7 +78,8 @@ export async function POST(request: Request) {
               "Link this chat from ShipBrain Settings → Secrets → Telegram.",
               "",
               `Verification code: \`${code}\``
-            ].join("\n")
+            ].join("\n"),
+        parseMode: "Markdown"
       });
       if (updateId !== null) {
         await db.from("telegram_webhook_updates").update({
@@ -96,7 +98,8 @@ export async function POST(request: Request) {
           "",
           "Open ShipBrain Settings → Secrets → Telegram and enter:",
           `\`${telegramUser.verification_code}\``
-        ].join("\n")
+        ].join("\n"),
+        parseMode: "Markdown"
       });
       if (updateId !== null) {
         await db.from("telegram_webhook_updates").update({
@@ -108,7 +111,7 @@ export async function POST(request: Request) {
     }
 
     const reply = await runTelegramCommand({ user_id: telegramUser.user_id }, text);
-    await sendTelegramMessage({ chatId, text: reply });
+    await sendTelegramMessage({ chatId, text: toTelegramMarkdown(reply), parseMode: "Markdown" });
     if (updateId !== null) {
       await db.from("telegram_webhook_updates").update({
         status: "processed",
@@ -133,12 +136,13 @@ export async function POST(request: Request) {
     await sendTelegramMessage({
       chatId,
       text: [
-        "ShipBrain Telegram needs attention.",
+        "*ShipBrain Telegram needs attention.*",
         "",
         detail,
         "",
         "Send a new command when you are ready; I will not repeat this same failed update."
-      ].join("\n")
+      ].join("\n"),
+      parseMode: "Markdown"
     }).catch(() => undefined);
     if (updateId !== null) {
       await db.from("telegram_webhook_updates").update({

@@ -7,10 +7,16 @@ export const runtime = "nodejs";
 
 function toCiRun(row: any) {
   const title = row.title ?? row.workflow_name ?? `Workflow run #${row.github_run_id}`;
+  const isPreviewRun =
+    row.environment === "preview" ||
+    String(row.workflow_name ?? row.title ?? "").toLowerCase().includes("preview") ||
+    row.specs?.preview_status === "deploying" ||
+    row.specs?.preview_status === "deployed";
+  const displayBranch = isPreviewRun ? row.specs?.base_branch ?? "develop" : row.branch ?? "unknown";
   const isIncidentHotfix = Boolean(row.specs?.incident_id);
   const isReleasePromotionPr =
     !isIncidentHotfix &&
-    row.branch === "develop" &&
+    displayBranch === "develop" &&
     row.conclusion === "success" &&
     row.specs?.branch_name === "develop" &&
     row.specs?.base_branch === "main" &&
@@ -19,7 +25,7 @@ function toCiRun(row: any) {
     !["deploying", "deployed"].includes(row.specs?.release_status ?? "not_started");
   const isFeatureDevelopGate =
     !isIncidentHotfix &&
-    row.branch === "develop" &&
+    displayBranch === "develop" &&
     row.conclusion === "success" &&
     row.specs?.status === "merged" &&
     (row.specs?.release_status === "ready_for_prod" || row.specs?.release_status === "not_started") &&
@@ -28,7 +34,7 @@ function toCiRun(row: any) {
   const logs = [
     `Workflow: ${row.workflow_name ?? "Unknown workflow"}`,
     `Repository: ${row.repo_full_name ?? "Unknown repository"}`,
-    `Branch: ${row.branch ?? "Unknown branch"}`,
+    `Branch: ${displayBranch}`,
     `Status: ${row.status}`,
     `Conclusion: ${row.conclusion ?? "pending"}`,
     `Commit: ${row.head_sha ?? "unknown"}`,
@@ -66,7 +72,7 @@ function toCiRun(row: any) {
     isIncidentHotfix,
     deploymentEligible,
     repo: row.repo_full_name,
-    branch: row.branch ?? "unknown",
+    branch: displayBranch,
     status: row.status,
     conclusion: row.conclusion,
     title,

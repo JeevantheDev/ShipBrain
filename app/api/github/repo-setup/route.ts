@@ -3,7 +3,9 @@ import {
   openSetupPullRequest,
   putActionsSecret,
   scanRepository,
-  workflowFiles
+  workflowFiles,
+  commitWorkflowsToDefaultBranch,
+  deleteExistingSetupBranchesAndPRs
 } from "@/lib/github/setup";
 import {
   ensureCloudflareProject,
@@ -11,35 +13,13 @@ import {
   getShipBrainCloudflareCredentials
 } from "@/lib/cloudflare/client";
 import { generateShipBrainApiKey, hashShipBrainApiKey, lastFour } from "@/lib/shipbrain/api-keys";
+import { resolvePublicShipBrainUrl } from "@/lib/shipbrain/public-url";
 import { requirePasswordConfirmation } from "@/lib/auth/reauth";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
 type SetupEmit = (event: Record<string, unknown>) => void | Promise<void>;
-
-function publicShipBrainApiUrl(request: Request) {
-  const configured =
-    process.env.SHIPBRAIN_API_URL ??
-    process.env.NEXT_PUBLIC_SHIPBRAIN_API_URL ??
-    process.env.VERCEL_URL ??
-    process.env.NGROK_PUBLIC_URL ??
-    process.env.NGROK_URL;
-
-  if (configured?.trim()) {
-    let url = configured.trim();
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = `https://${url}`;
-    }
-    return url.replace(/\/$/, "");
-  }
-
-  const origin = new URL(request.url).origin;
-  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(origin)) {
-    throw new Error("Set SHIPBRAIN_API_URL to your public ngrok URL before connecting a repo from localhost. GitHub Actions cannot call localhost.");
-  }
-  return origin.replace(/\/$/, "");
-}
 
 async function getContext() {
   const supabase = getSupabaseServerClient();
@@ -129,6 +109,7 @@ async function runSetup({
 
   const skipIncidents = Boolean(body.skipIncidents);
   const enableTelegram = Boolean(body.enableTelegram);
+  const forceOverwrite = Boolean(body.forceOverwrite); // Re-onboarding: overwrite existing workflow files
   const buildOutputDir = String(body.buildOutputDir ?? "dist").trim() || "dist";
   const buildCommand = String(body.buildCommand ?? "npm run build").trim() || "npm run build";
   const customProdBranch = String(body.productionBranch ?? "").trim();
@@ -149,7 +130,7 @@ async function runSetup({
 
   // Generate ShipBrain credentials
   const shipbrainApiKey = generateShipBrainApiKey();
-  const apiUrl = publicShipBrainApiUrl(request);
+  const apiUrl = resolvePublicShipBrainUrl(request, { requirePublicForLocal: true });
 
   // Get ShipBrain's Cloudflare credentials
   const { apiToken: cfApiToken, accountId: cfAccountId } = getShipBrainCloudflareCredentials();
@@ -201,6 +182,15 @@ async function runSetup({
     await emit?.({ type: "step", label: `Injecting ${name}`, status: "done" });
   }
 
+  // Clean up any existing setup branches/PRs to start fresh
+  await emit?.({ type: "step", label: "Cleaning up existing setup branches", status: "running" });
+  const deleted = await deleteExistingSetupBranchesAndPRs(repoFullName, token);
+  if (deleted.branches.length || deleted.prs.length) {
+    await emit?.({ type: "step", label: "Cleaning up existing setup branches", status: "done", detail: `Deleted ${deleted.branches.length} branches, ${deleted.prs.length} PRs` });
+  } else {
+    await emit?.({ type: "step", label: "Cleaning up existing setup branches", status: "done", detail: "No existing setup found" });
+  }
+
   // Prepare workflow files
   await emit?.({ type: "step", label: "Preparing workflow files", status: "running" });
   const files = workflowFiles({
@@ -216,16 +206,44 @@ async function runSetup({
     incidentsExists: scan.workflows.incidents,
     packageJson: scan.project.packageJson,
     buildOutputDir,
-    buildCommand
+    buildCommand,
+    forceOverwrite
   });
   await emit?.({ type: "step", label: "Preparing workflow files", status: "done", files: Object.keys(files) });
 
-  // Open setup PR if there are workflow files to add
+  // Flow: Commit workflows to develop branch first, then open PR to main
+  // This ensures both branches start with the same workflow files after PR merge
+  let workflowsCommittedToDevelop = false;
   let pr: Awaited<ReturnType<typeof openSetupPullRequest>> | null = null;
+
   if (Object.keys(files).length) {
-    await emit?.({ type: "step", label: "Opening GitHub setup PR", status: "running" });
-    pr = await openSetupPullRequest({ repoFullName, base: prodBranch, files, token });
-    await emit?.({ type: "step", label: "Opening GitHub setup PR", status: "done", prUrl: pr.html_url });
+    // Step 1: Commit workflows to develop branch first (if develop branch exists)
+    const targetBranch = devBranch || prodBranch;
+    await emit?.({ type: "step", label: `Adding workflows to ${targetBranch}`, status: "running" });
+    try {
+      await commitWorkflowsToDefaultBranch({ repoFullName, base: targetBranch, files, token });
+      workflowsCommittedToDevelop = true;
+      await emit?.({ type: "step", label: `Adding workflows to ${targetBranch}`, status: "done" });
+    } catch (err: any) {
+      await emit?.({ type: "step", label: `Adding workflows to ${targetBranch}`, status: "error", detail: err.message });
+      console.warn(`Could not commit workflow files to ${targetBranch}:`, err.message);
+    }
+
+    // Step 2: Open PR from develop → main (if develop branch exists and is different from prod)
+    // This ensures main branch gets the same workflow files when PR is merged
+    if (devBranch && devBranch !== prodBranch && workflowsCommittedToDevelop) {
+      await emit?.({ type: "step", label: `Opening PR: ${devBranch} → ${prodBranch}`, status: "running" });
+      try {
+        pr = await openSetupPullRequest({ repoFullName, base: prodBranch, head: devBranch, files, token });
+        await emit?.({ type: "step", label: `Opening PR: ${devBranch} → ${prodBranch}`, status: "done", prUrl: pr.html_url });
+      } catch (err: any) {
+        await emit?.({ type: "step", label: `Opening PR: ${devBranch} → ${prodBranch}`, status: "error", detail: err.message });
+        console.warn(`Could not open setup PR:`, err.message);
+      }
+    } else if (!devBranch || devBranch === prodBranch) {
+      // If no develop branch, workflows are committed directly to prod
+      await emit?.({ type: "step", label: "Workflows added to main branch", status: "done" });
+    }
   } else {
     await emit?.({ type: "step", label: "Workflow files already configured", status: "done" });
   }

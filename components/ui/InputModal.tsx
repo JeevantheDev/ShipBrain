@@ -11,6 +11,7 @@ type InputModalProps = {
   defaultValue?: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  required?: boolean;
   onClose: () => void;
   onConfirm: (value: string) => void;
 };
@@ -23,6 +24,7 @@ export function InputModal({
   defaultValue = "",
   confirmLabel = "Save",
   cancelLabel = "Cancel",
+  required = false,
   onClose,
   onConfirm
 }: InputModalProps) {
@@ -44,6 +46,7 @@ export function InputModal({
         onClose();
       } else if (e.key === "Enter") {
         e.preventDefault();
+        if (required && !value.trim()) return;
         onConfirm(value);
       }
     }
@@ -79,7 +82,7 @@ export function InputModal({
           <button className="btn ghost" type="button" onClick={onClose}>
             {cancelLabel}
           </button>
-          <button className="btn primary" type="button" onClick={() => onConfirm(value)}>
+          <button className="btn primary" type="button" disabled={required && !value.trim()} onClick={() => onConfirm(value)}>
             {confirmLabel}
           </button>
         </div>

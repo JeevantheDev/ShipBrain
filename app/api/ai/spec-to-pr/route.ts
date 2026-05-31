@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { generateScaffold } from "@/lib/ai/chains/code-scaffold";
-import { decomposeSpec, specPlanSchema } from "@/lib/ai/chains/spec-decompose";
+import { decomposeSpec, specPlanSchema, type PrHistoryContext } from "@/lib/ai/chains/spec-decompose";
 import { createDraftPR } from "@/lib/github/pr";
 import { createOrUpdateTrace } from "@/lib/orchestrator";
+import { DEFAULT_SPEC_PR_RECIPES } from "@/lib/spec-recipes";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -32,7 +34,7 @@ function getGitHubError(error: unknown) {
   return null;
 }
 
-function getGeminiRetryError(error: unknown) {
+function getAiRetryError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (!/429|Too Many Requests|Quota exceeded|retry/i.test(message)) return null;
 
@@ -42,22 +44,108 @@ function getGeminiRetryError(error: unknown) {
   const retryAfterSeconds = retryDelayMatch ? Math.ceil(Number(retryDelayMatch[1])) : 30;
 
   return {
-    error: "Gemini quota is cooling down.",
-    detail: `ShipBrain reached the Gemini free-tier request limit. I will retry this step in about ${retryAfterSeconds} seconds. You can also wait a moment and retry manually.`,
+    error: "AI provider quota is cooling down.",
+    detail: `ShipBrain reached the active AI provider request limit. I will retry this step in about ${retryAfterSeconds} seconds. You can also wait a moment and retry manually.`,
     retryable: true,
     retryAfterSeconds
   };
 }
 
+async function fetchPrHistoryContext(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  userId: string,
+  repoFullName: string
+): Promise<PrHistoryContext> {
+  const history: PrHistoryContext = {};
+
+  // Fetch recent merged specs/PRs for this repo
+  const { data: recentSpecs } = await supabase
+    .from("specs")
+    .select("pr_number, title, branch_name, status, merged_at, release_tag")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .in("status", ["merged", "draft_created", "approved"])
+    .order("updated_at", { ascending: false })
+    .limit(10);
+
+  if (recentSpecs?.length) {
+    history.recentPrs = recentSpecs.map(spec => ({
+      number: spec.pr_number ?? 0,
+      title: spec.title ?? `PR #${spec.pr_number}`,
+      branch: spec.branch_name ?? undefined,
+      status: spec.status ?? undefined,
+      mergedAt: spec.merged_at ?? undefined
+    })).filter(pr => pr.number > 0);
+
+    // Extract release tags from merged specs
+    const releases = recentSpecs
+      .filter(spec => spec.release_tag)
+      .map(spec => ({
+        tag: spec.release_tag!,
+        deployedAt: spec.merged_at ?? undefined
+      }));
+    if (releases.length) {
+      history.recentReleases = releases;
+    }
+  }
+
+  // Fetch recent incidents for this repo
+  const { data: recentIncidents } = await supabase
+    .from("incidents")
+    .select("id, title, severity, status")
+    .eq("repo_full_name", repoFullName)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (recentIncidents?.length) {
+    history.relatedIncidents = recentIncidents.map(incident => ({
+      id: incident.id,
+      title: incident.title ?? "Incident",
+      severity: incident.severity ?? undefined,
+      status: incident.status ?? undefined
+    }));
+  }
+
+  return history;
+}
+
 export async function POST(request: Request) {
+  const supabase = getSupabaseServerClient();
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+
   try {
     const body = await request.json();
-    if (!body.rawSpec?.trim()) {
-      return NextResponse.json({ error: "rawSpec is required" }, { status: 400 });
+
+    // Support recipeId as alternative to rawSpec
+    let rawSpec = body.rawSpec?.trim();
+    let baseBranchFromRecipe: string | undefined;
+    let sourceBranchFromRecipe: string | undefined;
+
+    if (!rawSpec && body.recipeId) {
+      const recipe = DEFAULT_SPEC_PR_RECIPES.find(r => r.id === body.recipeId);
+      if (recipe) {
+        rawSpec = recipe.ticket;
+        baseBranchFromRecipe = recipe.baseBranch;
+        sourceBranchFromRecipe = recipe.sourceBranch;
+      }
     }
 
-    const plan = body.plan ? specPlanSchema.parse(body.plan) : await decomposeSpec(body.rawSpec, body.repoFullName ?? "shipbrain-sandbox");
-    const handoffOnly = /shipbrain-codegen:\s*handoff-only/i.test(body.rawSpec ?? "") || /shipbrain-codegen:\s*handoff-only/i.test(plan.prBody ?? "");
+    if (!rawSpec) {
+      return NextResponse.json({ error: "rawSpec or recipeId is required" }, { status: 400 });
+    }
+
+    // Fetch PR history context for better AI-generated plans
+    const repoFullName = body.repoFullName ?? "shipbrain-sandbox";
+    let historyContext: PrHistoryContext | undefined;
+    if (user) {
+      historyContext = await fetchPrHistoryContext(supabase, user.id, repoFullName).catch(() => undefined);
+    }
+
+    const plan = body.plan ? specPlanSchema.parse(body.plan) : await decomposeSpec(rawSpec, repoFullName, historyContext);
+    const handoffOnly = /shipbrain-codegen:\s*handoff-only/i.test(rawSpec) || /shipbrain-codegen:\s*handoff-only/i.test(plan.prBody ?? "");
     const scaffold = handoffOnly
       ? await generateScaffold({
           ...plan,
@@ -71,9 +159,14 @@ export async function POST(request: Request) {
     }
 
     const { owner, repo } = splitRepo(body.repoFullName ?? "shipbrain-sandbox");
-    const branch = typeof body.branchOverride === "string" && body.branchOverride.trim() ? body.branchOverride.trim() : plan.suggestedBranch;
-    const base = typeof body.baseBranchOverride === "string" && body.baseBranchOverride.trim() ? body.baseBranchOverride.trim() : "develop";
-    const promotionFooter = body.useExistingSourceBranch
+    const branch = typeof body.branchOverride === "string" && body.branchOverride.trim()
+      ? body.branchOverride.trim()
+      : sourceBranchFromRecipe || plan.suggestedBranch;
+    const base = typeof body.baseBranchOverride === "string" && body.baseBranchOverride.trim()
+      ? body.baseBranchOverride.trim()
+      : baseBranchFromRecipe || "develop";
+    const useExistingSourceBranch = body.useExistingSourceBranch || Boolean(sourceBranchFromRecipe);
+    const promotionFooter = useExistingSourceBranch
       ? [
           "",
           "## ShipBrain release automation",
@@ -92,14 +185,14 @@ export async function POST(request: Request) {
       body: `${plan.prBody}${promotionFooter}\n\nApproval note: ${body.approvalNote ?? ""}`,
       files: scaffold,
       reviewers: plan.suggestedReviewers,
-      useExistingHead: Boolean(body.useExistingSourceBranch)
+      useExistingHead: useExistingSourceBranch
     });
 
     await createOrUpdateTrace({
       repoFullName: body.repoFullName ?? "shipbrain-sandbox",
-      type: body.useExistingSourceBranch ? "release" : "feature",
+      type: useExistingSourceBranch ? "release" : "feature",
       title: plan.prTitle,
-      description: body.rawSpec,
+      description: rawSpec,
       status: "draft",
       sourceBranch: branch,
       targetBranch: base,
@@ -113,7 +206,100 @@ export async function POST(request: Request) {
       console.error("release trace creation failed", traceError);
     });
 
-    return NextResponse.json({ ...response, pr });
+    // Save to specs table for Recent AI PRs
+    // Note: repoFullName is already defined above with same value
+    if (user) {
+      const specData = {
+        user_id: user.id,
+        raw_spec: rawSpec,
+        decomposed_tasks: plan,
+        scaffold_code: scaffold,
+        status: "draft_created",
+        repo_full_name: repoFullName,
+        branch_name: branch,
+        base_branch: base,
+        pr_number: pr.number,
+        pr_url: pr.html_url,
+        updated_at: new Date().toISOString()
+      };
+
+      let updated = false;
+
+      // 1. Try updating by specId if provided
+      if (body.specId) {
+        const { data: updateData, error: updateError } = await supabase
+          .from("specs")
+          .update(specData)
+          .eq("id", body.specId)
+          .eq("user_id", user.id)
+          .select("id");
+
+        if (!updateError && updateData && updateData.length > 0) {
+          updated = true;
+          console.log(`spec updated successfully by specId ${body.specId} for PR #${pr.number}`);
+        } else if (updateError) {
+          console.error(`Failed to update spec by ID ${body.specId}:`, updateError.message);
+        }
+      }
+
+      // 2. If not updated by specId, try matching by branch name fallback
+      if (!updated) {
+        const { data: branchData, error: branchError } = await supabase
+          .from("specs")
+          .update(specData)
+          .eq("repo_full_name", repoFullName)
+          .eq("branch_name", branch)
+          .eq("user_id", user.id)
+          .or("pr_number.is.null,pr_number.eq.42")
+          .select("id");
+
+        if (!branchError && branchData && branchData.length > 0) {
+          updated = true;
+          console.log(`spec updated successfully by branch fallback for PR #${pr.number}`);
+        } else if (branchError) {
+          console.error(`Failed to update spec by branch fallback:`, branchError.message);
+        }
+      }
+
+      // 3. Fallback to insert only if not updated
+      if (!updated) {
+        const { error: specError } = await supabase
+          .from("specs")
+          .insert(specData);
+
+        if (specError) {
+          console.error("spec save failed:", specError.message, specError.details);
+        } else {
+          console.log("spec saved successfully (inserted new) for PR #" + pr.number);
+        }
+      }
+
+      // Create notification
+      const { error: notifyError } = await supabase
+        .from("notifications")
+        .insert({
+          user_id: user.id,
+          type: "pr_created",
+          title: "Draft PR Created",
+          body: `Created draft PR #${pr.number}: ${plan.prTitle}`,
+          href: pr.html_url,
+          severity: "info",
+          repo_full_name: repoFullName,
+          metadata: { prNumber: pr.number, branch, baseBranch: base }
+        });
+
+      if (notifyError) {
+        console.error("notification creation failed:", notifyError.message);
+      }
+    } else {
+      console.warn("No authenticated user found - spec will not be saved to Recent AI PRs");
+    }
+
+    return NextResponse.json({
+      ...response,
+      pr,
+      warning: "reviewerWarning" in pr ? pr.reviewerWarning : undefined
+    });
   } catch (error) {
     if (error instanceof ZodError) {
       return NextResponse.json(
@@ -130,9 +316,9 @@ export async function POST(request: Request) {
       return NextResponse.json(githubError, { status: 403 });
     }
 
-    const geminiRetryError = getGeminiRetryError(error);
-    if (geminiRetryError) {
-      return NextResponse.json(geminiRetryError, { status: 429 });
+    const aiRetryError = getAiRetryError(error);
+    if (aiRetryError) {
+      return NextResponse.json(aiRetryError, { status: 429 });
     }
 
     return NextResponse.json(

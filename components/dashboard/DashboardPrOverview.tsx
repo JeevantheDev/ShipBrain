@@ -47,7 +47,14 @@ export function DashboardPrOverview() {
   useEffect(() => {
     void loadRuns();
     const interval = window.setInterval(() => void loadRuns(), 30000);
-    return () => window.clearInterval(interval);
+    const handleRefetch = () => {
+      void loadRuns();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("shipbrain-refetch", handleRefetch);
+    };
   }, []);
 
   async function loadRuns() {
@@ -183,6 +190,10 @@ export function DashboardPrOverview() {
     return "ci pending";
   }
 
+  function canManageDraftRun(run: RecentPrRun) {
+    return run.status === "pending_pr" || run.status === "draft_created";
+  }
+
   return (
     <>
       {/* Metrics Row */}
@@ -274,7 +285,7 @@ export function DashboardPrOverview() {
             {activeRuns.map((run) => {
               const isMerged = run.status === "merged";
               const isClosed = run.status === "closed";
-              const canManageDraft = run.status === "pending_pr" || run.status === "draft_created";
+              const canManageDraft = canManageDraftRun(run);
               return (
                 <div className="pr-row" key={run.id}>
                   <div className={`pr-icon ${isMerged ? "merged" : ""}`} title={statusLabel(run)}>

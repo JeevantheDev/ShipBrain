@@ -3,6 +3,16 @@
 import { Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { InputModal } from "@/components/ui/InputModal";
+
+type IncludedFeature = {
+  id: string;
+  prNumber: number;
+  prUrl: string;
+  title: string;
+  branchName: string;
+  mergedAt?: string;
+};
 
 type PendingDeploy = {
   id: string;
@@ -30,6 +40,9 @@ type PendingDeploy = {
   mergedAt?: string;
   ciRunId?: string;
   updatedAt: string;
+  // Consolidated features for preview_ready stage
+  includedFeatures?: IncludedFeature[];
+  featureCount?: number;
 };
 
 export function PendingDeployQueue() {
@@ -40,6 +53,7 @@ export function PendingDeployQueue() {
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [redeployLoading, setRedeployLoading] = useState<string | null>(null);
+  const [productionDeployTarget, setProductionDeployTarget] = useState<PendingDeploy | null>(null);
 
   useEffect(() => {
     void loadPending();
@@ -53,6 +67,14 @@ export function PendingDeployQueue() {
     const interval = window.setInterval(() => void loadPending(), intervalTime);
     return () => window.clearInterval(interval);
   }, [pending]);
+
+  useEffect(() => {
+    const handleRefetch = () => {
+      void loadPending();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => window.removeEventListener("shipbrain-refetch", handleRefetch);
+  }, []);
 
   async function loadPending() {
     try {
@@ -113,17 +135,33 @@ export function PendingDeployQueue() {
     }
   }
 
-  async function startProductionDeploy(item: PendingDeploy) {
+  function defaultReleaseTag() {
+    const now = new Date();
+    const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
+    const time = now.toISOString().slice(11, 16).replace(":", "");
+    return `release-v${date}-${time}`;
+  }
+
+  function openProductionDeployModal(item: PendingDeploy) {
+    setActionErrors((prev) => ({ ...prev, [item.id]: "" }));
+    setProductionDeployTarget(item);
+  }
+
+  async function startProductionDeploy(item: PendingDeploy, requestedReleaseTag?: string) {
     setActionLoading(item.id);
     setActionErrors((prev) => ({ ...prev, [item.id]: "" }));
     try {
       const response = await fetch("/api/deployments/start-production", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ specId: item.id })
+        body: JSON.stringify({
+          specId: item.id,
+          releaseTag: requestedReleaseTag?.trim() || undefined
+        })
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to start production deployment");
+      setProductionDeployTarget(null);
       await loadPending();
     } catch (nextError) {
       setActionErrors((prev) => ({
@@ -200,8 +238,14 @@ export function PendingDeployQueue() {
   function stageCopy(item: PendingDeploy) {
     switch (item.stage) {
       case "awaiting_preview":
+        if (item.featureCount && item.featureCount > 1) {
+          return `${item.featureCount} features merged to develop. Click Start Preview to deploy all to Cloudflare Pages.`;
+        }
         return "Feature merged to develop. Click Start Preview to deploy to Cloudflare Pages.";
       case "preview_deploying":
+        if (item.featureCount && item.featureCount > 1) {
+          return `Preview deployment for ${item.featureCount} features is in progress. The URL will appear when ready.`;
+        }
         return "Preview deployment is in progress. The URL will appear when ready.";
       case "preview_ready":
         if (item.releasePrNumber && item.releasePrStatus === "merged") {
@@ -209,6 +253,9 @@ export function PendingDeployQueue() {
         }
         if (item.releasePrNumber) {
           return `Preview is live and Release PR #${item.releasePrNumber} already exists. Review or merge it before production deploy.`;
+        }
+        if (item.featureCount && item.featureCount > 1) {
+          return `${item.featureCount} features are ready in develop. Create a Release PR to promote all to production.`;
         }
         return "Preview is live! Test it, then create a Release PR to promote to production.";
       case "release_pr_open":
@@ -257,6 +304,7 @@ export function PendingDeployQueue() {
   }
 
   return (
+    <>
     <div className="panel">
       <header className="panel-head">
         <h2>
@@ -313,13 +361,27 @@ export function PendingDeployQueue() {
                   </svg>
                   <div>
                     {stageCopy(item)}
-                    {item.mergedAt && (
+                    {item.mergedAt && !item.includedFeatures?.length && (
                       <div className="merged-line mono">
                         merged {new Date(item.mergedAt).toLocaleString()}
                       </div>
                     )}
                   </div>
                 </div>
+
+                {item.includedFeatures && item.includedFeatures.length > 1 && (
+                  <div className="dq-features-list">
+                    <div className="dq-features-header">Included features ({item.featureCount}):</div>
+                    {item.includedFeatures.map((feature) => (
+                      <div key={feature.id} className="dq-feature-item">
+                        <a href={feature.prUrl} target="_blank" rel="noreferrer">
+                          PR #{feature.prNumber}
+                        </a>
+                        <span className="dq-feature-title">{feature.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {item.previewUrl && (
                   <div className="dq-url">
@@ -362,16 +424,19 @@ export function PendingDeployQueue() {
                       </button>
                       {item.releasePrNumber && item.releasePrUrl ? (
                         <a className="btn primary" href={item.releasePrUrl} target="_blank" rel="noreferrer">
-                          Review Release PR #{item.releasePrNumber}
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
+                            <path d="M3 6h6M9 6l-2.5 2.5M9 6L6.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          Open Release PR #{item.releasePrNumber}
                         </a>
                       ) : item.releasePrNumber ? (
                         <button className="btn primary" disabled>
-                          Release PR #{item.releasePrNumber}
+                          Release PR #{item.releasePrNumber} (draft)
                         </button>
                       ) : (
                         <Link className="btn primary" href="/spec-to-pr?template=develop-to-prod">
                           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ marginRight: 4 }}>
-                            <path d="M2 6h6M6 3l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                            <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
                           </svg>
                           Create Release PR
                         </Link>
@@ -386,7 +451,7 @@ export function PendingDeployQueue() {
                   {item.stage === "pending_production_deploy" && (
                     <button
                       className="btn primary"
-                      onClick={() => startProductionDeploy(item)}
+                      onClick={() => openProductionDeployModal(item)}
                       disabled={actionLoading === item.id}
                     >
                       {actionLoading === item.id && <Loader2 size={12} className="spin" style={{ marginRight: 4 }} />}
@@ -437,5 +502,24 @@ export function PendingDeployQueue() {
         </div>
       )}
     </div>
+    <InputModal
+      open={Boolean(productionDeployTarget)}
+      title="Deploy to production"
+      label="Release tag"
+      placeholder={defaultReleaseTag()}
+      defaultValue={productionDeployTarget?.releaseTag ?? defaultReleaseTag()}
+      confirmLabel={actionLoading === productionDeployTarget?.id ? "Deploying..." : "Start Deployment"}
+      cancelLabel="Cancel"
+      required
+      onClose={() => {
+        if (actionLoading) return;
+        setProductionDeployTarget(null);
+      }}
+      onConfirm={(value) => {
+        if (!productionDeployTarget || actionLoading) return;
+        void startProductionDeploy(productionDeployTarget, value);
+      }}
+    />
+    </>
   );
 }

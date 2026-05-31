@@ -76,25 +76,51 @@ async function main() {
 
   await client.connect();
   try {
-    await client.query("begin");
-    await client.query(`
-      truncate table
-        public.approval_events,
-        public.cloudflare_webhook_events,
-        public.ci_runs,
-        public.incidents,
-        public.notifications,
-        public.release_traces,
-        public.specs,
-        public.telegram_notification_deliveries,
-        public.telegram_users,
-        public.telegram_webhook_updates,
-        public.trace_events,
-        public.repos,
-        public.profiles
-      cascade;
+    // Get list of existing tables first
+    const { rows: existingTables } = await client.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
     `);
-    await client.query("commit");
+    const existingTableNames = new Set(existingTables.map(r => r.table_name));
+
+    // Tables to truncate in order (child tables first due to FK)
+    const allTables = [
+      'chat_messages',
+      'chat_threads',
+      'approval_events',
+      'cloudflare_webhook_events',
+      'ci_runs',
+      'incidents',
+      'notifications',
+      'release_traces',
+      'rollback_history',
+      'spec_pr_recipes',
+      'specs',
+      'telegram_notification_deliveries',
+      'telegram_users',
+      'telegram_webhook_updates',
+      'trace_events',
+      'repos',
+      'profiles'
+    ];
+
+    // Filter to only existing tables
+    const tablesToTruncate = allTables.filter(t => existingTableNames.has(t));
+    const skippedTables = allTables.filter(t => !existingTableNames.has(t));
+
+    if (skippedTables.length > 0) {
+      console.log(`Skipping non-existent tables: ${skippedTables.join(', ')}`);
+    }
+
+    if (tablesToTruncate.length > 0) {
+      await client.query("begin");
+      const truncateQuery = `TRUNCATE TABLE ${tablesToTruncate.map(t => `public.${t}`).join(', ')} CASCADE`;
+      await client.query(truncateQuery);
+      await client.query("commit");
+      console.log(`Truncated tables: ${tablesToTruncate.join(', ')}`);
+    } else {
+      console.log('No tables to truncate.');
+    }
     const deletedUsers = includeAuthUsers ? await deleteAuthUsers(env) : 0;
     console.log(
       includeAuthUsers

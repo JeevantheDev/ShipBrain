@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 import { deleteActionsSecret, putActionsSecret } from "@/lib/github/setup";
 import { generateShipBrainApiKey, hashShipBrainApiKey, lastFour } from "@/lib/shipbrain/api-keys";
+import { resolvePublicShipBrainUrl } from "@/lib/shipbrain/public-url";
 import { requirePasswordConfirmation } from "@/lib/auth/reauth";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -80,27 +81,6 @@ function normalizeSecretUpdates(input: unknown) {
   return Object.entries(input as Record<string, unknown>)
     .map(([name, value]) => [name, String(value ?? "").trim()] as const)
     .filter(([name, value]) => allowed.has(name) && value.length > 0);
-}
-
-function getPublicShipBrainApiUrl(request: Request) {
-  const configured =
-    process.env.SHIPBRAIN_API_URL ??
-    process.env.NEXT_PUBLIC_SHIPBRAIN_API_URL ??
-    process.env.VERCEL_URL ??
-    process.env.NGROK_PUBLIC_URL ??
-    process.env.NGROK_URL;
-
-  if (configured?.trim()) {
-    let url = configured.trim();
-    // Add https:// if it's a Vercel URL without protocol
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = `https://${url}`;
-    }
-    return url.replace(/\/$/, "");
-  }
-
-  const origin = new URL(request.url).origin;
-  return origin.replace(/\/$/, "");
 }
 
 export async function GET() {
@@ -207,7 +187,7 @@ export async function POST(request: Request) {
     let apiKey = generateShipBrainApiKey();
 
     // Get the public API URL
-    const apiUrl = getPublicShipBrainApiUrl(request);
+    const apiUrl = resolvePublicShipBrainUrl(request);
 
     // Push both secrets to GitHub
     const syncedSecrets: string[] = [];

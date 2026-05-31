@@ -48,7 +48,14 @@ export default async function ReleaseTraceDetailPage({ params }: { params: { id:
           <span className="eyebrow mono">Pending action</span>
           <h2>{action.type?.replace(/_/g, " ")}</h2>
           <p>{action.description}</p>
-          <TraceActions traceId={trace.id} pendingType={action.type ?? null} status={trace.status} />
+          <TraceActions
+            traceId={trace.id}
+            pendingType={action.type ?? null}
+            status={trace.status}
+            type={trace.type}
+            repoFullName={trace.repo_full_name}
+            currentReleaseTag={trace.production_deployment?.releaseTag ?? trace.production_deployment?.tag}
+          />
         </section>
       ) : null}
 
@@ -75,7 +82,13 @@ export default async function ReleaseTraceDetailPage({ params }: { params: { id:
       {!action ? (
         <section className="panel trace-section">
           <span className="eyebrow mono">Manual controls</span>
-          <TraceActions traceId={trace.id} status={trace.status} />
+          <TraceActions
+            traceId={trace.id}
+            status={trace.status}
+            type={trace.type}
+            repoFullName={trace.repo_full_name}
+            currentReleaseTag={trace.production_deployment?.releaseTag ?? trace.production_deployment?.tag}
+          />
         </section>
       ) : null}
 
