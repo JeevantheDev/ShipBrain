@@ -626,6 +626,16 @@ export async function openSetupPullRequest(input: {
   const octokit = getOctokit(input.token);
   const { owner, repo } = splitRepo(input.repoFullName);
 
+  // Verify the repository exists and is accessible
+  try {
+    await octokit.repos.get({ owner, repo });
+  } catch (error: any) {
+    if (error.status === 404) {
+      throw new Error(`Repository ${owner}/${repo} not found or not accessible with your GitHub token.`);
+    }
+    throw error;
+  }
+
   // If head branch is provided, use it directly (e.g., develop → main)
   // Otherwise, create a new setup branch
   let branch: string;
@@ -633,8 +643,35 @@ export async function openSetupPullRequest(input: {
     branch = input.head;
   } else {
     branch = `shipbrain/setup-${Date.now().toString(36)}`;
-    const { data: baseRef } = await octokit.git.getRef({ owner, repo, ref: `heads/${input.base}` });
-    await octokit.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: baseRef.object.sha });
+
+    // Verify base branch exists
+    let baseRef;
+    try {
+      const { data } = await octokit.git.getRef({ owner, repo, ref: `heads/${input.base}` });
+      baseRef = data;
+    } catch (error: any) {
+      if (error.status === 404) {
+        throw new Error(`Branch '${input.base}' not found. Please ensure the branch exists on GitHub.`);
+      }
+      throw error;
+    }
+
+    // Create the setup branch
+    try {
+      await octokit.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: baseRef.object.sha });
+    } catch (error: any) {
+      if (error.status === 422 && error.message?.includes("Reference already exists")) {
+        // Branch already exists, delete it and recreate
+        try {
+          await octokit.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+          await octokit.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: baseRef.object.sha });
+        } catch {
+          throw new Error(`Could not create setup branch. Please delete any existing 'shipbrain/setup-*' branches and try again.`);
+        }
+      } else {
+        throw error;
+      }
+    }
 
     // Only commit files to new branch (if using existing head, files should already be committed)
     for (const [path, content] of Object.entries(input.files)) {
@@ -670,6 +707,10 @@ export async function openSetupPullRequest(input: {
           ...(sha ? { sha } : {})
         });
       } catch (error: any) {
+        // Provide helpful error message for common issues
+        if (error.status === 404) {
+          throw new Error(`Could not create file '${path}'. Your GitHub token may not have write access to this repository. Please reconnect GitHub with repo write permissions.`);
+        }
         // If we get a sha error, try to get the sha from the branch and retry
         if (error.message?.includes("sha") && !sha) {
           try {
