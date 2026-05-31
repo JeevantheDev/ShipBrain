@@ -43,6 +43,7 @@ export function RepoOnboarding() {
   const [loading, setLoading] = useState(true);
   const [githubConnected, setGithubConnected] = useState(false);
   const [githubLogin, setGithubLogin] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [error, setError] = useState("");
   const [scan, setScan] = useState<RepoScan | null>(null);
@@ -142,28 +143,19 @@ export function RepoOnboarding() {
     setLoading(true);
     try {
       const supabase = getSupabaseBrowserClient();
-      
-      // Auto-unlink any stale GitHub identity if it is already in Supabase Auth
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        const githubIdentity = user?.identities?.find((id) => id.provider === "github");
-        if (githubIdentity) {
-          await supabase.auth.unlinkIdentity(githubIdentity);
-        }
-      } catch (e) {
-        console.warn("Could not check/unlink stale GitHub identity during connect:", e);
-      }
-
-      const { error } = await supabase.auth.linkIdentity({
+      const { data, error } = await supabase.auth.linkIdentity({
         provider: "github",
         options: {
-          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(window.location.pathname)}`,
-          scopes: "repo read:user user:email"
+          redirectTo: `${window.location.origin}/auth/callback`,
+          scopes: "repo read:org write:repo_hook"
         }
       });
       if (error) throw error;
+      if (data?.url) {
+        window.location.href = data.url;
+      }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Unable to initiate GitHub connection");
+      setError(nextError instanceof Error ? nextError.message : "Unable to connect GitHub");
       setLoading(false);
     }
   }

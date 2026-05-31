@@ -57,8 +57,8 @@ function splitRepo(repoFullName: string) {
   return { owner, repo };
 }
 
-async function withPullRequestMergeState(rows: any[]) {
-  const octokit = getOctokit();
+async function withPullRequestMergeState(token: string | null, rows: any[]) {
+  const octokit = getOctokit(token ?? undefined);
   const enriched = await Promise.allSettled(rows.map(async (row) => {
     if (!row.repo_full_name || !row.pr_number || row.status === "closed" || row.status === "merged") return row;
     try {
@@ -108,6 +108,13 @@ export async function GET() {
   const { supabase, user } = await getUserOr401();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("github_access_token")
+    .eq("id", user.id)
+    .maybeSingle();
+  const token = profile?.github_access_token ?? null;
+
   const { data, error } = await supabase
     .from("specs")
     .select("id, raw_spec, decomposed_tasks, scaffold_code, pr_number, pr_url, status, repo_full_name, branch_name, base_branch, ci_status, ci_conclusion, latest_ci_run_id, feature_head_sha, feature_last_synced_at, deployment_status, deployment_approved_at, release_tag, release_status, release_sha, merge_sha, deployment_run_id, deployment_url, preview_url, preview_status, preview_branch_alias, release_pr_number, release_pr_url, release_pr_status, merged_at, deployed_at, error_message, created_at, updated_at")
@@ -125,7 +132,7 @@ export async function GET() {
     );
   }
 
-  const enriched = await withPullRequestMergeState(data ?? []);
+  const enriched = await withPullRequestMergeState(token, data ?? []);
   return NextResponse.json(enriched.map(toRun));
 }
 

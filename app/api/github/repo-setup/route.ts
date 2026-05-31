@@ -33,8 +33,7 @@ async function getContext() {
     .select("github_access_token")
     .eq("id", user.id)
     .maybeSingle();
-  const isOwner = user.email === "jeevan@gmail.com" || user.email?.toLowerCase().startsWith("jeevan");
-  const token = profile?.github_access_token ?? session?.provider_token ?? (isOwner ? (process.env.GITHUB_TOKEN || process.env.GITHUB_TEST_TOKEN) : null);
+  const token = profile?.github_access_token ?? session?.provider_token;
   return { supabase, user, token };
 }
 

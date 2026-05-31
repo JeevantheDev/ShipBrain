@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getOctokit } from "@/lib/github/client";
 
+import { getSupabaseServerClient } from "@/lib/supabase/server";
+
 export const runtime = "nodejs";
 
 function splitRepo(repoFullName: string) {
@@ -17,8 +19,24 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "repo and branch are required" }, { status: 400 });
   }
 
+  const supabase = getSupabaseServerClient();
+  const {
+    data: { session }
+  } = await supabase.auth.getSession();
+  const user = session?.user ?? null;
+
+  let token = null;
+  if (user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("github_access_token")
+      .eq("id", user.id)
+      .maybeSingle();
+    token = profile?.github_access_token ?? session?.provider_token ?? null;
+  }
+
   const { owner, repo } = splitRepo(repoFullName);
-  const octokit = getOctokit();
+  const octokit = getOctokit(token ?? undefined);
 
   try {
     await octokit.git.getRef({

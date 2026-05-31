@@ -18,8 +18,7 @@ export async function GET() {
     .eq("id", user.id)
     .maybeSingle();
 
-  const isOwner = user.email === "jeevan@gmail.com" || user.email?.toLowerCase().startsWith("jeevan");
-  const token = profile?.github_access_token ?? session?.provider_token ?? (isOwner ? (process.env.GITHUB_TOKEN || process.env.GITHUB_TEST_TOKEN) : null);
+  const token = profile?.github_access_token ?? session?.provider_token;
 
   if (!token) {
     return NextResponse.json({ error: "GitHub is not connected.", requiresGithub: true }, { status: 409 });

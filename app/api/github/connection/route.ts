@@ -35,13 +35,7 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({}));
   
-  // Only allow system GITHUB_TOKEN fallback if user is the owner (jeevan@gmail.com)
-  const isOwner = user.email === "jeevan@gmail.com" || user.email?.toLowerCase().startsWith("jeevan");
-  
   let token = body.token;
-  if (!token && isOwner) {
-    token = process.env.GITHUB_TOKEN || process.env.GITHUB_TEST_TOKEN;
-  }
 
   if (!token) {
     return NextResponse.json(
