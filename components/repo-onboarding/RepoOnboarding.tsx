@@ -143,11 +143,26 @@ export function RepoOnboarding() {
     setLoading(true);
     try {
       const supabase = getSupabaseBrowserClient();
+      
+      // Auto-unlink any stale GitHub identity if it is already in Supabase Auth
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        const githubIdentity = user?.identities?.find((id) => id.provider === "github");
+        if (githubIdentity) {
+          await supabase.auth.unlinkIdentity(githubIdentity);
+        }
+      } catch (e) {
+        console.warn("Could not check/unlink stale GitHub identity during connect:", e);
+      }
+
       const { data, error } = await supabase.auth.linkIdentity({
         provider: "github",
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          scopes: "repo read:org write:repo_hook"
+          scopes: "repo read:org write:repo_hook",
+          queryParams: {
+            prompt: "consent"
+          }
         }
       });
       if (error) throw error;
