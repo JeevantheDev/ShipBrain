@@ -7,3 +7,4 @@ coverage
 dist
 *.tsbuildinfo
 mockups
+.vercel

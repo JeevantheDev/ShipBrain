@@ -230,8 +230,14 @@ export function PendingDeployQueue() {
   function stageCopy(item: PendingDeploy) {
     switch (item.stage) {
       case "awaiting_preview":
+        if (item.featureCount && item.featureCount > 1) {
+          return `${item.featureCount} features merged to develop. Click Start Preview to deploy all to Cloudflare Pages.`;
+        }
         return "Feature merged to develop. Click Start Preview to deploy to Cloudflare Pages.";
       case "preview_deploying":
+        if (item.featureCount && item.featureCount > 1) {
+          return `Preview deployment for ${item.featureCount} features is in progress. The URL will appear when ready.`;
+        }
         return "Preview deployment is in progress. The URL will appear when ready.";
       case "preview_ready":
         if (item.releasePrNumber && item.releasePrStatus === "merged") {

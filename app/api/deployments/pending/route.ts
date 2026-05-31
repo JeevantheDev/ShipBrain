@@ -134,6 +134,9 @@ export async function GET() {
     // Skip closed/abandoned specs
     if (spec.status === "closed") continue;
 
+    // Skip ShipBrain setup branches - they are repo configuration, not product releases
+    if (spec.branch_name?.startsWith("shipbrain/setup")) continue;
+
     // Determine the current stage
     let stage: string;
     let queueType: "develop" | "production";
@@ -427,24 +430,29 @@ export async function GET() {
     });
   }
 
-  // Consolidate preview_ready items by repo - ONE release PR per repo includes all features
-  const previewReadyByRepo = new Map<string, any[]>();
+  // Consolidate develop queue items by repo and stage
+  // This prevents duplicate "Start preview deploy" buttons for the same repo
+  const developByRepoAndStage = new Map<string, any[]>();
   const otherItems: any[] = [];
 
   for (const item of queue) {
-    if (item.stage === "preview_ready" && item.queueType === "develop") {
-      const existing = previewReadyByRepo.get(item.repo) ?? [];
+    // Consolidate develop queue items (awaiting_preview, preview_deploying, preview_ready) by repo
+    if (item.queueType === "develop" && ["awaiting_preview", "preview_deploying", "preview_ready"].includes(item.stage)) {
+      const key = `${item.repo}:${item.stage}`;
+      const existing = developByRepoAndStage.get(key) ?? [];
       existing.push(item);
-      previewReadyByRepo.set(item.repo, existing);
+      developByRepoAndStage.set(key, existing);
     } else {
       otherItems.push(item);
     }
   }
 
-  // Create consolidated items for preview_ready repos
+  // Create consolidated items for each repo/stage combination
   const consolidatedQueue: any[] = [...otherItems];
 
-  for (const [repo, features] of previewReadyByRepo) {
+  for (const [key, features] of developByRepoAndStage) {
+    const [repo, stage] = key.split(":");
+
     // Sort features by mergedAt (most recent first)
     features.sort((a, b) => new Date(b.mergedAt ?? b.updatedAt).getTime() - new Date(a.mergedAt ?? a.updatedAt).getTime());
 
@@ -461,11 +469,15 @@ export async function GET() {
     consolidatedQueue.push({
       id: mostRecent.id,
       queueType: "develop",
-      stage: "preview_ready",
+      stage,
       prNumber: mostRecent.prNumber,
       prUrl: mostRecent.prUrl,
       title: featureCount > 1
-        ? `${featureCount} features ready for release`
+        ? stage === "awaiting_preview"
+          ? `${featureCount} features awaiting preview`
+          : stage === "preview_deploying"
+            ? `${featureCount} features deploying`
+            : `${featureCount} features ready for release`
         : mostRecent.title,
       repo,
       branchName: mostRecent.branchName,
