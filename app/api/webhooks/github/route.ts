@@ -369,17 +369,31 @@ export async function POST(request: Request) {
         // If no existing spec was updated, create one for this PR
         // This handles PRs created outside ShipBrain or when spec save failed
         if (updated === 0 && (nextStatus === "merged" || isReleasePromotionPr)) {
-          // Find the user who owns this repo
-          const { data: repoOwner } = await supabase
-            .from("repos")
-            .select("user_id")
-            .eq("full_name", repoFullName)
+          // First check if a spec already exists with this PR number to prevent duplicates
+          const { data: existingSpec } = await supabase
+            .from("specs")
+            .select("id")
+            .eq("repo_full_name", repoFullName)
+            .eq("pr_number", pullRequest.number)
             .maybeSingle();
 
-          if (repoOwner?.user_id) {
-            const { data: newSpec, error: insertError } = await supabase
-              .from("specs")
-              .insert({
+          if (existingSpec) {
+            // Spec already exists, just update it instead of creating a duplicate
+            updated = 1;
+            syncedSpecId = existingSpec.id;
+            console.log(`Spec ${existingSpec.id} already exists for PR #${pullRequest.number}, skipping creation`);
+          } else {
+            // Find the user who owns this repo
+            const { data: repoOwner } = await supabase
+              .from("repos")
+              .select("user_id")
+              .eq("full_name", repoFullName)
+              .maybeSingle();
+
+            if (repoOwner?.user_id) {
+              const { data: newSpec, error: insertError } = await supabase
+                .from("specs")
+                .insert({
                 user_id: repoOwner.user_id,
                 raw_spec: pullRequest.body ?? pullRequest.title ?? "",
                 decomposed_tasks: { prTitle: pullRequest.title },
@@ -418,6 +432,7 @@ export async function POST(request: Request) {
                 });
               if (notifError) console.error("notification creation failed:", notifError);
             }
+          }
           }
         }
       } else {
