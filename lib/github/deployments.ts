@@ -34,7 +34,8 @@ export async function dispatchCloudflareProductionDeploy(input: DispatchCloudfla
     // Only add optional inputs for the new workflow
     if (isNewWorkflow) {
       inputs.is_hotfix = input.isHotfix ? "true" : "false";
-      inputs.reverse_sync = input.reverseSync !== false ? "true" : "false";
+      // Note: reverse_sync input was removed from the workflow.
+      // Reverse sync PRs are now created by ShipBrain backend using user's GitHub token.
     }
 
     try {

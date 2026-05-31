@@ -578,11 +578,28 @@ export async function POST(request: Request) {
 
       // Handle reverse sync PR merge (main → develop sync after hotfix)
       if (nextStatus === "merged") {
+        const mergedAt = pullRequest.merged_at ?? new Date().toISOString();
+
+        // Update incidents table
         await supabase
           .from("incidents")
           .update({
             reverse_sync_pr_status: "merged",
-            reverse_sync_merged_at: pullRequest.merged_at ?? new Date().toISOString(),
+            reverse_sync_merged_at: mergedAt,
+            updated_at: new Date().toISOString()
+          })
+          .eq("repo_full_name", repoFullName)
+          .eq("reverse_sync_pr_number", pullRequest.number);
+
+        // Also update release_traces table for hotfix traces
+        await supabase
+          .from("release_traces")
+          .update({
+            reverse_sync_status: "merged",
+            status: "completed",
+            current_phase: "live",
+            pending_action: null,
+            completed_at: mergedAt,
             updated_at: new Date().toISOString()
           })
           .eq("repo_full_name", repoFullName)
