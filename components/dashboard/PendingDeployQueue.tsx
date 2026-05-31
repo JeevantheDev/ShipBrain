@@ -2,7 +2,7 @@
 
 import { Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { InputModal } from "@/components/ui/InputModal";
 
 type IncludedFeature = {
@@ -55,28 +55,13 @@ export function PendingDeployQueue() {
   const [redeployLoading, setRedeployLoading] = useState<string | null>(null);
   const [productionDeployTarget, setProductionDeployTarget] = useState<PendingDeploy | null>(null);
 
-  useEffect(() => {
-    void loadPending();
-    
-    // Determine if any item is actively deploying
-    const hasActiveDeployments = pending.some(
-      item => item.stage === "preview_deploying" || item.stage === "deploying"
-    );
-    const intervalTime = hasActiveDeployments ? 5000 : 20000;
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isVisibleRef = useRef(true);
 
-    const interval = window.setInterval(() => void loadPending(), intervalTime);
-    return () => window.clearInterval(interval);
-  }, [pending]);
+  const loadPendingCallback = useCallback(async () => {
+    // Skip if page is not visible
+    if (!isVisibleRef.current) return;
 
-  useEffect(() => {
-    const handleRefetch = () => {
-      void loadPending();
-    };
-    window.addEventListener("shipbrain-refetch", handleRefetch);
-    return () => window.removeEventListener("shipbrain-refetch", handleRefetch);
-  }, []);
-
-  async function loadPending() {
     try {
       const response = await fetch("/api/deployments/pending", { cache: "no-store" });
       const json = await response.json();
@@ -88,7 +73,70 @@ export function PendingDeployQueue() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  // Initial load on mount only
+  useEffect(() => {
+    void loadPendingCallback();
+  }, [loadPendingCallback]);
+
+  // Optimized polling - only poll when page is visible, with reasonable intervals
+  useEffect(() => {
+    const hasActiveDeployments = pending.some(
+      item => item.stage === "preview_deploying" || item.stage === "deploying"
+    );
+    // 15s when active deployments, 60s otherwise (reduced server load)
+    const intervalTime = hasActiveDeployments ? 15000 : 60000;
+
+    // Clear existing interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+
+    // Only start polling if page is visible
+    if (isVisibleRef.current) {
+      intervalRef.current = setInterval(() => void loadPendingCallback(), intervalTime);
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [pending.length, loadPendingCallback]); // Only re-evaluate when item count changes
+
+  // Pause polling when page is hidden
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      isVisibleRef.current = document.visibilityState === "visible";
+
+      if (isVisibleRef.current) {
+        // Resume polling when page becomes visible
+        void loadPendingCallback();
+      } else {
+        // Stop polling when page is hidden
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [loadPendingCallback]);
+
+  useEffect(() => {
+    const handleRefetch = () => {
+      void loadPendingCallback();
+    };
+    window.addEventListener("shipbrain-refetch", handleRefetch);
+    return () => window.removeEventListener("shipbrain-refetch", handleRefetch);
+  }, [loadPendingCallback]);
+
+  // Use loadPendingCallback for manual refreshes too
+  const loadPending = loadPendingCallback;
 
   async function refreshSpec(specId: string) {
     setRefreshing(specId);
