@@ -868,20 +868,6 @@ export default function CiPage() {
                   {selected.deploymentStatus === "approved" && <span className="status-pill passed"><span className="dot"></span>Production approved</span>}
                   {selected.deploymentStatus === "rejected" && selectedHasRejectionAudit && <span className="status-pill danger"><span className="dot"></span>Deployment rejected</span>}
                   {selected.releaseTag && <span className="status-pill passed"><span className="dot"></span>Release {selected.releaseTag}</span>}
-                  {selected.releaseStatus && (
-                    <span className={`status-pill ${selected.releaseStatus === "failed" ? "danger" : selected.releaseStatus === "deployed" ? "passed" : ""}`}>
-                      <span className="dot"></span>
-                      {selected.releaseStatus === "release_pr_open"
-                        ? "Release PR open"
-                        : selected.releaseStatus === "deploying"
-                          ? "Release in progress"
-                          : selected.releaseStatus === "deployed"
-                            ? "Production deployed"
-                            : selected.releaseStatus === "failed"
-                              ? "Release failed"
-                              : selected.releaseStatus}
-                    </span>
-                  )}
                   {selected.isReleasePromotionPr && <span className="status-pill"><span className="dot"></span>Release gate</span>}
                 </div>
 

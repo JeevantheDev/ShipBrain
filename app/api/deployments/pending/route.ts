@@ -348,8 +348,9 @@ export async function GET() {
       continue; // Unknown base branch
     }
 
-    // Only real release promotion / direct-main rows enter the production lane.
-    if (spec.release_status === "pending_deploy" && spec.base_branch === "main") {
+    // Specs with release_status === "pending_deploy" should show in production queue
+    // This handles feature specs whose release PR has been merged
+    if (spec.release_status === "pending_deploy" && spec.release_pr_status === "merged") {
       queueType = "production";
       stage = "pending_production_deploy";
     }
