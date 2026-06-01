@@ -52,10 +52,10 @@ ShipBrain implements a single design pattern used everywhere: **the approval gat
 ```mermaid
 pie title Where Engineering Time Goes
     "Writing Code" : 25
-    "Reading Tickets & Planning" : 20
-    "Waiting for CI & Debugging" : 25
+    "Reading Tickets and Planning" : 20
+    "Waiting for CI and Debugging" : 25
     "Deployment Coordination" : 15
-    "Incident Response & Post-mortems" : 15
+    "Incident Response and Postmortems" : 15
 ```
 
 Engineers spend **75% of their time** on mechanical tasks:
@@ -189,10 +189,10 @@ sequenceDiagram
     participant GH as GitHub
 
     E->>UI: Paste ticket/spec
-    E->>UI: Select repository & branches
+    E->>UI: Select repository and branches
     UI->>AI: Decompose spec
     AI-->>UI: Task list + scaffold plan
-    E->>UI: Review & edit tasks
+    E->>UI: Review and edit tasks
     E->>UI: Click "Generate PR"
     UI->>UI: Show approval gate (3s countdown)
     E->>UI: Confirm
@@ -206,7 +206,7 @@ sequenceDiagram
 **Features:**
 - AI-powered ticket decomposition
 - Code scaffold generation
-- PR title & reviewer suggestions
+- PR title and reviewer suggestions
 - Developer handoff documents
 - PR recipe templates (feature, bugfix, hotfix, release)
 - Editable task list before commit
@@ -322,7 +322,7 @@ flowchart TB
         G -->|Yes| H[Hotfix Branch Created]
         H --> I[Hotfix PR Opened]
         I --> J{Approve Hotfix?}
-        J -->|Yes| K[Merge & Deploy]
+        J -->|Yes| K[Merge and Deploy]
         J -->|No| I
     end
 
@@ -380,9 +380,16 @@ flowchart LR
     end
 
     A --> G
-    B & C & D & E & F --> G
+    B --> G
+    C --> G
+    D --> G
+    E --> G
+    F --> G
     G --> H
-    H --> I & J & K & L
+    H --> I
+    H --> J
+    H --> K
+    H --> L
 ```
 
 **Quick Prompts:**
@@ -471,8 +478,14 @@ flowchart TB
     TG --> TG_WH --> TGT
 
     SBC --> MODEL
-    TGT --> SD & IA & PM & CS
-    SD & IA & PM & CS --> MODEL
+    TGT --> SD
+    TGT --> IA
+    TGT --> PM
+    TGT --> CS
+    SD --> MODEL
+    IA --> MODEL
+    PM --> MODEL
+    CS --> MODEL
 ```
 
 **Why Unified Architecture?**
@@ -679,9 +692,12 @@ flowchart TB
         N2[In-App Notification]
     end
 
-    GH1 & GH2 & GH3 --> WH
+    GH1 --> WH
+    GH2 --> WH
+    GH3 --> WH
     WH --> P1 --> P2 --> P3 --> P4
-    P3 --> N1 & N2
+    P3 --> N1
+    P3 --> N2
 ```
 
 ---
