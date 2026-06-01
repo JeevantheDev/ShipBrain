@@ -137,7 +137,7 @@ flowchart TB
         GH[GitHub API]
         CF[Cloudflare Pages]
         TG[Telegram Bot]
-        LLM[LLM Providers<br/>Azure AI Foundry / Claude / GPT]
+        LLM[Microsoft Azure AI Foundry<br/>GPT-4.1-mini]
     end
 
     subgraph "Data Layer"
@@ -166,8 +166,7 @@ flowchart TB
 | Styling | CSS Modules, CSS Variables |
 | Backend | Next.js API Routes, Server Actions |
 | Database | Supabase (PostgreSQL + Realtime + Auth) |
-| **AI (Primary)** | **Microsoft Azure AI Foundry** (GPT-4.1-mini) via LangChain |
-| AI (Fallback) | Anthropic Claude, OpenAI GPT-4.1-mini |
+| **AI** | **Microsoft Azure AI Foundry** (GPT-4.1-mini) via LangChain |
 | GitHub | Octokit, GitHub Actions, Webhooks |
 | Deployment | Cloudflare Pages (Preview), Vercel (Production) |
 | Notifications | Telegram Bot API |
@@ -600,7 +599,7 @@ journey
 
 ### 8.1 AI Model Architecture
 
-ShipBrain uses **Microsoft Azure AI Foundry** as the default LLM provider, with fallback support for other providers.
+ShipBrain uses **Microsoft Azure AI Foundry** with **GPT-4.1-mini** as its AI provider.
 
 ```mermaid
 flowchart TB
@@ -619,10 +618,8 @@ flowchart TB
         MF[getModel Function<br/>model.ts]
     end
 
-    subgraph "LLM Providers"
-        AF[Microsoft Azure AI Foundry<br/>DEFAULT]
-        C[Claude · Anthropic]
-        G[GPT-4.1-mini · OpenAI]
+    subgraph "Microsoft Azure AI Foundry"
+        AF[GPT-4.1-mini<br/>Enterprise LLM]
     end
 
     CHAT --> SC
@@ -630,9 +627,7 @@ flowchart TB
     SC --> MF
     TOOLS --> CHAINS
     CHAINS --> MF
-    MF -->|default| AF
-    MF -->|fallback| C
-    MF -->|fallback| G
+    MF --> AF
 ```
 
 **Unified AI Backend:**
@@ -640,26 +635,18 @@ flowchart TB
 - All AI chains (spec decomposition, incident analysis, postmortem generation) share the same model
 - Seamless experience across web and mobile (Telegram)
 
-**Provider Priority:**
-1. **Microsoft Azure AI Foundry** (default) - Enterprise-grade, hackathon theme requirement
-2. **Anthropic Claude** - First fallback if Foundry not configured
-3. **OpenAI GPT-4.1-mini** - Second fallback
+**AI Provider:**
+- **Microsoft Azure AI Foundry** with **GPT-4.1-mini** deployment
+- Enterprise-grade, secure, and scalable
+- Meets hackathon theme requirement for AI-Powered Production Functions
 
 **Environment Variables:**
 ```bash
-# Microsoft Azure AI Foundry (DEFAULT - Hackathon Theme)
+# Microsoft Azure AI Foundry (Hackathon Theme)
 LLM_PROVIDER=microsoft_foundry
 AZURE_AI_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com
 AZURE_AI_FOUNDRY_API_KEY=...
 AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4.1-mini
-
-# Alternative: Anthropic Claude
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Alternative: OpenAI GPT-4.1-mini
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
 ```
 
 ---
@@ -982,7 +969,7 @@ erDiagram
 | Metric | Target |
 |--------|--------|
 | End-to-end spec → production | Complete in live demo |
-| Model switching | Azure AI Foundry → Claude → GPT-4.1-mini with .env only |
+| Azure AI Foundry | GPT-4.1-mini powering all AI features |
 | Incident simulation | Alert → analysis → hotfix → post-mortem |
 | Approval gate UX | Zero confusion for judges |
 | Telegram notifications | Real-time during demo |
@@ -1045,15 +1032,11 @@ NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
 
-# AI Provider - Microsoft Azure AI Foundry (DEFAULT)
+# AI Provider - Microsoft Azure AI Foundry
 LLM_PROVIDER=microsoft_foundry
 AZURE_AI_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com
 AZURE_AI_FOUNDRY_API_KEY=...
 AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4.1-mini
-
-# Fallback AI Providers (optional)
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
 
 # GitHub Integration
 GITHUB_APP_ID=...
