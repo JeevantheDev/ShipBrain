@@ -216,29 +216,37 @@ sequenceDiagram
 
 ### Pillar 2: CI Monitor & Deployment Gating
 
-Real-time CI monitoring with gated deployment workflows for preview and production.
+Real-time CI monitoring with **Deployment Queue** management for preview and production.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Queued: CI Triggered
-    Queued --> Running: Workflow Started
-    Running --> Success: All Checks Pass
-    Running --> Failed: Check Failed
+flowchart TB
+    subgraph "CI Monitoring"
+        A[GitHub Actions Webhook] --> B[CI Run Created]
+        B --> C{Status?}
+        C -->|Running| D[In Progress]
+        C -->|Success| E[Ready for Deploy]
+        C -->|Failed| F[Needs Fix]
+    end
 
-    Failed --> Running: Engineer Fixes Code
+    subgraph "Deployment Queue"
+        E --> G[Preview Queue]
+        E --> H[Production Queue]
+        G --> I[Deploy to Cloudflare Preview]
+        H --> J{Manager Approval}
+        J -->|Approved| K[Deploy to Cloudflare Production]
+        J -->|Rejected| L[Cancelled]
+    end
 
-    Success --> DeployGate: Approval Required
-    DeployGate --> PreviewDeploy: Deploy Preview
-    PreviewDeploy --> ReleasePR: Create Release PR
-    ReleasePR --> ProdGate: Manager Approval
-    ProdGate --> ProdDeploy: Deploy Production
-    ProdDeploy --> [*]: Live
+    style E fill:#059669,color:#fff
+    style F fill:#dc2626,color:#fff
+    style I fill:#f97316,color:#fff
+    style K fill:#7c3aed,color:#fff
 ```
 
 **Features:**
 - Real-time workflow status via Supabase Realtime
+- **Deployment Queue** with separate preview/production lanes
 - Deploy button locked until CI green
-- Separate preview/production deployment queues
 - Environment classification (PROD/DEV/CI)
 - Deployment audit trail with approval notes
 - Linked incident hotfix tracking
@@ -275,10 +283,10 @@ flowchart LR
 
     J --> L[Completed]
 
-    style A fill:#1f2937
-    style E fill:#065f46
-    style J fill:#7c3aed
-    style L fill:#059669
+    style A fill:#1f2937,color:#fff
+    style E fill:#065f46,color:#fff
+    style J fill:#7c3aed,color:#fff
+    style L fill:#059669,color:#fff
 ```
 
 **Release Trace States:**
@@ -333,8 +341,8 @@ flowchart TB
         M --> N[Incident Resolved]
     end
 
-    style A fill:#dc2626
-    style N fill:#059669
+    style A fill:#dc2626,color:#fff
+    style N fill:#059669,color:#fff
 ```
 
 **Post-Mortem Sections (Auto-Generated):**
@@ -437,8 +445,8 @@ flowchart TB
         O --> P[Rollback Deploy]
     end
 
-    style F fill:#f97316
-    style M fill:#7c3aed
+    style F fill:#f97316,color:#fff
+    style M fill:#7c3aed,color:#fff
 ```
 
 **Deployment Flow:**
@@ -455,18 +463,18 @@ Both the Web Chat interface and Telegram Bot share the same AI backend, providin
 ```mermaid
 flowchart TB
     subgraph "User Touchpoints"
-        WEB[Web Chat Interface<br/>/chat page]
-        TG[Telegram Bot<br/>@ShipBrainBot]
+        WEB[Web Chat Interface]
+        TG[Telegram Bot]
     end
 
     subgraph "API Layer"
-        CHAT_API[/api/chat/stream]
-        TG_WH[/api/telegram/webhook]
+        CHAT_API[Chat Stream API]
+        TG_WH[Telegram Webhook]
     end
 
     subgraph "Shared AI Core"
-        SBC[answerShipBrainQuestion<br/>shipbrain-chat.ts]
-        TGT[runTelegramCommand<br/>telegram/tools.ts]
+        SBC[ShipBrain Chat Handler]
+        TGT[Telegram Command Handler]
     end
 
     subgraph "AI Chains"
@@ -477,11 +485,13 @@ flowchart TB
     end
 
     subgraph "Azure AI Foundry"
-        MODEL[getModel<br/>GPT-4.1-mini via Foundry]
+        MODEL[GPT-4.1-mini]
     end
 
-    WEB --> CHAT_API --> SBC
-    TG --> TG_WH --> TGT
+    WEB --> CHAT_API
+    CHAT_API --> SBC
+    TG --> TG_WH
+    TG_WH --> TGT
 
     SBC --> MODEL
     TGT --> SD
