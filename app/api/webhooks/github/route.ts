@@ -348,6 +348,9 @@ export async function POST(request: Request) {
         pullRequest.head?.ref === "develop" &&
         pullRequest.base?.ref === "main";
 
+      // ShipBrain setup PRs should not create specs or trigger deployments
+      const isSetupPr = pullRequest.head?.ref?.startsWith("shipbrain/setup");
+
       if (isReleasePromotionPr) {
         if (nextStatus === "closed") {
           await dissociateFeaturesFromRelease(repoFullName, pullRequest.number).catch((err) => console.error("Error dissociating features:", err));
@@ -437,8 +440,8 @@ export async function POST(request: Request) {
               updated_at: new Date().toISOString()
             };
 
-      // Skip standard update for release promotion PRs (already handled above)
-      if (prUpdate && !isReleasePromotionPr) {
+      // Skip standard update for release promotion PRs (already handled above) and setup PRs
+      if (prUpdate && !isReleasePromotionPr && !isSetupPr) {
         // First try to update existing spec by pr_number
         let { data, error } = await supabase
           .from("specs")
@@ -471,7 +474,8 @@ export async function POST(request: Request) {
 
         // If no existing spec was updated, create one for this PR
         // This handles PRs created outside ShipBrain or when spec save failed
-        if (updated === 0 && (nextStatus === "merged" || isReleasePromotionPr)) {
+        // Skip setup PRs - they are for ShipBrain configuration, not product releases
+        if (updated === 0 && (nextStatus === "merged" || isReleasePromotionPr) && !isSetupPr) {
           // First check if a spec already exists with this PR number to prevent duplicates
           const { data: existingSpec } = await supabase
             .from("specs")

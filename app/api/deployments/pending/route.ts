@@ -80,6 +80,11 @@ export async function GET() {
   for (const rawSpec of deduplicatedSpecs) {
     const spec = { ...rawSpec };
 
+    // Skip ShipBrain setup specs - they are for configuration, not deployments
+    if (spec.branch_name?.startsWith("shipbrain/setup")) {
+      continue;
+    }
+
     if (spec.pr_number && spec.repo_full_name && ["draft_created", "pending_pr"].includes(spec.status)) {
       try {
         const { owner, repo } = splitRepo(spec.repo_full_name);

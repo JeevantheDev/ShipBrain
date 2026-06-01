@@ -886,6 +886,11 @@ export async function getPendingDeployments(user: TelegramUser) {
   const otherItems: string[] = [];
 
   for (const spec of data ?? []) {
+    // Skip ShipBrain setup specs - they are for configuration, not deployments
+    if (spec.branch_name?.startsWith("shipbrain/setup")) {
+      continue;
+    }
+
     const title = (spec.decomposed_tasks as { prTitle?: string } | null)?.prTitle ?? spec.raw_spec ?? `PR #${spec.pr_number}`;
     const id = shortId(spec.id);
 
