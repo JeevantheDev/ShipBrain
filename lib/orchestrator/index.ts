@@ -118,6 +118,8 @@ export async function createOrUpdateTrace(input: TraceInput) {
   };
 
   let trace: any = null;
+
+  // First try to find by draft_pr_number with type match
   if (input.draftPrNumber) {
     const existing = await db
       .from("release_traces")
@@ -127,7 +129,21 @@ export async function createOrUpdateTrace(input: TraceInput) {
       .eq("type", type)
       .maybeSingle();
     trace = existing.data;
+
+    // If not found with type match, try without type constraint (trace might have been created with different type)
+    if (!trace) {
+      const anyType = await db
+        .from("release_traces")
+        .select("*")
+        .eq("repo_full_name", input.repoFullName)
+        .eq("draft_pr_number", input.draftPrNumber)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      trace = anyType.data;
+    }
   }
+
   if (!trace && input.releasePrNumber) {
     const existing = await db
       .from("release_traces")
@@ -137,7 +153,21 @@ export async function createOrUpdateTrace(input: TraceInput) {
       .eq("type", type)
       .maybeSingle();
     trace = existing.data;
+
+    // Try without type constraint
+    if (!trace) {
+      const anyType = await db
+        .from("release_traces")
+        .select("*")
+        .eq("repo_full_name", input.repoFullName)
+        .eq("release_pr_number", input.releasePrNumber)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      trace = anyType.data;
+    }
   }
+
   if (!trace && input.specId) {
     const existing = await db
       .from("release_traces")
@@ -146,7 +176,20 @@ export async function createOrUpdateTrace(input: TraceInput) {
       .eq("type", type)
       .maybeSingle();
     trace = existing.data;
+
+    // Try without type constraint
+    if (!trace) {
+      const anyType = await db
+        .from("release_traces")
+        .select("*")
+        .eq("spec_id", input.specId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      trace = anyType.data;
+    }
   }
+
   if (!trace && input.incidentId) {
     const existing = await db
       .from("release_traces")
@@ -157,10 +200,23 @@ export async function createOrUpdateTrace(input: TraceInput) {
     trace = existing.data;
   }
 
+  // Add merged_to_develop tracking when status is merged_develop
+  const updatePayload = {
+    ...payload,
+    spec_id: input.specId ?? trace?.spec_id ?? null,
+    ...(status === "merged_develop" && input.details?.mergeCommitSha ? {
+      merged_to_develop: {
+        sha: input.details.mergeCommitSha,
+        timestamp: new Date().toISOString(),
+        prNumber: input.draftPrNumber
+      }
+    } : {})
+  };
+
   const result = trace
     ? await db
         .from("release_traces")
-        .update({ ...payload, spec_id: input.specId ?? trace.spec_id ?? null })
+        .update(updatePayload)
         .eq("id", trace.id)
         .select("*")
         .single()

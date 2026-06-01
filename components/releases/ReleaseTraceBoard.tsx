@@ -43,6 +43,7 @@ type Trace = {
   preview_deployment?: { url?: string; status?: string; runId?: string | number; run_id?: string | number; workflowRunId?: string | number } | null;
   production_deployment?: { url?: string; status?: string; tag?: string; releaseTag?: string; runId?: string | number; run_id?: string | number; workflowRunId?: string | number; isRollback?: boolean } | null;
   incident_id?: string | null;
+  spec_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   is_rollback?: boolean;
@@ -415,6 +416,7 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
                 </div>
                 <TraceActions
                   traceId={selected.id}
+                  specId={selected.spec_id}
                   pendingType={selected.pending_action?.type ?? null}
                   status={selected.status}
                   repoFullName={selected.repo_full_name}

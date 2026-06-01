@@ -53,7 +53,11 @@ export function pendingActionForTrace(trace: TraceLike): PendingAction | null {
         actor: "developer"
       };
     case "merged_develop":
-      return null;
+      return {
+        type: "deploy_preview",
+        description: "PR merged to develop. Deploy to preview environment.",
+        actor: "developer"
+      };
     case "preview_live":
       if (isProdHotfix) return null;
       return {

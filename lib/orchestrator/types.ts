@@ -20,6 +20,7 @@ export type PendingAction = {
     | "review_pr"
     | "approve_pr"
     | "merge_to_develop"
+    | "deploy_preview"
     | "create_release_pr"
     | "approve_release"
     | "deploy_to_production"
