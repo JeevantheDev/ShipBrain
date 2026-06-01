@@ -286,6 +286,26 @@ textarea {
   background: var(--brand);
 }
 
+@keyframes sidebar-dot-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.6;
+  }
+}
+
+.sidebar-env-dot.pulse {
+  animation: sidebar-dot-pulse 1.5s infinite ease-in-out;
+}
+
+
 .sidebar-env-copy {
   min-width: 0;
   display: grid;

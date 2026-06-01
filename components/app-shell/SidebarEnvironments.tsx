@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ExternalLink, GitPullRequest, RefreshCw, Rocket } from "lucide-react";
+import { ChevronDown, ExternalLink, GitPullRequest, RefreshCw, Rocket, Clock } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 type Environment = {
@@ -72,7 +72,7 @@ export function SidebarEnvironments() {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [pending, setPending] = useState<PendingDeploy[]>([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState({ environments: false, pending: false });
+  const [open, setOpen] = useState({ environments: false, pending: false, pendingDeploys: false });
 
   async function loadSidebarData() {
     try {
@@ -110,7 +110,24 @@ export function SidebarEnvironments() {
     [pending]
   );
 
-  if (!loading && visible.length === 0 && visiblePending.length === 0) return null;
+  const visibleDeploys = useMemo(
+    () =>
+      pending
+        .filter((item) =>
+          [
+            "awaiting_preview",
+            "preview_deploying",
+            "preview_ready",
+            "pending_production_deploy",
+            "deploying",
+            "deploy_failed"
+          ].includes(item.stage)
+        )
+        .slice(0, 4),
+    [pending]
+  );
+
+  if (!loading && visible.length === 0 && visiblePending.length === 0 && visibleDeploys.length === 0) return null;
 
   return (
     <div className="sidebar-env-block" aria-label="ShipBrain quick status">
@@ -182,6 +199,40 @@ export function SidebarEnvironments() {
                 {visiblePending.map((item) => (
                   <a key={`${item.id}-${item.stage}`} className="sidebar-env-link" href={pendingHref(item)} target={pendingHref(item).startsWith("http") ? "_blank" : undefined} rel="noreferrer">
                     <span className={`sidebar-env-dot ${item.queueType}`} aria-hidden="true" />
+                    <span className="sidebar-env-copy">
+                      <strong>{item.prNumber ? `PR #${item.prNumber}` : item.queueType === "production" ? "Production" : "Preview"}</strong>
+                      <small>{shortRepo(item.repo)} · {pendingStageLabel(item)}</small>
+                    </span>
+                    <ExternalLink size={12} />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {visibleDeploys.length > 0 ? (
+          <section className="sidebar-accordion-section">
+            <button
+              className="sidebar-accordion-trigger"
+              type="button"
+              aria-expanded={open.pendingDeploys}
+              onClick={() => setOpen((prev) => ({ ...prev, pendingDeploys: !prev.pendingDeploys }))}
+            >
+              <span>
+                <Clock size={12} />
+                Deploy Queue
+              </span>
+              <span className="sidebar-accordion-meta">
+                {visibleDeploys.length}
+                <ChevronDown size={13} className={open.pendingDeploys ? "open" : ""} />
+              </span>
+            </button>
+            {open.pendingDeploys ? (
+              <div className="sidebar-env-list sidebar-pending-list">
+                {visibleDeploys.map((item) => (
+                  <a key={`${item.id}-${item.stage}`} className="sidebar-env-link" href={pendingHref(item)} target={pendingHref(item).startsWith("http") ? "_blank" : undefined} rel="noreferrer">
+                    <span className={`sidebar-env-dot ${item.queueType} ${(item.stage === "preview_deploying" || item.stage === "deploying") ? "pulse" : ""}`} aria-hidden="true" />
                     <span className="sidebar-env-copy">
                       <strong>{item.prNumber ? `PR #${item.prNumber}` : item.queueType === "production" ? "Production" : "Preview"}</strong>
                       <small>{shortRepo(item.repo)} · {pendingStageLabel(item)}</small>

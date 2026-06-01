@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { RollbackSelector } from "@/components/releases/RollbackSelector";
 
 type TraceActionsProps = {
@@ -15,10 +15,7 @@ type TraceActionsProps = {
 };
 
 function generateReleaseTag() {
-  const now = new Date();
-  const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-  const time = now.toISOString().slice(11, 16).replace(":", "");
-  return `release-v${date}-${time}`;
+  return "v1.0.0";
 }
 
 export function TraceActions({ traceId, specId, pendingType, status, repoFullName, currentReleaseTag, type }: TraceActionsProps) {
@@ -28,6 +25,20 @@ export function TraceActions({ traceId, specId, pendingType, status, repoFullNam
   const [showRollback, setShowRollback] = useState(false);
   const [showProductionDeploy, setShowProductionDeploy] = useState(false);
   const [releaseTag, setReleaseTag] = useState(generateReleaseTag);
+
+  useEffect(() => {
+    if (showProductionDeploy && repoFullName) {
+      fetch("/api/deployments/pending")
+        .then((res) => res.json())
+        .then((data) => {
+          const matched = data.find((item: any) => item.repo === repoFullName && item.queueType === "production");
+          if (matched && matched.releaseTag) {
+            setReleaseTag(matched.releaseTag);
+          }
+        })
+        .catch(() => null);
+    }
+  }, [showProductionDeploy, repoFullName]);
 
   async function run(action: string) {
     setBusy(action);
@@ -130,7 +141,7 @@ export function TraceActions({ traceId, specId, pendingType, status, repoFullNam
             className="form-input"
             value={releaseTag}
             onChange={(e) => setReleaseTag(e.target.value)}
-            placeholder="e.g., release-v2026.06.01-1200"
+            placeholder="e.g., v1.0.0"
             disabled={Boolean(busy)}
           />
           <div className="deploy-form-actions">

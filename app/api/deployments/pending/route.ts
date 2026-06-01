@@ -3,6 +3,7 @@ import { getOctokit } from "@/lib/github/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getLatestProductionUrl, getPreviewUrlForSha } from "@/lib/cloudflare/client";
 import { createOrUpdateTrace, updateTraceBySpec } from "@/lib/orchestrator";
+import { getNextSemverReleaseTag } from "@/lib/shipbrain/semver";
 
 export const runtime = "nodejs";
 
@@ -76,6 +77,17 @@ export async function GET() {
       // Otherwise keep the existing one (do nothing)
     }
   }
+
+  const nextSemverTagsCache = new Map<string, string>();
+  const getCachedNextSemverTag = async (repoName: string) => {
+    if (!repoName) return "v1.0.0";
+    if (nextSemverTagsCache.has(repoName)) {
+      return nextSemverTagsCache.get(repoName)!;
+    }
+    const tag = await getNextSemverReleaseTag(supabase, repoName);
+    nextSemverTagsCache.set(repoName, tag);
+    return tag;
+  };
 
   for (const rawSpec of deduplicatedSpecs) {
     const spec = { ...rawSpec };
@@ -461,7 +473,7 @@ export async function GET() {
       releasePrNumber: isReleasePromotionSpec ? spec.pr_number : linkedReleasePrNumber,
       releasePrUrl: isReleasePromotionSpec ? spec.pr_url : linkedReleasePrUrl,
       releasePrStatus: isReleasePromotionSpec ? spec.release_pr_status : linkedReleasePrStatus,
-      releaseTag: spec.release_tag,
+      releaseTag: spec.release_tag || await getCachedNextSemverTag(spec.repo_full_name),
       releaseSha: spec.release_sha,
       previewUrl: spec.preview_url,
       previewStatus: spec.preview_status,

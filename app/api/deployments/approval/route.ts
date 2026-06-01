@@ -58,24 +58,107 @@ export async function GET(request: Request) {
   const entityId = url.searchParams.get("entityId");
   const specId = url.searchParams.get("specId");
 
-  let query = db
+  let resolvedSpecId = specId;
+
+  // Resolve the specId from entityId if specId is missing
+  if (!resolvedSpecId && entityId) {
+    const { data: specCheck } = await db
+      .from("specs")
+      .select("id")
+      .eq("id", entityId)
+      .maybeSingle();
+
+    if (specCheck) {
+      resolvedSpecId = specCheck.id;
+    } else {
+      const { data: runCheck } = await db
+        .from("ci_runs")
+        .select("spec_id")
+        .eq("github_run_id", entityId)
+        .maybeSingle();
+
+      if (runCheck?.spec_id) {
+        resolvedSpecId = runCheck.spec_id;
+      }
+    }
+  }
+
+  // 1. Fetch manual approvals/rejections from approval_events
+  let approvalQuery = db
     .from("approval_events")
     .select("id, action, note, metadata, created_at, profiles(github_login, avatar_url)")
-    .order("created_at", { ascending: false })
-    .limit(10);
+    .order("created_at", { ascending: false });
 
-  if (specId) {
-    query = query.or(`metadata->>specId.eq.${specId},and(entity_type.eq.spec,entity_id.eq.${specId})`);
+  if (resolvedSpecId) {
+    approvalQuery = approvalQuery.or(`metadata->>specId.eq.${resolvedSpecId},and(entity_type.eq.spec,entity_id.eq.${resolvedSpecId})`);
   } else if (entityId) {
-    query = query.eq("entity_id", entityId);
+    approvalQuery = approvalQuery.eq("entity_id", entityId);
   }
 
-  const { data, error } = await query;
-  if (error) {
-    return NextResponse.json({ error: "Unable to load deployment audit trail.", detail: error.message }, { status: 500 });
+  const { data: approvals, error: approvalError } = await approvalQuery;
+  if (approvalError) {
+    return NextResponse.json({ error: "Unable to load deployment approvals.", detail: approvalError.message }, { status: 500 });
   }
 
-  return NextResponse.json((data ?? []).map(toAudit));
+  const auditEvents = (approvals ?? []).map(toAudit);
+
+  // 2. Fetch trace events from release_traces + trace_events if specId is resolved
+  let traceAuditEvents: any[] = [];
+  if (resolvedSpecId) {
+    const { data: releaseTraces } = await db
+      .from("release_traces")
+      .select("id")
+      .eq("spec_id", resolvedSpecId);
+
+    if (releaseTraces && releaseTraces.length > 0) {
+      const traceIds = releaseTraces.map((rt: any) => rt.id);
+
+      const { data: events, error: eventsError } = await db
+        .from("trace_events")
+        .select("id, event_type, details, created_at, actor, actor_type, source")
+        .in("trace_id", traceIds);
+
+      if (!eventsError && events) {
+        const ALLOWED_LIFECYCLE_EVENTS = new Set([
+          "trace_created",
+          "pr_merged",
+          "preview_deployed",
+          "release_pr_created",
+          "deployment_succeeded",
+          "deployment_failed",
+          "incident_linked",
+          "hotfix_created",
+          "rollback_initiated",
+          "rollback_deployed",
+          "rollback_failed"
+        ]);
+
+        const filteredEvents = events.filter((e: any) => 
+          ALLOWED_LIFECYCLE_EVENTS.has(e.event_type) || 
+          e.event_type.toLowerCase().includes("rollback")
+        );
+
+        traceAuditEvents = filteredEvents.map((e: any) => ({
+          id: e.id,
+          action: e.event_type,
+          note: e.details?.note || e.details?.notes || e.details?.approvedFor || "",
+          createdAt: e.created_at,
+          metadata: e.details ?? {},
+          actor: e.actor ? {
+            githubLogin: e.actor,
+            avatarUrl: null
+          } : null
+        }));
+      }
+    }
+  }
+
+  // 3. Merge both sources and sort descending by timestamp
+  const unifiedTimeline = [...auditEvents, ...traceAuditEvents].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  return NextResponse.json(unifiedTimeline.slice(0, 20));
 }
 
 export async function POST(request: Request) {

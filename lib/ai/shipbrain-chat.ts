@@ -272,11 +272,11 @@ function executeReadToolFromContext(toolName: ShipBrainToolName, args: Record<st
 
 // ─── Resolve tool args → ChatAction params ─────────────────────────────────────
 
-function resolveWriteToolParams(
+async function resolveWriteToolParams(
   toolName: ShipBrainToolName,
   args: Record<string, any>,
   context: any
-): Record<string, any> {
+): Promise<Record<string, any>> {
   const params: Record<string, any> = {};
 
   switch (toolName) {
@@ -312,11 +312,22 @@ function resolveWriteToolParams(
         // This ensures the same tag is used when the user confirms
         if (args.release_tag) {
           params.releaseTag = args.release_tag;
+        } else if (found?.releaseTag || found?.release_tag) {
+          params.releaseTag = found.releaseTag || found.release_tag;
         } else {
-          const now = new Date();
-          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-          const time = now.toISOString().slice(11, 16).replace(":", "");
-          params.releaseTag = `release-v${date}-${time}`;
+          try {
+            const { getSupabaseAdminClient } = await import("@/lib/supabase/admin");
+            const { getNextSemverReleaseTag } = await import("@/lib/shipbrain/semver");
+            const db = getSupabaseAdminClient();
+            const repoName = context.activeRepo || found?.repo || args.repo || args.repo_full_name;
+            if (repoName) {
+              params.releaseTag = await getNextSemverReleaseTag(db, repoName);
+            } else {
+              params.releaseTag = "v1.0.0";
+            }
+          } catch {
+            params.releaseTag = "v1.0.0";
+          }
         }
       }
       break;
@@ -416,11 +427,21 @@ function resolveWriteToolParams(
             params.baseBranch = baseBranch;
           }
           // If targeting main and no release tag provided, generate a default one
+          // If targeting main and no release tag provided, generate a default one
           if (baseBranch === "main" && !args.release_tag) {
-            const now = new Date();
-            const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-            const incidentPart = found.id?.slice(0, 8) || "fix";
-            params.releaseTag = `hotfix-v${date}-${incidentPart}`;
+            try {
+              const { getSupabaseAdminClient } = await import("@/lib/supabase/admin");
+              const { getNextSemverReleaseTag } = await import("@/lib/shipbrain/semver");
+              const db = getSupabaseAdminClient();
+              const repoName = context.activeRepo || found?.repo_full_name || found?.repo || args.repo;
+              if (repoName) {
+                params.releaseTag = await getNextSemverReleaseTag(db, repoName);
+              } else {
+                params.releaseTag = "v1.0.0";
+              }
+            } catch {
+              params.releaseTag = "v1.0.0";
+            }
           } else if (args.release_tag) {
             params.releaseTag = args.release_tag;
           }
@@ -574,7 +595,7 @@ export async function answerShipBrainQuestion(input: {
 
   // Write tool → resolve params, check for options
   const tool = TOOL_BY_NAME[toolName];
-  const resolvedParams = resolveWriteToolParams(toolName, args, context);
+  const resolvedParams = await resolveWriteToolParams(toolName, args, context);
   const options = resolveActionOptions(toolName, args, context);
   const confirmMsg = generateConfirmation(toolName as any, resolvedParams, context);
 
@@ -764,7 +785,7 @@ export async function streamShipBrainQuestion(input: {
   }
 
   // Write tool → resolve params + options → pending_confirmation
-  const resolvedParams = resolveWriteToolParams(toolName, args, context);
+  const resolvedParams = await resolveWriteToolParams(toolName, args, context);
   const options = resolveActionOptions(toolName, args, context);
   const confirmMsg = generateConfirmation(toolName as any, resolvedParams, context);
 

@@ -53,11 +53,9 @@ export function EnvironmentsWidget() {
   }
 
   function defaultReleaseTag() {
-    const now = new Date();
-    const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-    const time = now.toISOString().slice(11, 19).replace(/:/g, "");
-    return `release-v${date}-${time}`;
+    return "v1.0.0";
   }
+
 
   async function redeployEnvironment(env: Environment, releaseTag?: string) {
     setRedeployingId(env.id);

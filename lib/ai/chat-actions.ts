@@ -13,6 +13,7 @@ import { DEFAULT_SPEC_PR_RECIPES } from "@/lib/spec-recipes";
 import { createReleasePullRequest } from "@/lib/github/pr";
 import { addTraceEvent, associateFeaturesWithRelease, createOrUpdateTrace } from "@/lib/orchestrator";
 import { phaseForStatus } from "@/lib/orchestrator/state-machine";
+import { getNextSemverReleaseTag } from "@/lib/shipbrain/semver";
 
 export type ActionType =
   | "spec_to_pr"
@@ -440,7 +441,7 @@ export async function executeAction(
             ]
           : [];
 
-        const releaseTag = params.releaseTag || trace.release_tag || `release-v${new Date().toISOString().slice(0, 10).replace(/-/g, ".")}-${Date.now().toString().slice(-6)}`;
+        const releaseTag = params.releaseTag || trace.release_tag || await getNextSemverReleaseTag(supabase, repoFullName);
         
         const [owner, repo] = repoFullName.split("/");
         const pr = await createReleasePullRequest({

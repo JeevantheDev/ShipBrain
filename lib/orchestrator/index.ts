@@ -1,5 +1,6 @@
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { pendingActionForTrace, phaseForTraceStatus } from "@/lib/orchestrator/state-machine";
+import { compareSemver } from "@/lib/shipbrain/semver";
 import type { ReleaseTraceStatus, ReleaseTraceType, TraceEventType, TraceSource } from "@/lib/orchestrator/types";
 
 type TraceInput = {
@@ -456,79 +457,97 @@ export async function completeRollback(input: {
   if (rollback && input.success) {
     const now = new Date().toISOString();
 
-    if (rollback.metadata?.sourceSpecId) {
-      await db
-        .from("specs")
-        .update({
-          release_status: "rolled_back",
-          updated_at: now
-        })
-        .eq("id", rollback.metadata.sourceSpecId);
+    // 1. Fetch all specs and traces for this repository to perform a sync
+    const { data: repoSpecs } = await db
+      .from("specs")
+      .select("id, release_tag, release_status")
+      .eq("repo_full_name", rollback.repo_full_name)
+      .not("release_tag", "is", null);
+
+    const { data: repoTraces } = await db
+      .from("release_traces")
+      .select("id, spec_id, status, type, release_pr_number, production_deployment")
+      .eq("repo_full_name", rollback.repo_full_name);
+
+    // 2. Perform SemVer comparison updates on specs
+    if (repoSpecs) {
+      for (const spec of repoSpecs) {
+        if (!spec.release_tag) continue;
+        const isNewer = compareSemver(spec.release_tag, rollback.target_release_tag) > 0;
+        const newStatus = isNewer ? "rolled_back" : "deployed";
+        if (spec.release_status !== newStatus) {
+          await db
+            .from("specs")
+            .update({
+              release_status: newStatus,
+              updated_at: now
+            })
+            .eq("id", spec.id);
+        }
+      }
     }
 
-    if (rollback.spec_id) {
-      await db
-        .from("specs")
-        .update({
-          release_status: "deployed",
-          deployment_url: input.deployUrl ?? rollback.workflow_url ?? null,
-          deployed_at: now,
-          updated_at: now
-        })
-        .eq("id", rollback.spec_id);
+    // 3. Perform SemVer comparison updates on traces
+    if (repoTraces) {
+      for (const trace of repoTraces) {
+        const specOfTrace = repoSpecs?.find(s => s.id === trace.spec_id);
+        const tag = trace.production_deployment?.releaseTag || trace.production_deployment?.tag || specOfTrace?.release_tag;
+        if (!tag) continue;
 
-      const { data: targetTrace } = await db
-        .from("release_traces")
-        .select("*")
-        .eq("spec_id", rollback.spec_id)
-        .maybeSingle();
+        const isNewer = compareSemver(tag, rollback.target_release_tag) > 0;
+        const targetTraceStatus = isNewer ? "rolled_back" : "production_live";
 
-      if (targetTrace && targetTrace.id !== rollback.trace_id) {
-        const targetPatch: TracePatch = {
-          status: "production_live",
-          production_deployment: {
-            ...(targetTrace.production_deployment ?? {}),
-            status: "deployed",
-            url: input.deployUrl ?? targetTrace.production_deployment?.url ?? rollback.workflow_url,
-            releaseTag: rollback.target_release_tag,
-            releaseSha: rollback.target_release_sha,
-            isRollback: true,
+        if (trace.status !== targetTraceStatus) {
+          const productionDeployment = {
+            ...(trace.production_deployment ?? {}),
+            status: isNewer ? "rolled_back" : "deployed",
             timestamp: now
-          }
-        };
+          };
 
-        await db.from("release_traces").update({
-          ...withDerivedState(targetPatch, targetTrace),
-          is_rollback: true,
-          rollback_source_tag: rollback.source_release_tag,
-          rollback_target_tag: rollback.target_release_tag,
-          rollback_metadata: {
-            rollbackId: rollback.id,
-            promotedByRollback: true,
-            workflowUrl: input.deployUrl ?? rollback.workflow_url,
-            completedAt: now
+          if (!isNewer && trace.spec_id === rollback.spec_id) {
+            productionDeployment.url = input.deployUrl ?? rollback.workflow_url ?? productionDeployment.url;
+            productionDeployment.releaseTag = rollback.target_release_tag;
+            productionDeployment.releaseSha = rollback.target_release_sha;
+            productionDeployment.isRollback = true;
           }
-        }).eq("id", targetTrace.id);
 
-        await addTraceEvent({
-          traceId: targetTrace.id,
-          eventType: "rollback_deployed",
-          actor: "github-actions",
-          actorType: "system",
-          source: "github",
-          details: {
-            promotedAsLiveRelease: true,
-            sourceReleaseTag: rollback.source_release_tag,
-            targetReleaseTag: rollback.target_release_tag,
-            deployUrl: input.deployUrl,
-            rollbackId: rollback.id
-          }
-        });
-        await recomputePendingAction(targetTrace.id);
-        if (targetTrace.type === "release") {
-          const { data: updatedTarget } = await db.from("release_traces").select("*").eq("id", targetTrace.id).single();
-          if (updatedTarget) {
-            await propagateReleaseState(db, updatedTarget);
+          await db
+            .from("release_traces")
+            .update({
+              status: targetTraceStatus,
+              production_deployment: productionDeployment,
+              is_rollback: !isNewer && trace.spec_id === rollback.spec_id ? true : undefined,
+              rollback_source_tag: !isNewer && trace.spec_id === rollback.spec_id ? rollback.source_release_tag : undefined,
+              rollback_target_tag: !isNewer && trace.spec_id === rollback.spec_id ? rollback.target_release_tag : undefined,
+              updated_at: now
+            })
+            .eq("id", trace.id);
+
+          await addTraceEvent({
+            traceId: trace.id,
+            eventType: isNewer ? "rollback_deployed" : "status_changed",
+            actor: "github-actions",
+            actorType: "system",
+            source: "github",
+            details: {
+              note: isNewer
+                ? `Marked rolled back since production rolled back to ${rollback.target_release_tag}`
+                : `Restored as active release since production rolled back to ${rollback.target_release_tag}`,
+              targetReleaseTag: rollback.target_release_tag,
+              rollbackId: rollback.id,
+              success: true
+            }
+          });
+
+          await recomputePendingAction(trace.id);
+
+          if (trace.type === "release") {
+            const updatedTrace = {
+              ...trace,
+              status: targetTraceStatus,
+              production_deployment: productionDeployment
+            };
+            await propagateReleaseState(db, updatedTrace);
           }
         }
       }

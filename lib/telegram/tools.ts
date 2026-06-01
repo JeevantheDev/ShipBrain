@@ -1,5 +1,6 @@
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendChatMessage, getOrCreateChatThread } from "@/lib/ai/chat-store";
+import { getNextSemverReleaseTag } from "@/lib/shipbrain/semver";
 import { generateScaffold } from "@/lib/ai/chains/code-scaffold";
 import { analyzeIncident } from "@/lib/ai/chains/incident-analyzer";
 import { generatePostmortem } from "@/lib/ai/chains/postmortem";
@@ -1096,8 +1097,9 @@ export async function approveTraceFromTelegram(user: TelegramUser, token?: strin
     return startPreviewDeployment(user, String(trace.spec_id));
   }
   if (trace.spec_id && (action?.type === "create_release_pr" || trace.status === "preview_live")) {
+    const db = getSupabaseAdminClient();
     const { owner, repo } = splitRepo(trace.repo_full_name);
-    const releaseTag = generateTraceReleaseTag();
+    const releaseTag = await getNextSemverReleaseTag(db, trace.repo_full_name);
     const pr = await createReleasePullRequest({
       owner,
       repo,
@@ -1113,7 +1115,6 @@ export async function approveTraceFromTelegram(user: TelegramUser, token?: strin
         "Created from Telegram. Production deploy still requires the release gate."
       ].join("\n")
     });
-    const db = getSupabaseAdminClient();
     await db.from("specs").update({
       release_tag: releaseTag,
       release_status: "ready_for_prod",
@@ -1542,7 +1543,8 @@ export async function generateTelegramPostmortem(user: TelegramUser, token?: str
 
 async function createReleasePrFromSpec(user: TelegramUser, spec: any) {
   const { owner, repo } = splitRepo(spec.repo_full_name);
-  const releaseTag = generateTraceReleaseTag();
+  const db = getSupabaseAdminClient();
+  const releaseTag = await getNextSemverReleaseTag(db, spec.repo_full_name);
   const title = (spec.decomposed_tasks as { prTitle?: string } | null)?.prTitle ?? spec.raw_spec ?? `PR #${spec.pr_number}`;
 
   const pr = await createReleasePullRequest({
@@ -1562,7 +1564,6 @@ async function createReleasePrFromSpec(user: TelegramUser, spec: any) {
     ].join("\n")
   });
 
-  const db = getSupabaseAdminClient();
   await db.from("specs").update({
     release_tag: releaseTag,
     release_status: "ready_for_prod",
@@ -1721,7 +1722,7 @@ export async function startProductionDeployment(user: TelegramUser, token?: stri
   }
 
   // If no release tag provided, ask for confirmation with default tag
-  const defaultTag = spec.release_tag || generateReleaseTag();
+  const defaultTag = spec.release_tag || await getNextSemverReleaseTag(db, spec.repo_full_name);
   if (!options.releaseTag && !options.redeploy) {
     return [
       "🏷️ *Confirm Release Tag*",

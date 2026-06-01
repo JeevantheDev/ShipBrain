@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { InputModal } from "@/components/ui/InputModal";
+import { TraceTimeline } from "@/components/releases/TraceTimeline";
 
 type CiRun = {
   id: string;
@@ -113,12 +114,9 @@ function safeVercelSettingsUrl(value?: string | null) {
 }
 
 function defaultReleaseTag() {
-  const now = new Date();
-  const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-  const time = now.toISOString().slice(11, 19).replace(/:/g, "");
-  const suffix = Math.random().toString(36).slice(2, 6);
-  return `cart-v${date}-${time}-${suffix}`;
+  return "v1.0.0";
 }
+
 
 export default function CiPage() {
   const searchParams = useSearchParams();
@@ -758,7 +756,7 @@ export default function CiPage() {
                           </span>
                         </div>
                         <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
-                          <span style={{ color: "var(--text-secondary)" }}>{run.repo ?? "GitHub"}</span> · <span style={{ color: "var(--brand)" }}>{run.branch}</span>
+                          <span style={{ color: "var(--text-secondary)" }}>{run.repo ?? "GitHub"}</span> · <span style={{ color: "var(--brand)" }}>{run.releaseTag ? `Release: ${run.releaseTag}` : run.branch}</span>
                           {run.prNumber ? <> · <span style={{ color: "var(--text-secondary)" }}>PR #{run.prNumber}</span></> : ""}
                           {run.updatedAt ? <> · <span style={{ color: "var(--text-muted)" }}>{new Date(run.updatedAt).toLocaleTimeString()}</span></> : ""}
                         </p>
@@ -843,7 +841,7 @@ export default function CiPage() {
                   <div>
                     <strong style={{ fontSize: 14 }}>{selected.title}</strong>
                     <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
-                      {selected.repo ?? "GitHub"} · {selected.branch} · run #{selected.id}
+                      {selected.repo ?? "GitHub"} · {selected.releaseTag ? `Release: ${selected.releaseTag}` : selected.branch} · run #{selected.id}
                     </p>
                     {selected.prNumber ? (
                       <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
@@ -941,6 +939,27 @@ export default function CiPage() {
                     <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 11 }}>Deployed to Cloudflare Pages.</p>
                   </div>
                 ) : null}
+
+                {/* Deployment Audit Trail */}
+                <div style={{ marginTop: 20 }}>
+                  <h4 style={{ margin: "0 0 10px", fontSize: "13px", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-secondary)" }}>
+                    Deployment Audit Trail
+                  </h4>
+                  <div style={{ maxHeight: 250, overflowY: "auto", paddingRight: 4 }}>
+                    <TraceTimeline events={audits.map(audit => ({
+                      id: audit.id,
+                      event_type: audit.action,
+                      actor: audit.actor?.githubLogin ?? "ShipBrain",
+                      source: "audit-trail",
+                      created_at: audit.createdAt,
+                      details: {
+                        note: audit.note,
+                        ...audit.metadata
+                      }
+                    }))} />
+                  </div>
+                </div>
+
 
                 {deploymentMessage && (
                   <div className="success-panel" role="status" style={{ marginTop: 14 }}>
