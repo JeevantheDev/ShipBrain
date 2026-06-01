@@ -4642,6 +4642,27 @@ p {
   transform: translateX(0);
 }
 
+.chat-drawer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--line-muted, #21262d) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-muted, #21262d) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-position: center top;
+  mask-image: radial-gradient(circle at top, rgba(0, 0, 0, 0.7) 10%, transparent 75%);
+  -webkit-mask-image: radial-gradient(circle at top, rgba(0, 0, 0, 0.7) 10%, transparent 75%);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.8;
+}
+
+.chat-drawer > * {
+  position: relative;
+  z-index: 1;
+}
+
 .chat-drawer-head {
   flex: 0 0 auto;
   display: flex;
@@ -4651,7 +4672,9 @@ p {
   min-height: 56px;
   padding: 10px 12px 10px 16px;
   border-bottom: 1px solid var(--line-muted);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .chat-drawer-head > div:first-child {
@@ -4686,28 +4709,6 @@ p {
   flex-direction: column;
   position: relative;
   overflow: hidden;
-}
-
-/* Premium grid background for chat interface */
-.chat-drawer-workspace::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--line-muted, #21262d) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line-muted, #21262d) 1px, transparent 1px);
-  background-size: 80px 80px;
-  background-position: center top;
-  mask-image: radial-gradient(circle at top, rgba(0, 0, 0, 0.7) 10%, transparent 75%);
-  -webkit-mask-image: radial-gradient(circle at top, rgba(0, 0, 0, 0.7) 10%, transparent 75%);
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.8;
-}
-
-.chat-drawer-workspace > * {
-  position: relative;
-  z-index: 1;
 }
 
 /* Override workspace background in drawer to show grid */
@@ -5099,8 +5100,10 @@ p {
   grid-template-columns: minmax(0, 1fr) 42px;
   gap: 10px;
   padding: 14px;
-  border-top: 1px solid var(--line);
-  background: var(--panel);
+  border-top: 1px solid var(--line-muted);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .chat-composer textarea {
@@ -5538,7 +5541,9 @@ p {
 .chat-history-panel {
   flex: 0 0 auto;
   border-bottom: 1px solid var(--line-muted);
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--panel-2) 80%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   max-height: min(50vh, 320px);
   overflow: hidden;
   display: flex;

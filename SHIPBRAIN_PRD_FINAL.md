@@ -19,7 +19,6 @@
 10. [Integration Points](#10-integration-points)
 11. [Database Schema](#11-database-schema)
 12. [API Reference](#12-api-reference)
-13. [Success Metrics](#13-success-metrics)
 
 ---
 
@@ -91,11 +90,10 @@ flowchart LR
     end
 
     subgraph "Move 2: CI Intelligence"
-        F[CI Fails] --> G[AI Explains]
-        G --> H[Fix Suggested]
-        H --> I{CI Green?}
-        I -->|Yes| J{Deploy?}
-        I -->|No| F
+        F[CI Runs] --> G{Status?}
+        G -->|Pass| J{Deploy?}
+        G -->|Fail| H[Fix Required]
+        H --> F
     end
 
     subgraph "Move 3: Release Orchestration"
@@ -732,9 +730,9 @@ flowchart TB
     end
 
     subgraph "ShipBrain Webhooks"
-        WH[/api/webhooks/github]
-        WH2[/api/webhooks/cloudflare/deploy]
-        WH3[/api/webhooks/incidents]
+        WH[GitHub Webhook Handler]
+        WH2[Cloudflare Deploy Hook]
+        WH3[Incidents Webhook]
     end
 
     subgraph "Processing"
@@ -752,7 +750,10 @@ flowchart TB
     GH1 --> WH
     GH2 --> WH
     GH3 --> WH
-    WH --> P1 --> P2 --> P3 --> P4
+    WH --> P1
+    P1 --> P2
+    P2 --> P3
+    P3 --> P4
     P3 --> N1
     P3 --> N2
 ```
@@ -1029,30 +1030,6 @@ erDiagram
 | POST | `/api/chat/stream` | Stream chat responses |
 | GET | `/api/chat/threads` | Get chat thread history |
 | GET | `/api/agent/context` | Get context for AI agent |
-
----
-
-## 13. Success Metrics
-
-### Primary Metrics
-
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| Spec → Draft PR time | < 3 minutes | Time from paste to PR link |
-| CI failure explanation quality | > 90% actionable | User feedback rating |
-| Incident → post-mortem draft | < 2 minutes | Time from resolution to draft |
-| Deployment approval latency | < 5 minutes | Time from ready to approved |
-| Rollback execution time | < 2 minutes | Time from trigger to live |
-
-### Hackathon Demo Metrics
-
-| Metric | Target |
-|--------|--------|
-| End-to-end spec → production | Complete in live demo |
-| Azure AI Foundry | GPT-4.1-mini powering all AI features |
-| Incident simulation | Alert → analysis → hotfix → post-mortem |
-| Approval gate UX | Zero confusion for judges |
-| Telegram notifications | Real-time during demo |
 
 ---
 
