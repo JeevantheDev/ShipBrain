@@ -15,10 +15,11 @@
 6. [Feature Deep Dives](#6-feature-deep-dives)
 7. [User Flows](#7-user-flows)
 8. [Technical Implementation](#8-technical-implementation)
-9. [Integration Points](#9-integration-points)
-10. [Database Schema](#10-database-schema)
-11. [API Reference](#11-api-reference)
-12. [Success Metrics](#12-success-metrics)
+9. [Authentication & Security](#9-authentication--security)
+10. [Integration Points](#10-integration-points)
+11. [Database Schema](#11-database-schema)
+12. [API Reference](#12-api-reference)
+13. [Success Metrics](#13-success-metrics)
 
 ---
 
@@ -136,7 +137,7 @@ flowchart TB
         GH[GitHub API]
         CF[Cloudflare Pages]
         TG[Telegram Bot]
-        LLM[LLM Providers<br/>Claude / GPT / Gemini]
+        LLM[LLM Providers<br/>Azure AI Foundry / Claude / GPT]
     end
 
     subgraph "Data Layer"
@@ -165,8 +166,8 @@ flowchart TB
 | Styling | CSS Modules, CSS Variables |
 | Backend | Next.js API Routes, Server Actions |
 | Database | Supabase (PostgreSQL + Realtime + Auth) |
-| **AI (Primary)** | **Microsoft Azure AI Foundry** (GPT-4) via LangChain |
-| AI (Fallback) | Google Gemini, Anthropic Claude, OpenAI GPT-4 |
+| **AI (Primary)** | **Microsoft Azure AI Foundry** (GPT-4.1-mini) via LangChain |
+| AI (Fallback) | Anthropic Claude, OpenAI GPT-4.1-mini |
 | GitHub | Octokit, GitHub Actions, Webhooks |
 | Deployment | Cloudflare Pages (Preview), Vercel (Production) |
 | Notifications | Telegram Bot API |
@@ -464,7 +465,7 @@ flowchart TB
     end
 
     subgraph "Azure AI Foundry"
-        MODEL[getModel<br/>GPT-4 via Foundry]
+        MODEL[getModel<br/>GPT-4.1-mini via Foundry]
     end
 
     WEB --> CHAT_API --> SBC
@@ -621,8 +622,7 @@ flowchart TB
     subgraph "LLM Providers"
         AF[Microsoft Azure AI Foundry<br/>DEFAULT]
         C[Claude · Anthropic]
-        G[GPT-4 · OpenAI]
-        GE[Gemini · Google]
+        G[GPT-4.1-mini · OpenAI]
     end
 
     CHAT --> SC
@@ -633,7 +633,6 @@ flowchart TB
     MF -->|default| AF
     MF -->|fallback| C
     MF -->|fallback| G
-    MF -->|fallback| GE
 ```
 
 **Unified AI Backend:**
@@ -643,9 +642,8 @@ flowchart TB
 
 **Provider Priority:**
 1. **Microsoft Azure AI Foundry** (default) - Enterprise-grade, hackathon theme requirement
-2. **Google Gemini** - First fallback if Foundry not configured
-3. **Anthropic Claude** - Second fallback
-4. **OpenAI GPT-4** - Third fallback
+2. **Anthropic Claude** - First fallback if Foundry not configured
+3. **OpenAI GPT-4.1-mini** - Second fallback
 
 **Environment Variables:**
 ```bash
@@ -653,19 +651,15 @@ flowchart TB
 LLM_PROVIDER=microsoft_foundry
 AZURE_AI_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com
 AZURE_AI_FOUNDRY_API_KEY=...
-AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4o
+AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4.1-mini
 
-# Alternative: Claude
+# Alternative: Anthropic Claude
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Alternative: OpenAI
+# Alternative: OpenAI GPT-4.1-mini
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-
-# Alternative: Google Gemini
-LLM_PROVIDER=google
-GOOGLE_API_KEY=...
 ```
 
 ---
@@ -724,20 +718,73 @@ sequenceDiagram
 
 ---
 
-## 9. Integration Points
+## 9. Authentication & Security
 
-### 9.1 GitHub Integration
+### 9.1 Supabase GitHub OAuth
+
+ShipBrain uses **Supabase Auth** with **GitHub OAuth** for secure, seamless authentication.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as ShipBrain UI
+    participant SB as Supabase Auth
+    participant GH as GitHub OAuth
+
+    U->>UI: Click "Sign in with GitHub"
+    UI->>SB: Initiate OAuth flow
+    SB->>GH: Redirect to GitHub
+    U->>GH: Authorize ShipBrain
+    GH->>SB: Return auth code
+    SB->>SB: Exchange for session + provider_token
+    SB->>UI: Redirect to /auth/callback
+    UI->>SB: Store GitHub token in profiles table
+    UI->>U: Logged in, redirect to /dashboard
+```
+
+**Authentication Flow:**
+
+1. **User clicks "Sign in with GitHub"** on `/login` page
+2. **Supabase Auth** redirects to GitHub OAuth consent screen
+3. **User authorizes** ShipBrain to access their GitHub account
+4. **GitHub returns** authorization code to Supabase
+5. **Supabase exchanges** code for:
+   - Session token (for Supabase)
+   - Provider token (GitHub access token)
+6. **Callback handler** (`/auth/callback`) stores GitHub token in `profiles` table
+7. **User redirected** to dashboard with active session
+
+**Security Features:**
+
+| Feature | Implementation |
+|---------|----------------|
+| Session Management | Supabase SSR with 7-day rolling refresh |
+| GitHub Token Storage | Encrypted in `profiles.github_access_token` |
+| Row-Level Security | All tables protected with RLS policies |
+| API Key Auth | Webhook endpoints use HMAC signature verification |
+| User Isolation | Each user can only access their own repos/data |
+
+**Required GitHub OAuth Scopes:**
+- `repo` - Full repository access (read/write)
+- `workflow` - GitHub Actions workflow dispatch
+- `read:user` - Read user profile information
+
+---
+
+## 10. Integration Points
+
+### 10.1 GitHub Integration
 
 | Integration | Purpose |
 |-------------|---------|
-| OAuth | User authentication |
+| OAuth (via Supabase) | User authentication with GitHub token |
 | Repos API | List and select repositories |
 | Contents API | Create files, read structure |
 | Pull Requests API | Create Draft PRs, merge |
 | Actions API | Dispatch workflows, read status |
 | Webhooks | Real-time event ingestion |
 
-### 9.2 Cloudflare Integration
+### 10.2 Cloudflare Integration
 
 | Integration | Purpose |
 |-------------|---------|
@@ -745,7 +792,7 @@ sequenceDiagram
 | Deploy Hooks | Trigger deployments |
 | Deploy Webhooks | Receive deployment status |
 
-### 9.3 Telegram Integration
+### 10.3 Telegram Integration
 
 | Integration | Purpose |
 |-------------|---------|
@@ -756,7 +803,7 @@ sequenceDiagram
 
 ---
 
-## 10. Database Schema
+## 11. Database Schema
 
 ### Entity Relationship Diagram
 
@@ -873,7 +920,7 @@ erDiagram
 
 ---
 
-## 11. API Reference
+## 12. API Reference
 
 ### Core Endpoints
 
@@ -918,7 +965,7 @@ erDiagram
 
 ---
 
-## 12. Success Metrics
+## 13. Success Metrics
 
 ### Primary Metrics
 
@@ -935,7 +982,7 @@ erDiagram
 | Metric | Target |
 |--------|--------|
 | End-to-end spec → production | Complete in live demo |
-| Model switching | Claude → GPT-4 → Gemini with .env only |
+| Model switching | Azure AI Foundry → Claude → GPT-4.1-mini with .env only |
 | Incident simulation | Alert → analysis → hotfix → post-mortem |
 | Approval gate UX | Zero confusion for judges |
 | Telegram notifications | Real-time during demo |
@@ -1002,10 +1049,9 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...
 LLM_PROVIDER=microsoft_foundry
 AZURE_AI_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com
 AZURE_AI_FOUNDRY_API_KEY=...
-AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4o
+AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4.1-mini
 
 # Fallback AI Providers (optional)
-GOOGLE_API_KEY=...
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 
