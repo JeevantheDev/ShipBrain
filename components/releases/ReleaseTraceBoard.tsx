@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, ExternalLink, GitPullRequest, RefreshCw, Rocket, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, ExternalLink, GitBranch, GitMerge, GitPullRequest, Play, RefreshCw, Rocket, User, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -178,6 +178,74 @@ function deploymentLabel(url?: string) {
   return url.includes("/actions/runs/")
     ? "GitHub Actions workflow"
     : "Deployment URL";
+}
+
+function eventTypeLabel(eventType: string): string {
+  const labels: Record<string, string> = {
+    trace_created: "Release trace created",
+    pr_opened: "Pull request opened",
+    pr_updated: "Pull request updated",
+    review_requested: "Review requested",
+    review_submitted: "Review submitted",
+    pr_approved: "Pull request approved",
+    pr_merged: "Pull request merged",
+    deployment_started: "Production deployment started",
+    deployment_succeeded: "Production deployment succeeded",
+    deployment_failed: "Production deployment failed",
+    preview_deploy_started: "Preview deployment started",
+    preview_deployed: "Preview deployment completed",
+    release_pr_created: "Release PR created",
+    hotfix_created: "Hotfix branch created",
+    reverse_sync_created: "Reverse sync PR created",
+    reverse_sync_merged: "Reverse sync completed",
+    incident_linked: "Incident linked to trace",
+    manual_action: "Manual action taken",
+    status_changed: "Status changed",
+    rollback_initiated: "Rollback initiated",
+    rollback_deployed: "Rollback completed",
+    rollback_failed: "Rollback failed"
+  };
+  return labels[eventType] ?? eventType.replace(/_/g, " ");
+}
+
+function eventIcon(eventType: string) {
+  if (eventType.includes("merged") || eventType === "pr_merged") return <GitMerge size={14} />;
+  if (eventType.includes("pr_") || eventType.includes("review")) return <GitPullRequest size={14} />;
+  if (eventType.includes("deploy") || eventType.includes("deployment")) return <Rocket size={14} />;
+  if (eventType.includes("rollback")) return <RefreshCw size={14} />;
+  if (eventType === "trace_created") return <Play size={14} />;
+  if (eventType.includes("hotfix") || eventType.includes("branch")) return <GitBranch size={14} />;
+  return <Clock size={14} />;
+}
+
+function eventStatusClass(eventType: string): string {
+  if (eventType.includes("failed")) return "failed";
+  if (eventType.includes("succeeded") || eventType.includes("completed") || eventType === "pr_merged" || eventType === "pr_approved" || eventType.includes("deployed")) return "success";
+  if (eventType.includes("started") || eventType.includes("initiated")) return "running";
+  return "";
+}
+
+function relativeTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
+function formatActorName(actor?: string, source?: string): string {
+  if (!actor) return source === "github" ? "GitHub" : source === "telegram" ? "Telegram Bot" : "System";
+  if (actor === "github-actions" || actor === "github") return "GitHub Actions";
+  if (actor === "ShipBrain sync") return "ShipBrain";
+  if (actor.includes("@")) return actor.split("@")[0];
+  return actor;
 }
 
 function journeyLabel(trace: Trace) {
@@ -539,6 +607,54 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
                   <span>Reverse sync</span><strong>{selected.reverse_sync_status ?? "n/a"}</strong>
                   <span>Incident</span><strong>{selected.incident_id ? shortId(selected.incident_id) : "n/a"}</strong>
                   <span>Updated</span><strong>{dateLabel(selected.updated_at)}</strong>
+                </div>
+              </section>
+
+              {/* Audit Trail Section */}
+              <section className="release-detail-section">
+                <div className="section-label mono">
+                  <span>Audit Trail</span>
+                  <span className="count">{(eventsByTrace[selected.id] ?? []).length} events</span>
+                </div>
+                <div className="audit-trail-timeline">
+                  {(eventsByTrace[selected.id] ?? []).length === 0 ? (
+                    <div className="audit-trail-empty">No events recorded yet</div>
+                  ) : (
+                    (eventsByTrace[selected.id] ?? [])
+                      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                      .map((event, idx) => (
+                        <div key={event.id ?? idx} className={`audit-trail-item ${eventStatusClass(event.event_type)}`}>
+                          <div className="audit-trail-icon">
+                            {eventIcon(event.event_type)}
+                          </div>
+                          <div className="audit-trail-content">
+                            <div className="audit-trail-header">
+                              <span className="audit-trail-title">{eventTypeLabel(event.event_type)}</span>
+                              <span className="audit-trail-time">{relativeTime(event.created_at)}</span>
+                            </div>
+                            <div className="audit-trail-meta">
+                              <User size={12} />
+                              <span>{formatActorName(event.actor, event.source)}</span>
+                              {event.source ? (
+                                <span className="audit-trail-source">via {event.source}</span>
+                              ) : null}
+                            </div>
+                            {event.details && Object.keys(event.details).length > 0 ? (
+                              <div className="audit-trail-details">
+                                {event.details.prNumber ? <span>PR #{String(event.details.prNumber)}</span> : null}
+                                {event.details.releaseTag ? <span>{String(event.details.releaseTag)}</span> : null}
+                                {event.details.previewUrl ? <span className="audit-trail-url">Preview deployed</span> : null}
+                                {event.details.workflowUrl ? (
+                                  <a href={String(event.details.workflowUrl)} target="_blank" rel="noreferrer" className="audit-trail-link">
+                                    View workflow <ExternalLink size={10} />
+                                  </a>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))
+                  )}
                 </div>
               </section>
 

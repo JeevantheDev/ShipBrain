@@ -4607,6 +4607,156 @@ p {
   margin-top: 10px;
 }
 
+/* Audit Trail Timeline */
+.audit-trail-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.audit-trail-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.audit-trail-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-muted);
+  position: relative;
+}
+
+.audit-trail-item:last-child {
+  border-bottom: none;
+}
+
+.audit-trail-item::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 32px;
+  bottom: -12px;
+  width: 1px;
+  background: var(--line-muted);
+}
+
+.audit-trail-item:last-child::before {
+  display: none;
+}
+
+.audit-trail-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.audit-trail-item.success .audit-trail-icon {
+  background: rgba(63, 185, 80, 0.15);
+  border-color: rgba(63, 185, 80, 0.3);
+  color: var(--green);
+}
+
+.audit-trail-item.failed .audit-trail-icon {
+  background: rgba(248, 81, 73, 0.15);
+  border-color: rgba(248, 81, 73, 0.3);
+  color: var(--red);
+}
+
+.audit-trail-item.running .audit-trail-icon {
+  background: rgba(136, 146, 157, 0.15);
+  border-color: rgba(136, 146, 157, 0.3);
+  color: var(--brand);
+}
+
+.audit-trail-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.audit-trail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.audit-trail-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.audit-trail-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.audit-trail-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.audit-trail-meta svg {
+  opacity: 0.7;
+}
+
+.audit-trail-source {
+  opacity: 0.7;
+}
+
+.audit-trail-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.audit-trail-details span {
+  padding: 2px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-muted);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-muted);
+}
+
+.audit-trail-details .audit-trail-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-muted);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--brand);
+  text-decoration: none;
+  transition: border-color 120ms ease;
+}
+
+.audit-trail-details .audit-trail-link:hover {
+  border-color: var(--brand);
+}
+
 @media (max-width: 980px) {
   .release-board {
     min-width: 0;
