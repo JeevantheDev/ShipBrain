@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isBranchDeleteEvent, statusFromPullRequestEvent, verifyWebhookSignature } from "@/lib/github/webhooks";
 import { createOrUpdateTrace, updateTraceBySpecOrPr, associateFeaturesWithRelease, dissociateFeaturesFromRelease } from "@/lib/orchestrator";
+import { flushPendingTelegramNotifications } from "@/lib/telegram/flush";
 
 export const runtime = "nodejs";
 
@@ -177,6 +178,8 @@ export async function POST(request: Request) {
 
       // When production deploy completes successfully, also update all associated feature specs
       if (isVercelDeploy && workflowRun.status === "completed" && workflowRun.conclusion === "success") {
+        // Flush Telegram notifications for production deployment success
+        flushPendingTelegramNotifications().catch((err) => console.error("Telegram flush failed:", err));
         // Get the spec's release_pr_number and pr_number to find all associated features
         const { data: fullSpec } = await supabase
           .from("specs")
@@ -247,6 +250,11 @@ export async function POST(request: Request) {
           : isVercelDeploy
             ? "release"
             : "feature";
+
+        // Flush Telegram notifications for deployment completion
+        if (workflowRun.status === "completed" && workflowRun.conclusion === "success") {
+          flushPendingTelegramNotifications().catch((err) => console.error("Telegram flush failed:", err));
+        }
 
         await updateTraceBySpecOrPr({
           specId: spec.id,
@@ -651,6 +659,11 @@ export async function POST(request: Request) {
           .eq("repo_full_name", repoFullName)
           .eq("reverse_sync_pr_number", pullRequest.number);
       }
+    }
+
+    // Flush Telegram notifications for PR merge events
+    if (nextStatus === "merged") {
+      flushPendingTelegramNotifications().catch((err) => console.error("Telegram flush failed:", err));
     }
 
     return NextResponse.json({

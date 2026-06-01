@@ -22,6 +22,7 @@ export type PendingAction = {
     | "merge_to_develop"
     | "create_release_pr"
     | "approve_release"
+    | "deploy_to_production"
     | "merge_to_main"
     | "merge_reverse_sync"
     | "resolve_conflict";

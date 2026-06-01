@@ -68,7 +68,13 @@ export function pendingActionForTrace(trace: TraceLike): PendingAction | null {
         actor: "manager"
       };
     case "merged_main":
-      return null;
+      return {
+        type: "deploy_to_production",
+        description: trace.release_pr_number
+          ? `Release PR #${trace.release_pr_number} merged. Enter release tag and deploy to production.`
+          : "Release merged to main. Enter release tag and deploy to production.",
+        actor: "manager"
+      };
     case "production_live":
       if (trace.reverse_sync_pr_number && trace.reverse_sync_status !== "merged") {
         return {
