@@ -165,10 +165,13 @@ flowchart TB
 | Styling | CSS Modules, CSS Variables |
 | Backend | Next.js API Routes, Server Actions |
 | Database | Supabase (PostgreSQL + Realtime + Auth) |
-| AI | LangChain, Claude/GPT-4/Gemini (swappable) |
+| **AI (Primary)** | **Microsoft Azure AI Foundry** (GPT-4) via LangChain |
+| AI (Fallback) | Google Gemini, Anthropic Claude, OpenAI GPT-4 |
 | GitHub | Octokit, GitHub Actions, Webhooks |
 | Deployment | Cloudflare Pages (Preview), Vercel (Production) |
 | Notifications | Telegram Bot API |
+
+> **Hackathon Theme Compliance:** ShipBrain uses **Microsoft Azure AI Foundry** as its default AI provider, meeting the hackathon requirement for AI-Powered Production Functions.
 
 ---
 
@@ -432,7 +435,55 @@ flowchart TB
 
 ---
 
-### 6.3 Telegram Bot Integration
+### 6.3 Unified Chat & Telegram Architecture
+
+Both the Web Chat interface and Telegram Bot share the same AI backend, providing a consistent experience across platforms.
+
+```mermaid
+flowchart TB
+    subgraph "User Touchpoints"
+        WEB[Web Chat Interface<br/>/chat page]
+        TG[Telegram Bot<br/>@ShipBrainBot]
+    end
+
+    subgraph "API Layer"
+        CHAT_API[/api/chat/stream]
+        TG_WH[/api/telegram/webhook]
+    end
+
+    subgraph "Shared AI Core"
+        SBC[answerShipBrainQuestion<br/>shipbrain-chat.ts]
+        TGT[runTelegramCommand<br/>telegram/tools.ts]
+    end
+
+    subgraph "AI Chains"
+        SD[Spec Decompose]
+        IA[Incident Analyzer]
+        PM[Postmortem Generator]
+        CS[Code Scaffold]
+    end
+
+    subgraph "Azure AI Foundry"
+        MODEL[getModel<br/>GPT-4 via Foundry]
+    end
+
+    WEB --> CHAT_API --> SBC
+    TG --> TG_WH --> TGT
+
+    SBC --> MODEL
+    TGT --> SD & IA & PM & CS
+    SD & IA & PM & CS --> MODEL
+```
+
+**Why Unified Architecture?**
+- Same AI model powers both interfaces
+- Consistent responses across web and mobile
+- Single source of truth for all AI capabilities
+- Easier maintenance and updates
+
+---
+
+### 6.4 Telegram Bot Commands
 
 Real-time notifications and approvals via Telegram.
 
@@ -442,11 +493,16 @@ Real-time notifications and approvals via Telegram.
 |---------|-------------|
 | `/status` | Show current deployment status |
 | `/pending` | List pending approvals |
-| `/releases` | Show recent releases |
+| `/traces` | Show release traces |
 | `/incidents` | List active incidents |
+| `/plan <spec>` | Create AI development plan |
+| `/draft_pr <spec>` | Create Draft PR from spec |
+| `/analyze_incident <id>` | AI analyze incident |
+| `/create_hotfix <id>` | Create hotfix for incident |
+| `/approve_fix <id>` | Approve hotfix deployment |
+| `/postmortem <id>` | Generate post-mortem |
 | `/rollback <tag>` | Initiate production rollback |
-| `/approve` | Approve pending deployment |
-| `/reject` | Reject pending deployment |
+| `/approve <trace_id>` | Approve pending deployment |
 
 **Notification Types:**
 - PR merged to develop
@@ -541,52 +597,75 @@ journey
 
 ## 8. Technical Implementation
 
-### 8.1 AI Model Switching
+### 8.1 AI Model Architecture
 
-ShipBrain supports multiple LLM providers via a single environment variable.
+ShipBrain uses **Microsoft Azure AI Foundry** as the default LLM provider, with fallback support for other providers.
 
 ```mermaid
 flowchart TB
-    subgraph "Configuration"
-        ENV[LLM_PROVIDER env var]
+    subgraph "User Interfaces"
+        CHAT[Web Chat Interface]
+        TG[Telegram Bot]
+    end
+
+    subgraph "AI Layer"
+        SC[ShipBrain Chat<br/>shipbrain-chat.ts]
+        TOOLS[Telegram Tools<br/>telegram/tools.ts]
+        CHAINS[AI Chains<br/>spec-decompose, incident-analyzer, etc.]
     end
 
     subgraph "Model Factory"
-        MF[getModel Function]
+        MF[getModel Function<br/>model.ts]
     end
 
-    subgraph "Providers"
-        C[Claude<br/>Anthropic]
-        G[GPT-4<br/>OpenAI]
-        GE[Gemini<br/>Google]
-        AZ[GPT-4<br/>Azure]
+    subgraph "LLM Providers"
+        AF[Microsoft Azure AI Foundry<br/>DEFAULT]
+        C[Claude · Anthropic]
+        G[GPT-4 · OpenAI]
+        GE[Gemini · Google]
     end
 
-    ENV --> MF
-    MF -->|anthropic| C
-    MF -->|openai| G
-    MF -->|google| GE
-    MF -->|azure| AZ
+    CHAT --> SC
+    TG --> TOOLS
+    SC --> MF
+    TOOLS --> CHAINS
+    CHAINS --> MF
+    MF -->|default| AF
+    MF -->|fallback| C
+    MF -->|fallback| G
+    MF -->|fallback| GE
 ```
+
+**Unified AI Backend:**
+- Both **Web Chat** and **Telegram Bot** use the same `getModel()` function
+- All AI chains (spec decomposition, incident analysis, postmortem generation) share the same model
+- Seamless experience across web and mobile (Telegram)
+
+**Provider Priority:**
+1. **Microsoft Azure AI Foundry** (default) - Enterprise-grade, hackathon theme requirement
+2. **Google Gemini** - First fallback if Foundry not configured
+3. **Anthropic Claude** - Second fallback
+4. **OpenAI GPT-4** - Third fallback
 
 **Environment Variables:**
 ```bash
-# Claude (Default)
+# Microsoft Azure AI Foundry (DEFAULT - Hackathon Theme)
+LLM_PROVIDER=microsoft_foundry
+AZURE_AI_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com
+AZURE_AI_FOUNDRY_API_KEY=...
+AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4o
+
+# Alternative: Claude
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 
-# OpenAI
+# Alternative: OpenAI
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
 
-# Google Gemini
+# Alternative: Google Gemini
 LLM_PROVIDER=google
 GOOGLE_API_KEY=...
-
-# Azure OpenAI
-LLM_PROVIDER=azure
-AZURE_OPENAI_ENDPOINT=https://...
-AZURE_OPENAI_API_KEY=...
 ```
 
 ---
@@ -914,29 +993,36 @@ erDiagram
 ## Appendix C: Environment Variables
 
 ```bash
-# Database
+# Database (Supabase)
 NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
 
-# AI Provider (anthropic | openai | google | azure)
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
+# AI Provider - Microsoft Azure AI Foundry (DEFAULT)
+LLM_PROVIDER=microsoft_foundry
+AZURE_AI_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com
+AZURE_AI_FOUNDRY_API_KEY=...
+AZURE_AI_FOUNDRY_DEPLOYMENT_NAME=gpt-4o
 
-# GitHub
+# Fallback AI Providers (optional)
+GOOGLE_API_KEY=...
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+
+# GitHub Integration
 GITHUB_APP_ID=...
 GITHUB_PRIVATE_KEY=...
 GITHUB_WEBHOOK_SECRET=...
 
-# Cloudflare
+# Cloudflare Pages Deployment
 CLOUDFLARE_API_TOKEN=...
 CLOUDFLARE_ACCOUNT_ID=...
 
-# Telegram
+# Telegram Bot Notifications
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 
-# App
+# Application
 NEXT_PUBLIC_APP_URL=https://shipbrain.pages.dev
 SHIPBRAIN_API_KEY=...
 ```
