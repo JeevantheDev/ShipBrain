@@ -177,43 +177,67 @@ export default async function LandingPage() {
             </p>
           </div>
 
-          <div className="gate-stack">
-            {/* State 1 */}
-            <button className="gate-default" type="button">Create Draft PR</button>
-
-            {/* State 2 */}
-            <div className="gate gate-review">
-              <div className="gate-review-row">
-                <span className="gate-summary">
-                  <span className="muted">Will open Draft PR to </span>
-                  <span className="repo">acme/api-server</span>
-                  <span className="muted">:</span>
-                  <span className="repo">main</span>
-                </span>
-                <div className="gate-btns">
-                  <button className="gate-btn ghost" type="button">Cancel</button>
-                  <button className="gate-btn primary" type="button">Confirm</button>
-                </div>
+          <div className="gate-cycle">
+            {/* 3-stage indicator */}
+            <div className="gate-steps" id="gateSteps">
+              <div className="gate-step active" data-step="0">
+                <span className="num">1</span>
+                <span className="step-label">Create Draft PR</span>
+                <span className="track" aria-hidden="true"></span>
               </div>
-              <div className="gate-progress" aria-hidden="true"></div>
+              <div className="gate-step" data-step="1">
+                <span className="num">2</span>
+                <span className="step-label">CI &amp; deploy</span>
+                <span className="track" aria-hidden="true"></span>
+              </div>
+              <div className="gate-step" data-step="2">
+                <span className="num">3</span>
+                <span className="step-label">Release action</span>
+                <span className="track" aria-hidden="true"></span>
+              </div>
             </div>
 
-            {/* State 3 */}
-            <div className="gate-done">
-              <div className="gate-done-left">
-                <span className="gate-check" aria-hidden="true">
-                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                    <path d="M2.5 6.5l2.2 2.2L9.5 3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </span>
-                <span>PR #42 created on <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "13px" }}>acme/api-server</span></span>
+            {/* single live gate that morphs through each stage */}
+            <div className="gate-live" id="gateLive">
+              {/* phase: default */}
+              <button className="gate-phase gate-default show" data-phase="default" type="button">
+                <span className="gate-default-label">Create Draft PR</span>
+              </button>
+
+              {/* phase: reviewing */}
+              <div className="gate-phase gate-review" data-phase="review">
+                <div className="gate-review-row">
+                  <span className="gate-summary">
+                    <span className="muted gate-summary-pre">Will open Draft PR to</span>
+                    <span className="repo gate-summary-target">acme/api-server : main</span>
+                  </span>
+                  <div className="gate-btns">
+                    <button className="gate-btn ghost" type="button">Cancel</button>
+                    <button className="gate-btn primary" type="button">Confirm</button>
+                  </div>
+                </div>
+                <div className="gate-progress" aria-hidden="true">
+                  <div className="bar"></div>
+                </div>
               </div>
-              <a href="#" className="link">view on GitHub →</a>
+
+              {/* phase: done */}
+              <div className="gate-phase gate-done" data-phase="done">
+                <div className="gate-done-left">
+                  <span className="gate-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                      <path d="M2.5 6.5l2.2 2.2L9.5 3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </span>
+                  <span className="done-text">PR #42 created on <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "13px" }}>acme/api-server</span></span>
+                </div>
+                <a href="#" className="link gate-done-link">view on GitHub →</a>
+              </div>
             </div>
           </div>
 
-          <div className="gate-caption">
-            default <span className="sep">·</span> reviewing <span className="sep">·</span> done
+          <div className="gate-caption" id="gateCaption">
+            same gate <span className="sep">·</span> <span className="now">create draft pr</span>
           </div>
         </div>
       </section>
