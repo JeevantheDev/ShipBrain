@@ -50,7 +50,6 @@ export async function GET() {
     supabase
       .from("approval_events")
       .select("id, action, entity_id, note, metadata, created_at")
-      .eq("actor_id", user.id)
       .order("created_at", { ascending: false })
       .limit(8),
     supabase

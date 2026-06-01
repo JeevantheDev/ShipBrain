@@ -26,7 +26,11 @@ function toAudit(row: any) {
     action: row.action,
     note: row.note,
     createdAt: row.created_at,
-    metadata: row.metadata ?? {}
+    metadata: row.metadata ?? {},
+    actor: row.profiles ? {
+      githubLogin: row.profiles.github_login,
+      avatarUrl: row.profiles.avatar_url
+    } : null
   };
 }
 
@@ -56,14 +60,12 @@ export async function GET(request: Request) {
 
   let query = db
     .from("approval_events")
-    .select("id, action, note, metadata, created_at")
-    .eq("entity_type", "ci_run")
-    .eq("actor_id", user.id)
+    .select("id, action, note, metadata, created_at, profiles(github_login, avatar_url)")
     .order("created_at", { ascending: false })
     .limit(10);
 
   if (specId) {
-    query = query.filter("metadata->>specId", "eq", specId);
+    query = query.or(`metadata->>specId.eq.${specId},and(entity_type.eq.spec,entity_id.eq.${specId})`);
   } else if (entityId) {
     query = query.eq("entity_id", entityId);
   }
@@ -83,10 +85,10 @@ export async function POST(request: Request) {
   const isInternalCall = !request.headers.get("cookie") && !!request.headers.get("X-Internal-User-Id");
   const db = isInternalCall ? getSupabaseAdminClient() : supabase;
 
-  // Get user's GitHub token
+  // Get user's GitHub profile details
   const { data: profile } = await db
     .from("profiles")
-    .select("github_access_token")
+    .select("github_access_token, github_login")
     .eq("id", user.id)
     .maybeSingle();
   const userGitHubToken = profile?.github_access_token;
@@ -189,6 +191,29 @@ export async function POST(request: Request) {
             repo: specForDeploy.repo_full_name
           }
         });
+
+        // Synchronize with release trace
+        try {
+          const { updateTraceBySpec } = await import("@/lib/orchestrator");
+          await updateTraceBySpec(specId, {
+            status: "merged_main",
+            production_deployment: {
+              status: "deploying",
+              url: deployment.workflowUrl,
+              releaseTag,
+              releaseSha: release.sha,
+              timestamp: new Date().toISOString()
+            }
+          }, {
+            eventType: "deployment_started",
+            source: "manual",
+            actor: profile?.github_login ?? user.email ?? "User",
+            actorType: "user",
+            details: { note: "Production deployment approved (release PR already merged)", releaseTag }
+          });
+        } catch (traceErr) {
+          console.error("Failed to update release trace:", traceErr);
+        }
 
         return NextResponse.json({
           ok: true,
@@ -498,6 +523,56 @@ export async function POST(request: Request) {
 
   if (error) {
     return NextResponse.json({ error: "Unable to record deployment audit.", detail: error.message }, { status: 500 });
+  }
+
+  // Synchronize with release trace
+  if (ciRun.spec_id) {
+    try {
+      const { updateTraceBySpec } = await import("@/lib/orchestrator");
+      let tracePatch: any = {};
+      let traceEventType: any = "manual_action";
+      let traceEventDetails: any = { note: note || undefined };
+
+      if (action !== "deploy_approved") {
+        tracePatch = { status: "failed" };
+        traceEventType = "manual_action";
+        traceEventDetails = { note: note || "Deployment rejected" };
+      } else if (releasePrMode === "merge_existing_pr") {
+        tracePatch = {
+          status: "merged_main",
+          production_deployment: {
+            status: "deploying",
+            url: deployment?.workflowUrl ?? release?.releaseUrl ?? null,
+            releaseTag,
+            releaseSha: release?.sha ?? releaseMerge?.destinationSha ?? releaseMerge?.sha ?? null,
+            timestamp: new Date().toISOString()
+          }
+        };
+        traceEventType = "deployment_started";
+        traceEventDetails = { note: note || "Production deployment approved", releaseTag };
+      } else if (isAuditOnly) {
+        tracePatch = {
+          status: "preview_live",
+          preview_deployment: {
+            status: "deploying",
+            url: previewDeployment?.workflowUrl ?? null,
+            timestamp: new Date().toISOString()
+          }
+        };
+        traceEventType = "pr_approved";
+        traceEventDetails = { note: note || "Develop preview deployment approved" };
+      }
+
+      await updateTraceBySpec(ciRun.spec_id, tracePatch, {
+        eventType: traceEventType,
+        source: "manual",
+        actor: profile?.github_login ?? user.email ?? "User",
+        actorType: "user",
+        details: traceEventDetails
+      });
+    } catch (traceErr) {
+      console.error("Failed to sync trace event:", traceErr);
+    }
   }
 
   if (ciRun.spec_id) {

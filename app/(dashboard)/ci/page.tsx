@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, GitPullRequest, Loader2, Play, RefreshCw, Rocket, ShieldCheck, UserRound, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -59,6 +59,10 @@ type DeploymentAudit = {
   action: "deploy_approved" | "deploy_rejected";
   note?: string | null;
   createdAt: string;
+  actor?: {
+    githubLogin?: string | null;
+    avatarUrl?: string | null;
+  } | null;
   metadata: {
     repo?: string;
     branch?: string;
@@ -962,6 +966,65 @@ export default function CiPage() {
                   <div className="error-panel" role="alert" style={{ marginTop: 14 }}>
                     <strong>Deployment gate needs attention</strong>
                     <p style={{ margin: 0 }}>{deploymentError}</p>
+                  </div>
+                )}
+
+                {/* Deployment Audit Trail */}
+                {shouldShowDeploymentAudit(selected) && audits.length > 0 && (
+                  <div style={{ marginTop: 18, borderTop: "1px solid var(--line-muted)", paddingTop: 14 }}>
+                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                      <ShieldCheck size={14} style={{ color: "var(--brand)" }} />
+                      Deployment Audit Trail
+                    </h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {audits.map((audit) => (
+                        <div key={audit.id} style={{
+                          padding: 10,
+                          background: "var(--panel-2)",
+                          border: "1px solid var(--line-muted)",
+                          borderRadius: 6,
+                          fontSize: "12.5px"
+                        }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <span className={`status-pill ${audit.action === "deploy_approved" ? "passed" : "danger"}`} style={{ fontSize: 10, padding: "1px 5px" }}>
+                              <span className="dot"></span>
+                              {audit.action === "deploy_approved" ? "Approved" : "Rejected"}
+                            </span>
+                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                              {new Date(audit.createdAt).toLocaleString()}
+                            </span>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: audit.note ? 6 : 0 }}>
+                            {audit.actor?.avatarUrl ? (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={audit.actor.avatarUrl}
+                                alt={audit.actor.githubLogin || "actor"}
+                                style={{ width: 16, height: 16, borderRadius: "50%" }}
+                              />
+                            ) : (
+                              <UserRound size={12} style={{ color: "var(--text-muted)" }} />
+                            )}
+                            <strong style={{ color: "var(--text-secondary)" }}>
+                              {audit.actor?.githubLogin ?? "Unknown User"}
+                            </strong>
+                          </div>
+
+                          {audit.note && (
+                            <p style={{ margin: 0, fontStyle: "italic", color: "var(--text-muted)", paddingLeft: 6, borderLeft: "2px solid var(--brand)", marginLeft: 2 }}>
+                              &ldquo;{audit.note}&rdquo;
+                            </p>
+                          )}
+
+                          {audit.metadata?.releaseTag && (
+                            <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--text-muted)" }}>
+                              Release tag: <code>{audit.metadata.releaseTag}</code>
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </>
