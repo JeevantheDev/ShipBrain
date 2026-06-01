@@ -52,7 +52,7 @@ export async function POST(request: Request) {
 
   const { data: spec, error: specError } = await db
     .from("specs")
-    .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, release_status, release_pr_number, release_pr_url, release_pr_status, release_tag, release_sha, incident_id")
+    .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, release_status, release_pr_number, release_pr_url, release_pr_status, release_tag, release_sha, incident_id, decomposed_tasks")
     .eq("id", specId)
     .eq("user_id", user.id)
     .single();
@@ -60,6 +60,10 @@ export async function POST(request: Request) {
   if (specError || !spec) {
     return NextResponse.json({ error: "Spec not found.", detail: specError?.message }, { status: 404 });
   }
+
+  // Check if this is an onboarding spec (initial deployment)
+  const isOnboarding = (spec.decomposed_tasks as any)?.type === "onboarding";
+  const forceRedeploy = body.forceRedeploy === true;
 
   const isMergedReleasePromotion = spec.status === "merged" && spec.branch_name === "develop" && spec.base_branch === "main";
   const isMergedDirectMainHotfix =
@@ -69,6 +73,31 @@ export async function POST(request: Request) {
     spec.branch_name.startsWith("hotfix/");
   const isPendingDeploy = spec.release_status === "pending_deploy" && spec.release_pr_status === "merged";
   const isFeatureMergedToDevelop = spec.status === "merged" && spec.base_branch === "develop";
+
+  // Check if already deployed - offer redeploy option
+  if (spec.release_status === "deployed" && !forceRedeploy) {
+    return NextResponse.json(
+      {
+        error: "Production is already deployed.",
+        detail: `Release ${spec.release_tag || "unknown"} is already deployed. To redeploy, say "redeploy production" or use forceRedeploy option.`,
+        action: "redeploy_production",
+        currentReleaseTag: spec.release_tag
+      },
+      { status: 409 }
+    );
+  }
+
+  // Check if currently deploying - offer to wait or force
+  if (spec.release_status === "deploying" && !forceRedeploy) {
+    return NextResponse.json(
+      {
+        error: "Production deployment is already in progress.",
+        detail: `Deployment for ${spec.release_tag || "unknown"} is in progress. Wait for it to complete or say "redeploy production" to force a new deployment.`,
+        action: "wait_or_redeploy"
+      },
+      { status: 409 }
+    );
+  }
 
   // Smart guidance based on current state
   if (isFeatureMergedToDevelop) {
@@ -97,14 +126,23 @@ export async function POST(request: Request) {
     }
   }
 
-  if (!isPendingDeploy && !isMergedReleasePromotion && !isMergedDirectMainHotfix) {
+  // Onboarding specs are always ready for production deployment (they represent the initial setup)
+  if (!isPendingDeploy && !isMergedReleasePromotion && !isMergedDirectMainHotfix && !isOnboarding && !forceRedeploy) {
     return NextResponse.json(
-      { error: "Spec is not ready for production deployment.", detail: `Current release_status: ${spec.release_status}` },
+      {
+        error: "Spec is not ready for production deployment.",
+        detail: `Current release_status: ${spec.release_status}. ` +
+          (spec.base_branch === "develop"
+            ? "Create and merge a Release PR (develop → main) first."
+            : "Ensure the spec is properly merged to main."),
+        action: spec.base_branch === "develop" ? "create_release_pr" : undefined
+      },
       { status: 409 }
     );
   }
 
-  if (!isMergedReleasePromotion && !isMergedDirectMainHotfix && spec.release_pr_status !== "merged") {
+  // Skip release PR check for onboarding specs and force redeploys
+  if (!isMergedReleasePromotion && !isMergedDirectMainHotfix && !isOnboarding && !forceRedeploy && spec.release_pr_status !== "merged") {
     return NextResponse.json(
       { error: "Release PR must be merged before deploying to production.", detail: `Current release_pr_status: ${spec.release_pr_status}` },
       { status: 409 }

@@ -522,7 +522,7 @@ export async function executeAction(
         // Validate spec exists and belongs to user
         const { data: spec, error: specError } = await supabase
           .from("specs")
-          .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, preview_status, preview_url")
+          .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, preview_status, preview_url, decomposed_tasks")
           .eq("id", params.specId)
           .eq("user_id", userId)
           .single();
@@ -531,20 +531,32 @@ export async function executeAction(
           throw new Error("Spec not found or access denied");
         }
 
+        // Check if this is an onboarding spec
+        const isOnboarding = (spec.decomposed_tasks as any)?.type === "onboarding";
+
         if (spec.status !== "merged") {
           throw new Error(`Spec must be merged before preview deployment. Current status: ${spec.status}`);
         }
 
-        if (spec.base_branch !== "develop") {
-          throw new Error("Preview deployment is only available for PRs merged to develop");
+        // For onboarding specs, skip base_branch check since they deploy from main
+        if (!isOnboarding && spec.base_branch !== "develop") {
+          throw new Error("Preview deployment is only available for PRs merged to develop. This spec was merged to " + spec.base_branch + ". " +
+            (spec.base_branch === "main" ? "Use 'Deploy to Production' instead." : ""));
         }
 
-        if (spec.preview_url) {
-          throw new Error(`Preview is already deployed: ${spec.preview_url}`);
+        // If already deployed, offer redeploy option
+        if (spec.preview_url && !params.forceRedeploy) {
+          return {
+            success: false,
+            error: `Preview is already deployed at ${spec.preview_url}. To redeploy, say "redeploy preview" or confirm with "yes, redeploy".`
+          };
         }
 
-        if (spec.preview_status === "deploying") {
-          throw new Error("Preview deployment is already in progress");
+        if (spec.preview_status === "deploying" && !params.forceRedeploy) {
+          return {
+            success: false,
+            error: "Preview deployment is already in progress. Wait for it to complete or say 'redeploy preview' to force a new deployment."
+          };
         }
 
         // Call the preview deployment API with internal flag
@@ -581,12 +593,42 @@ export async function executeAction(
       }
 
       case "deploy_production": {
+        // First check if spec exists and its current state
+        const { data: prodSpec, error: prodSpecError } = await supabase
+          .from("specs")
+          .select("id, release_status, release_tag, base_branch, decomposed_tasks")
+          .eq("id", params.specId)
+          .eq("user_id", userId)
+          .single();
+
+        if (prodSpecError || !prodSpec) {
+          throw new Error("Spec not found or access denied");
+        }
+
+        const isOnboarding = (prodSpec.decomposed_tasks as any)?.type === "onboarding";
+
+        // Check if already deployed and not a force redeploy
+        if (prodSpec.release_status === "deployed" && !params.forceRedeploy) {
+          return {
+            success: false,
+            error: `Production is already deployed with release ${prodSpec.release_tag || "unknown"}. ` +
+              `To redeploy, say "redeploy production" or "yes, redeploy".`
+          };
+        }
+
+        // Check if currently deploying
+        if (prodSpec.release_status === "deploying" && !params.forceRedeploy) {
+          return {
+            success: false,
+            error: `Production deployment is already in progress for ${prodSpec.release_tag || "this release"}. ` +
+              `Wait for it to complete or say "redeploy production" to force a new deployment.`
+          };
+        }
+
         let releaseTag = params.releaseTag;
         if (!releaseTag) {
-          const now = new Date();
-          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-          const time = now.toISOString().slice(11, 16).replace(":", "");
-          releaseTag = `release-v${date}-${time}`;
+          // Use semver tag
+          releaseTag = await getNextSemverReleaseTag(supabase, repoFullName || "");
         }
         const response = await fetch(`${baseUrl}/api/deployments/start-production`, {
           method: "POST",
@@ -597,11 +639,34 @@ export async function executeAction(
           body: JSON.stringify({
             specId: params.specId,
             releaseTag,
+            forceRedeploy: params.forceRedeploy || false,
             internalUserId: userId
           })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || data.detail || "Failed to start production deployment");
+
+        // Handle specific error cases with helpful guidance
+        if (!response.ok) {
+          if (data.action === "create_release_pr") {
+            return {
+              success: false,
+              error: `${data.error} ${data.detail || ""}\n\nWould you like me to create a Release PR? Say "create release PR".`
+            };
+          }
+          if (data.action === "merge_release_pr") {
+            return {
+              success: false,
+              error: `${data.error} ${data.detail || ""}\n\nPlease merge the Release PR on GitHub first.`
+            };
+          }
+          if (data.action === "redeploy_production") {
+            return {
+              success: false,
+              error: `${data.error} To redeploy, say "redeploy production" or "yes, redeploy".`
+            };
+          }
+          throw new Error(data.error || data.detail || "Failed to start production deployment");
+        }
 
         // Create notification
         const { error: notifError3 } = await supabase
