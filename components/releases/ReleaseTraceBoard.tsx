@@ -232,6 +232,21 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
     });
   }, [router]);
 
+  const [isFixing, setIsFixing] = useState(false);
+  const fixStaleTraces = useCallback(async () => {
+    setIsFixing(true);
+    try {
+      const response = await fetch("/api/traces/fix-stale", { method: "POST" });
+      const data = await response.json();
+      if (data.fixed > 0) {
+        refreshBoard("manual");
+      }
+    } catch {
+      // Ignore errors
+    }
+    setIsFixing(false);
+  }, [refreshBoard]);
+
   const scheduleWebhookRefresh = useCallback(() => {
     if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
     refreshTimer.current = window.setTimeout(() => {
@@ -311,10 +326,15 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
             {lastSyncedAt ? `Last synced ${lastSyncedAt.toLocaleTimeString()}` : "Listening for GitHub PR and workflow updates"}
           </span>
         </div>
-        <button className="btn subtle" type="button" onClick={() => refreshBoard("manual")} disabled={isPending || liveStatus === "syncing"}>
-          <RefreshCw size={13} className={isPending || liveStatus === "syncing" ? "spin" : ""} />
-          Refresh
-        </button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button className="btn subtle" type="button" onClick={fixStaleTraces} disabled={isFixing || isPending}>
+            {isFixing ? "Fixing..." : "Fix Stale"}
+          </button>
+          <button className="btn subtle" type="button" onClick={() => refreshBoard("manual")} disabled={isPending || liveStatus === "syncing"}>
+            <RefreshCw size={13} className={isPending || liveStatus === "syncing" ? "spin" : ""} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <section className="release-board-shell">
