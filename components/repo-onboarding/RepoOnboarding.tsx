@@ -1014,9 +1014,22 @@ function SetupSuccess({ setup, copied, hidden, onShow, onCopy }: { setup: any; c
             {setup.cloudflareProjectUrl}
           </code>
           {setup.pr?.html_url ? (
-            <p className="secret-helper" style={{ marginTop: 0, marginBottom: 0 }}>
-              Merge the setup PR above to activate workflows, then push to <code>develop</code> to trigger your first deployment.
-            </p>
+            <div className="info-callout" style={{ marginTop: 0, marginBottom: 0, padding: "10px 14px", background: "var(--brand-bg)", border: "1px solid var(--brand-line)" }}>
+              <strong style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                <ShieldCheck size={14} color="var(--brand)" />
+                Automatic Initial Deployment
+              </strong>
+              <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                After merging the setup PR, ShipBrain will automatically trigger:
+              </p>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12, color: "var(--text-muted)" }}>
+                <li><strong>Preview:</strong> Deploy <code>develop</code> branch to preview environment</li>
+                <li><strong>Production:</strong> Create <code>v1.0.0</code> release and deploy to production</li>
+              </ul>
+              <p style={{ margin: "8px 0 0", fontSize: 11.5, color: "var(--text-muted)" }}>
+                Check the <a href="/releases" style={{ color: "var(--brand)" }}>Release Trace Board</a> to track deployment progress.
+              </p>
+            </div>
           ) : deployStarted ? (
             <div className="success-panel" style={{ padding: "10px 14px" }}>
               <strong style={{ display: "flex", alignItems: "center", gap: 6 }}>

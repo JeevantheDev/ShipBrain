@@ -351,6 +351,44 @@ export async function POST(request: Request) {
       // ShipBrain setup PRs should not create specs or trigger deployments
       const isSetupPr = pullRequest.head?.ref?.startsWith("shipbrain/setup");
 
+      // When setup PR is merged, trigger initial deployments
+      if (isSetupPr && nextStatus === "merged") {
+        // Find the repo and user for this setup PR
+        const { data: repoForSetup } = await supabase
+          .from("repos")
+          .select("user_id, setup_pr_number")
+          .eq("full_name", repoFullName)
+          .eq("setup_pr_number", pullRequest.number)
+          .single();
+
+        if (repoForSetup?.user_id) {
+          // Update repo setup status
+          await supabase.from("repos").update({
+            setup_status: "setup_pr_merged",
+            updated_at: new Date().toISOString()
+          }).eq("full_name", repoFullName).eq("setup_pr_number", pullRequest.number);
+
+          // Trigger initial deployments asynchronously
+          const baseUrl = process.env.SHIPBRAIN_API_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+          fetch(`${baseUrl}/api/deployments/initial`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              repoFullName,
+              userId: repoForSetup.user_id,
+              setupPrNumber: pullRequest.number
+            })
+          }).catch(err => console.error("Failed to trigger initial deployments:", err));
+        }
+
+        return NextResponse.json({
+          type: "setup_pr_merged",
+          number: pullRequest.number,
+          repo: repoFullName,
+          message: "Setup PR merged. Initial deployments triggered."
+        });
+      }
+
       if (isReleasePromotionPr) {
         if (nextStatus === "closed") {
           await dissociateFeaturesFromRelease(repoFullName, pullRequest.number).catch((err) => console.error("Error dissociating features:", err));
