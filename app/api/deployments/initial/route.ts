@@ -97,6 +97,7 @@ export async function POST(request: Request) {
       raw_spec: `Initial ShipBrain deployment for ${repoFullName}`,
       decomposed_tasks: {
         type: "onboarding",
+        prTitle: `Initial Release ${releaseTag}`,
         setupPrNumber,
         releaseTag
       },

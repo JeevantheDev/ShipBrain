@@ -159,8 +159,11 @@ export async function GET() {
       }
     }
 
-    const plan = spec.decomposed_tasks as { prTitle?: string } | null;
-    const title = plan?.prTitle ?? `PR #${spec.pr_number}`;
+    const plan = spec.decomposed_tasks as { prTitle?: string; type?: string } | null;
+    const isOnboarding = plan?.type === "onboarding";
+    const title = isOnboarding
+      ? `🚀 Initial Release ${spec.release_tag || "v1.0.0"}`
+      : plan?.prTitle ?? `PR #${spec.pr_number}`;
 
     // First check if this spec itself has a release PR (Telegram flow stores it on the same spec)
     let linkedReleasePrNumber = spec.release_pr_number;
@@ -467,7 +470,8 @@ export async function GET() {
       mergeSha: spec.merge_sha,
       mergedAt: spec.merged_at,
       ciRunId: spec.latest_ci_run_id ? String(spec.latest_ci_run_id) : undefined,
-      updatedAt: spec.updated_at
+      updatedAt: spec.updated_at,
+      isOnboarding
     });
   }
 
