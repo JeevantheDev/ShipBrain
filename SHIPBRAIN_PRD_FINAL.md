@@ -168,8 +168,8 @@ flowchart TB
 | Database | Supabase (PostgreSQL + Realtime + Auth) |
 | **AI** | **Microsoft Azure AI Foundry** (GPT-4.1-mini) via LangChain |
 | GitHub | Octokit, GitHub Actions, Webhooks |
-| Deployment | Cloudflare Pages (Preview), Vercel (Production) |
-| Notifications | Telegram Bot API |
+| Deployment | Cloudflare Pages (Preview + Production) |
+| Notifications | Telegram Bot API (Real-time Webhooks) |
 
 > **Hackathon Theme Compliance:** ShipBrain uses **Microsoft Azure AI Foundry** as its default AI provider, meeting the hackathon requirement for AI-Powered Production Functions.
 
@@ -214,9 +214,9 @@ sequenceDiagram
 
 ---
 
-### Pillar 2: CI Intelligence
+### Pillar 2: CI Monitor & Deployment Gating
 
-Real-time CI monitoring with AI-powered failure diagnosis and gated deployments.
+Real-time CI monitoring with gated deployment workflows for preview and production.
 
 ```mermaid
 stateDiagram-v2
@@ -225,22 +225,23 @@ stateDiagram-v2
     Running --> Success: All Checks Pass
     Running --> Failed: Check Failed
 
-    Failed --> Analyzed: AI Analyzes
-    Analyzed --> FixProposed: Suggestion Ready
-    FixProposed --> Running: Engineer Applies Fix
+    Failed --> Running: Engineer Fixes Code
 
     Success --> DeployGate: Approval Required
-    DeployGate --> PreviewDeploy: Approved
-    PreviewDeploy --> [*]: Deployed
+    DeployGate --> PreviewDeploy: Deploy Preview
+    PreviewDeploy --> ReleasePR: Create Release PR
+    ReleasePR --> ProdGate: Manager Approval
+    ProdGate --> ProdDeploy: Deploy Production
+    ProdDeploy --> [*]: Live
 ```
 
 **Features:**
 - Real-time workflow status via Supabase Realtime
-- Plain-English failure explanations
-- Copy-paste fix suggestions
 - Deploy button locked until CI green
 - Separate preview/production deployment queues
 - Environment classification (PROD/DEV/CI)
+- Deployment audit trail with approval notes
+- Linked incident hotfix tracking
 
 ---
 
@@ -403,7 +404,7 @@ flowchart LR
 
 ### 6.2 Deployment Pipeline
 
-Dual-environment deployment with approval gates.
+Dual-environment deployment to **Cloudflare Pages** with approval gates.
 
 ```mermaid
 flowchart TB
@@ -416,8 +417,8 @@ flowchart TB
 
     subgraph "Preview Environment"
         C -->|Yes| D[Merge to Develop]
-        D --> E[Auto-Deploy Preview]
-        E --> F[Cloudflare Pages]
+        D --> E[GitHub Actions Dispatch]
+        E --> F[Cloudflare Pages Preview]
         F --> G[Preview URL Live]
     end
 
@@ -426,8 +427,8 @@ flowchart TB
         H --> I[Merge to Main]
         I --> J{Manager Approval}
         J -->|Approved| K[Create Release Tag]
-        K --> L[Deploy Production]
-        L --> M[Vercel/Cloudflare]
+        K --> L[GitHub Actions Dispatch]
+        L --> M[Cloudflare Pages Production]
     end
 
     subgraph "Rollback"
@@ -439,6 +440,11 @@ flowchart TB
     style F fill:#f97316
     style M fill:#7c3aed
 ```
+
+**Deployment Flow:**
+- **Preview**: GitHub Actions workflow `shipbrain-preview.yml` deploys to Cloudflare Pages
+- **Production**: GitHub Actions workflow `shipbrain-production.yml` deploys to Cloudflare Pages
+- Both environments hosted on **Cloudflare Pages** with branch-based deployments
 
 ---
 
@@ -496,34 +502,71 @@ flowchart TB
 
 ---
 
-### 6.4 Telegram Bot Commands
+### 6.4 Telegram Bot Integration
 
-Real-time notifications and approvals via Telegram.
+Real-time notifications and command-based approvals via Telegram webhook integration.
+
+```mermaid
+flowchart LR
+    subgraph "ShipBrain Events"
+        E1[PR Merged]
+        E2[Deploy Complete]
+        E3[Approval Needed]
+        E4[Incident Alert]
+    end
+
+    subgraph "Notification System"
+        NS[sendTelegramMessage]
+    end
+
+    subgraph "Telegram"
+        BOT[ShipBrain Bot]
+        USER[User Chat]
+    end
+
+    subgraph "User Actions"
+        WH[Telegram Webhook]
+        CMD[Command Handler]
+    end
+
+    E1 --> NS
+    E2 --> NS
+    E3 --> NS
+    E4 --> NS
+    NS --> BOT --> USER
+    USER --> WH --> CMD
+    CMD --> NS
+```
+
+**Real-time Webhook Integration:**
+- Webhook URL: `/api/telegram/webhook`
+- Secret token verification for security
+- Instant message delivery on events
 
 **Available Commands:**
 
 | Command | Description |
 |---------|-------------|
-| `/status` | Show current deployment status |
-| `/pending` | List pending approvals |
-| `/traces` | Show release traces |
-| `/incidents` | List active incidents |
-| `/plan <spec>` | Create AI development plan |
+| `/status` | Release trace pending-action summary |
+| `/prs` | Pending PRs and release PRs |
+| `/traces` | Active release traces |
+| `/deployments` | Pending dev/prod deployment queue |
+| `/deploy_dev <id>` | Deploy a pending develop preview |
+| `/deploy_prod <id>` | Tag and deploy production release |
+| `/plan <spec>` | Analyze spec and save AI plan |
 | `/draft_pr <spec>` | Create Draft PR from spec |
-| `/analyze_incident <id>` | AI analyze incident |
-| `/create_hotfix <id>` | Create hotfix for incident |
-| `/approve_fix <id>` | Approve hotfix deployment |
-| `/postmortem <id>` | Generate post-mortem |
-| `/rollback <tag>` | Initiate production rollback |
-| `/approve <trace_id>` | Approve pending deployment |
+| `/release_pr` | Create release PR develop to main |
+| `/handbook` | Prepare release handbook for PMs |
+| `/rollback <tag>` | Rollback to previous release |
+| `/approve <id>` | Approve pending release action |
 
-**Notification Types:**
-- PR merged to develop
-- Preview deployment complete
-- Release PR ready for review
-- Production deployment pending approval
-- Incident detected
-- Hotfix ready for approval
+**Notification Events:**
+- PR merged to develop → Preview deployment triggered
+- Preview deployment complete → Release PR can be created
+- Release PR merged → Production approval required
+- Production deployment complete → Release live notification
+- Incident detected → Alert with severity
+- Hotfix ready → Approval request with inline buttons
 
 ---
 
@@ -612,7 +655,7 @@ journey
 
 ### 8.1 AI Model Architecture
 
-ShipBrain uses **Microsoft Azure AI Foundry** with **GPT-4.1-mini** as its AI provider.
+ShipBrain uses **Microsoft Azure AI Foundry** with **GPT-4.1-mini** via **LangChain** for AI orchestration.
 
 ```mermaid
 flowchart TB
@@ -621,14 +664,14 @@ flowchart TB
         TG[Telegram Bot]
     end
 
-    subgraph "AI Layer"
-        SC[ShipBrain Chat<br/>shipbrain-chat.ts]
-        TOOLS[Telegram Tools<br/>telegram/tools.ts]
-        CHAINS[AI Chains<br/>spec-decompose, incident-analyzer, etc.]
+    subgraph "LangChain Layer"
+        SC[ShipBrain Chat<br/>Tool Calling Agent]
+        TOOLS[Telegram Tools<br/>Command Handlers]
+        CHAINS[AI Chains<br/>spec-decompose, incident-analyzer, postmortem]
     end
 
     subgraph "Model Factory"
-        MF[getModel Function<br/>model.ts]
+        MF[getModel via LangChain<br/>ChatOpenAI wrapper]
     end
 
     subgraph "Microsoft Azure AI Foundry"
@@ -643,15 +686,19 @@ flowchart TB
     MF --> AF
 ```
 
-**Unified AI Backend:**
-- Both **Web Chat** and **Telegram Bot** use the same `getModel()` function
-- All AI chains (spec decomposition, incident analysis, postmortem generation) share the same model
-- Seamless experience across web and mobile (Telegram)
+**LangChain Integration:**
+- Uses `@langchain/openai` `ChatOpenAI` class with custom baseURL for Azure AI Foundry
+- Tool calling architecture for agent-based interactions
+- Structured output parsing for spec decomposition and incident analysis
+- Streaming support for real-time chat responses
 
-**AI Provider:**
-- **Microsoft Azure AI Foundry** with **GPT-4.1-mini** deployment
-- Enterprise-grade, secure, and scalable
-- Meets hackathon theme requirement for AI-Powered Production Functions
+**AI Capabilities:**
+| Feature | LangChain Chain |
+|---------|-----------------|
+| Spec Decomposition | `spec-decompose` - breaks tickets into tasks |
+| Code Scaffolding | `code-scaffold` - generates starter code |
+| Incident Analysis | `incident-analyzer` - root cause analysis |
+| Post-mortem Generation | `postmortem` - structured incident reports |
 
 **Environment Variables:**
 ```bash
@@ -723,9 +770,11 @@ sequenceDiagram
 
 ## 9. Authentication & Security
 
-### 9.1 Supabase GitHub OAuth
+### 9.1 Two-Step Authentication Flow
 
-ShipBrain uses **Supabase Auth** with **GitHub OAuth** for secure, seamless authentication.
+ShipBrain uses a **two-step authentication** approach:
+1. **Email/Password** sign-in via Supabase Auth
+2. **GitHub Connection** as a separate step after login
 
 ```mermaid
 sequenceDiagram
@@ -734,35 +783,40 @@ sequenceDiagram
     participant SB as Supabase Auth
     participant GH as GitHub OAuth
 
-    U->>UI: Click "Sign in with GitHub"
+    Note over U,GH: Step 1: Email/Password Authentication
+    U->>UI: Enter email and password
+    UI->>SB: signInWithPassword
+    SB-->>UI: Session created
+    UI->>U: Redirect to /dashboard
+
+    Note over U,GH: Step 2: GitHub Connection (Settings)
+    U->>UI: Click "Connect GitHub" in Settings
     UI->>SB: Initiate OAuth flow
     SB->>GH: Redirect to GitHub
     U->>GH: Authorize ShipBrain
     GH->>SB: Return auth code
-    SB->>SB: Exchange for session + provider_token
     SB->>UI: Redirect to /auth/callback
     UI->>SB: Store GitHub token in profiles table
-    UI->>U: Logged in, redirect to /dashboard
+    UI->>U: GitHub connected, can now add repos
 ```
 
 **Authentication Flow:**
 
-1. **User clicks "Sign in with GitHub"** on `/login` page
-2. **Supabase Auth** redirects to GitHub OAuth consent screen
-3. **User authorizes** ShipBrain to access their GitHub account
-4. **GitHub returns** authorization code to Supabase
-5. **Supabase exchanges** code for:
-   - Session token (for Supabase)
-   - Provider token (GitHub access token)
+1. **User signs up/in** with email and password on `/login` page
+2. **Supabase Auth** creates session and stores user in `auth.users`
+3. **User redirected** to dashboard
+4. **User connects GitHub** via Settings page (separate OAuth flow)
+5. **GitHub OAuth** returns access token
 6. **Callback handler** (`/auth/callback`) stores GitHub token in `profiles` table
-7. **User redirected** to dashboard with active session
+7. **User can now** connect repositories and use GitHub features
 
 **Security Features:**
 
 | Feature | Implementation |
 |---------|----------------|
+| Password Auth | Supabase Auth with bcrypt hashing |
 | Session Management | Supabase SSR with 7-day rolling refresh |
-| GitHub Token Storage | Encrypted in `profiles.github_access_token` |
+| GitHub Token Storage | Stored in `profiles.github_access_token` |
 | Row-Level Security | All tables protected with RLS policies |
 | API Key Auth | Webhook endpoints use HMAC signature verification |
 | User Isolation | Each user can only access their own repos/data |
