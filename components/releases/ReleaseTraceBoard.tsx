@@ -345,6 +345,17 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
   }, [selectedId, traces]);
 
   useEffect(() => {
+    const hasRollingBack = traces.some((trace) => trace.status === "rolling_back");
+    if (!hasRollingBack) return;
+
+    const interval = setInterval(() => {
+      refreshBoard("manual");
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [traces, refreshBoard]);
+
+  useEffect(() => {
     const supabase = getSupabaseBrowserClient();
     const channel = supabase
       .channel(`release-trace-board:${userId}`)

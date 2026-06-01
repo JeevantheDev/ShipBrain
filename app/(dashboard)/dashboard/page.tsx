@@ -36,8 +36,13 @@ export default function DashboardPage() {
           <PendingDeployQueue />
           <EnvVarsWidget />
           <EnvironmentsWidget />
+        </div>
 
-          {/* Quick Actions - at the bottom */}
+        {/* Right Column */}
+        <div className="stack">
+          <RecentActivity />
+
+          {/* Quick Actions */}
           <div className="panel">
             <header className="panel-head">
               <h2>Quick Actions</h2>
@@ -89,11 +94,6 @@ export default function DashboardPage() {
               </Link>
             </div>
           </div>
-        </div>
-
-        {/* Right Column */}
-        <div className="stack">
-          <RecentActivity />
         </div>
       </div>
     </>
