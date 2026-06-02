@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { 
-  Sparkles, 
   ArrowUpRight, 
+  X,
   GitPullRequest, 
   Terminal, 
   Layers, 
@@ -26,8 +26,13 @@ export function AskAiWidget() {
   const [activeRepoFullName, setActiveRepoFullName] = useState<string | null>(null);
   const [releases, setReleases] = useState<ReleaseItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
+    // Read dismiss state on mount
+    const isDismissed = window.localStorage.getItem("shipbrain:dismiss-ask-ai") === "true";
+    setDismissed(isDismissed);
+
     async function fetchData() {
       try {
         const [repoRes, releaseRes] = await Promise.all([
@@ -62,7 +67,12 @@ export function AskAiWidget() {
     };
   }, []);
 
-  if (loading || !activeRepoFullName) {
+  const handleDismiss = () => {
+    setDismissed(true);
+    window.localStorage.setItem("shipbrain:dismiss-ask-ai", "true");
+  };
+
+  if (loading || !activeRepoFullName || dismissed) {
     return null;
   }
 
@@ -74,34 +84,34 @@ export function AskAiWidget() {
         {
           label: "Generate Release Handbook",
           prompt: `Prepare a release handbook based on the recent production release tag ${latestRelease.releaseTag}.`,
-          icon: <BookOpen size={13} style={{ color: "var(--ai-purple)" }} />
+          icon: <BookOpen size={12} style={{ color: "var(--ai-purple)" }} />
         },
         {
           label: `Verify Release Live Status (${latestRelease.releaseTag})`,
           prompt: `Verify status of the production release tag ${latestRelease.releaseTag} and check the live URL.`,
-          icon: <CheckCircle2 size={13} style={{ color: "var(--green)" }} />
+          icon: <CheckCircle2 size={12} style={{ color: "var(--green)" }} />
         },
         {
           label: "Summarize Latest Release",
           prompt: `Provide a summary of the commits and features included in release ${latestRelease.releaseTag}.`,
-          icon: <Rocket size={13} style={{ color: "var(--brand)" }} />
+          icon: <Rocket size={12} style={{ color: "var(--brand)" }} />
         }
       ]
     : [
         {
           label: "Plan a New Feature",
           prompt: "Help me plan a new draft PR plan for my connected repository.",
-          icon: <GitPullRequest size={13} style={{ color: "var(--ai-purple)" }} />
+          icon: <GitPullRequest size={12} style={{ color: "var(--ai-purple)" }} />
         },
         {
           label: "Check CI Run Status",
           prompt: "Show me the current status of my repository's workflow runs.",
-          icon: <Terminal size={13} style={{ color: "var(--brand)" }} />
+          icon: <Terminal size={12} style={{ color: "var(--brand)" }} />
         },
         {
           label: "Explain Release Gating",
           prompt: "Explain how ShipBrain's release gating and tag-and-deploy logic works.",
-          icon: <Layers size={13} style={{ color: "var(--text-muted)" }} />
+          icon: <Layers size={12} style={{ color: "var(--text-muted)" }} />
         }
       ];
 
@@ -114,27 +124,68 @@ export function AskAiWidget() {
   };
 
   return (
-    <section className="panel ask-ai-section">
-      <header className="panel-head" style={{ marginBottom: 12 }}>
-        <h2 style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <Sparkles size={15} className="text-ai" style={{ color: "var(--ai-purple)", animation: "pulse 2s infinite ease-in-out" }} />
-          Ask AI Recommendations
-        </h2>
-      </header>
-      <div className="ask-ai-badge-list">
-        {cards.map((card, index) => (
-          <button
-            key={index}
-            type="button"
-            className="ask-ai-badge"
-            onClick={() => handleCardClick(card.prompt)}
-          >
-            {card.icon}
-            <span>{card.label}</span>
-            <ArrowUpRight size={13} className="arrow-icon" />
-          </button>
-        ))}
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "8px 24px",
+      background: "var(--panel-2)",
+      borderBottom: "1px solid var(--line)",
+      margin: "-28px -28px 24px -28px",
+      backgroundClip: "padding-box",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+        <span style={{ 
+          fontSize: "12px", 
+          fontWeight: 600, 
+          color: "var(--text)",
+          marginRight: "4px"
+        }}>
+          Ask AI
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          {cards.map((card, index) => (
+            <button
+              key={index}
+              type="button"
+              className="ask-ai-badge"
+              onClick={() => handleCardClick(card.prompt)}
+              style={{
+                padding: "4px 12px",
+                fontSize: "11.5px",
+                borderRadius: "16px",
+                background: "transparent",
+                borderColor: "rgba(255, 255, 255, 0.15)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {card.icon}
+              <span>{card.label}</span>
+              <ArrowUpRight size={11} className="arrow-icon" style={{ marginLeft: "2px" }} />
+            </button>
+          ))}
+        </div>
       </div>
-    </section>
+      <button
+        type="button"
+        onClick={handleDismiss}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: "var(--text-muted)",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          padding: "4px",
+          transition: "color 0.15s ease",
+          outline: "none",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text)")}
+        onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-muted)")}
+        aria-label="Dismiss recommendations"
+      >
+        <X size={14} />
+      </button>
+    </div>
   );
 }

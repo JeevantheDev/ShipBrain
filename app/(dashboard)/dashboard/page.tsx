@@ -9,6 +9,7 @@ import { AskAiWidget } from "@/components/dashboard/AskAiWidget";
 export default function DashboardPage() {
   return (
     <>
+      <AskAiWidget />
       <header className="page-head">
         <div>
           <div className="eyebrow">
@@ -30,7 +31,6 @@ export default function DashboardPage() {
       </header>
 
       <DashboardPrOverview />
-      <AskAiWidget />
 
       <div className="body-grid" style={{ marginTop: 24 }}>
         {/* Left Column */}
