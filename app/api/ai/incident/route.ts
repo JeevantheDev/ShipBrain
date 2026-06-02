@@ -71,20 +71,31 @@ async function getIncidentReleaseContext(incident: any, db: any, user: any) {
   let releaseCommits: any[] = [];
 
   if (repoParts) {
+    // Fetch all commits in parallel for better performance
+    const commitPromises: Promise<any>[] = [];
+
     // Fetch feature PR commits
     if (spec.pr_number) {
-      featureCommits = await listPullRequestCommits({ ...repoParts, pullNumber: spec.pr_number }).catch((err) => {
-        console.error("Error fetching feature PR commits:", err);
-        return [];
-      });
+      commitPromises.push(
+        listPullRequestCommits({ ...repoParts, pullNumber: spec.pr_number })
+          .then(commits => ({ type: 'feature', prNumber: spec.pr_number, commits }))
+          .catch((err) => {
+            console.error("Error fetching feature PR commits:", err);
+            return { type: 'feature', prNumber: spec.pr_number, commits: [] };
+          })
+      );
     }
 
     // Fetch release PR commits
     if (spec.release_pr_number) {
-      releaseCommits = await listPullRequestCommits({ ...repoParts, pullNumber: spec.release_pr_number }).catch((err) => {
-        console.error("Error fetching release PR commits:", err);
-        return [];
-      });
+      commitPromises.push(
+        listPullRequestCommits({ ...repoParts, pullNumber: spec.release_pr_number })
+          .then(commits => ({ type: 'release', prNumber: spec.release_pr_number, commits }))
+          .catch((err) => {
+            console.error("Error fetching release PR commits:", err);
+            return { type: 'release', prNumber: spec.release_pr_number, commits: [] };
+          })
+      );
     }
 
     // Also fetch all feature specs included in this release (by release_pr_number)
@@ -95,20 +106,47 @@ async function getIncidentReleaseContext(incident: any, db: any, user: any) {
         .eq("user_id", user.id)
         .eq("repo_full_name", repoFullName)
         .eq("release_pr_number", spec.release_pr_number)
-        .neq("id", spec.id);
+        .neq("id", spec.id)
+        .limit(10); // Limit to avoid too many API calls
 
-      // Fetch commits from all included feature PRs
+      // Fetch commits from all included feature PRs in parallel
       if (includedSpecs?.length) {
         for (const includedSpec of includedSpecs) {
           if (includedSpec.pr_number) {
-            const commits = await listPullRequestCommits({ ...repoParts, pullNumber: includedSpec.pr_number }).catch(() => []);
-            featureCommits.push(...commits.map((c: any) => ({
-              ...c,
-              fromPr: includedSpec.pr_number,
-              featureTitle: includedSpec.title
-            })));
+            commitPromises.push(
+              listPullRequestCommits({ ...repoParts, pullNumber: includedSpec.pr_number })
+                .then(commits => ({
+                  type: 'included',
+                  prNumber: includedSpec.pr_number,
+                  featureTitle: includedSpec.title,
+                  commits
+                }))
+                .catch(() => ({
+                  type: 'included',
+                  prNumber: includedSpec.pr_number,
+                  featureTitle: includedSpec.title,
+                  commits: []
+                }))
+            );
           }
         }
+      }
+    }
+
+    // Wait for all commits to be fetched in parallel
+    const commitResults = await Promise.all(commitPromises);
+
+    for (const result of commitResults) {
+      if (result.type === 'feature') {
+        featureCommits = result.commits;
+      } else if (result.type === 'release') {
+        releaseCommits = result.commits;
+      } else if (result.type === 'included') {
+        featureCommits.push(...result.commits.map((c: any) => ({
+          ...c,
+          fromPr: result.prNumber,
+          featureTitle: result.featureTitle
+        })));
       }
     }
   }
