@@ -79,7 +79,7 @@ export function LandingBody({ children }: LandingBodyProps) {
       confirmBtn.textContent = s.confirm;
       doneText.innerHTML = s.doneText;
       doneLink.innerHTML = s.link;
-      captionEl.innerHTML = `same gate <span class="sep">·</span> <span class="now">${s.caption}</span>`;
+      if (captionEl) captionEl.innerHTML = `same gate <span class="sep">·</span> <span class="now">${s.caption}</span>`;
 
       steps.forEach((st, n) => {
         st.classList.toggle("active", n === i);

@@ -358,6 +358,29 @@ export function PendingDeployQueue() {
           <span className="badge-count">{pending.length} pending</span>
         </h2>
         <div className="tools">
+          <button
+            className="ghost-btn"
+            type="button"
+            onClick={async () => {
+              setLoading(true);
+              try {
+                await fetch("/api/specs/fix-stale", { method: "POST" });
+                await fetch("/api/traces/fix-stale", { method: "POST" });
+                await loadPending();
+              } catch (e) {
+                console.error("Fix stale failed:", e);
+              } finally {
+                setLoading(false);
+              }
+            }}
+            disabled={loading}
+            title="Sync with GitHub and fix stale data"
+          >
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+              <path d="M3 7l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            Fix Stale
+          </button>
           <button className="ghost-btn" type="button" onClick={() => loadPending()} disabled={loading}>
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" className={loading ? "spin" : ""}>
               <path d="M10 6a4 4 0 1 1-1.2-2.8L10 4.5M10 1.5V4.5H7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>

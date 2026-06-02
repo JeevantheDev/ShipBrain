@@ -442,10 +442,53 @@ export async function POST(request: Request) {
               release_pr_url: pullRequest.html_url,
               release_pr_status: releasePrStatus,
               release_status: releaseStatus,
-              ...(nextStatus === "merged" ? { release_sha: pullRequest.merge_commit_sha ?? null } : {}),
+              ...(nextStatus === "merged" ? {
+                release_sha: pullRequest.merge_commit_sha ?? null,
+                merge_sha: pullRequest.merge_commit_sha ?? null,
+                status: "merged"
+              } : {}),
               updated_at: new Date().toISOString()
             })
             .eq("id", specId);
+        } else if (nextStatus === "merged") {
+          // No existing spec found for merged release PR - create one
+          const { data: repoOwner } = await supabase
+            .from("repos")
+            .select("user_id")
+            .eq("full_name", repoFullName)
+            .maybeSingle();
+
+          if (repoOwner?.user_id) {
+            const { data: newReleaseSpec, error: insertError } = await supabase
+              .from("specs")
+              .insert({
+                user_id: repoOwner.user_id,
+                raw_spec: `Release PR #${pullRequest.number}: ${pullRequest.title}`,
+                decomposed_tasks: { prTitle: pullRequest.title, type: "release" },
+                status: "merged",
+                repo_full_name: repoFullName,
+                branch_name: "develop",
+                base_branch: "main",
+                pr_number: pullRequest.number,
+                pr_url: pullRequest.html_url,
+                merged_at: pullRequest.merged_at ?? new Date().toISOString(),
+                merge_sha: pullRequest.merge_commit_sha ?? null,
+                release_sha: pullRequest.merge_commit_sha ?? null,
+                release_pr_number: pullRequest.number,
+                release_pr_url: pullRequest.html_url,
+                release_pr_status: "merged",
+                release_status: "pending_deploy",
+                updated_at: new Date().toISOString()
+              })
+              .select("id")
+              .single();
+
+            if (!insertError && newReleaseSpec) {
+              syncedSpecId = newReleaseSpec.id;
+              updated = 1;
+              console.log(`Created new release spec ${newReleaseSpec.id} for merged Release PR #${pullRequest.number}`);
+            }
+          }
         }
       }
 
