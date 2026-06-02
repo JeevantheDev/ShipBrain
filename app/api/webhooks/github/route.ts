@@ -369,8 +369,8 @@ export async function POST(request: Request) {
           }).eq("full_name", repoFullName).eq("setup_pr_number", pullRequest.number);
 
           // Trigger initial deployments asynchronously
-          const baseUrl = process.env.SHIPBRAIN_API_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-          fetch(`${baseUrl}/api/deployments/initial`, {
+          const origin = new URL(request.url).origin;
+          fetch(`${origin}/api/deployments/initial`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
