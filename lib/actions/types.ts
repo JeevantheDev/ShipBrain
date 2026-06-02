@@ -287,6 +287,13 @@ export interface SyncSpecResult {
   traceUpdated: boolean;
 }
 
+export interface MergeReverseSyncResult {
+  incidentId: string;
+  traceId: string;
+  mergeSha: string;
+  traceCompleted: boolean;
+}
+
 // ============================================================================
 // Hotfix Output Types
 // ============================================================================

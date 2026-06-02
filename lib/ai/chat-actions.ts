@@ -10,10 +10,6 @@
 
 import { SupabaseClient } from "@supabase/supabase-js";
 import { DEFAULT_SPEC_PR_RECIPES } from "@/lib/spec-recipes";
-import { createReleasePullRequest } from "@/lib/github/pr";
-import { addTraceEvent, associateFeaturesWithRelease, createOrUpdateTrace } from "@/lib/orchestrator";
-import { phaseForStatus } from "@/lib/orchestrator/state-machine";
-import { getNextSemverReleaseTag } from "@/lib/shipbrain/semver";
 import {
   createReleasePR as createReleasePRAction,
   deployPreview as deployPreviewAction,
@@ -502,7 +498,13 @@ export async function executeAction(
       }
 
       case "approve_release": {
-        // Resolve traceId to specId, then use the same deploy_production flow
+        // Build unified action context
+        const approveCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
+        if (!approveCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        // Resolve traceId to specId if needed
         let specId = params.specId;
 
         if (!specId && params.traceId) {
@@ -518,30 +520,29 @@ export async function executeAction(
           throw new Error("Could not find spec for this release. Please use 'Deploy to Production' from the Deployment Queue instead.");
         }
 
-        // Use the same production deployment API
-        let releaseTag = params.releaseTag;
-        if (!releaseTag) {
-          const now = new Date();
-          const date = now.toISOString().slice(0, 10).replace(/-/g, ".");
-          const time = now.toISOString().slice(11, 16).replace(":", "");
-          releaseTag = `release-v${date}-${time}`;
+        // Use unified deployProduction action (same as deploy_production case)
+        const approveResult = await deployProductionAction(approveCtx, {
+          specId,
+          releaseTag: params.releaseTag,
+          repoFullName: repoFullName || undefined
+        });
+
+        if (!approveResult.ok) {
+          throw new Error(approveResult.error || approveResult.message);
         }
 
-        const response = await fetch(`${baseUrl}/api/deployments/start-production`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            specId,
-            releaseTag,
-            internalUserId: userId
-          })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || data.detail || "Failed to start production deployment");
-        return { success: true, result: { ...data, nextStep: "Production deployment in progress" } };
+        return {
+          success: true,
+          result: {
+            specId: approveResult.data?.specId,
+            releaseTag: approveResult.data?.releaseTag,
+            releaseSha: approveResult.data?.releaseSha,
+            workflowUrl: approveResult.data?.workflowUrl,
+            productionUrl: approveResult.data?.productionUrl,
+            status: approveResult.data?.status,
+            nextStep: "Production deployment in progress"
+          }
+        };
       }
 
       case "rollback": {

@@ -34,6 +34,7 @@ export { syncSpecFromGitHub, syncMultipleSpecs } from "./sync-spec";
 export { createHotfix } from "./create-hotfix";
 export { approveHotfix } from "./approve-hotfix";
 export { syncHotfix } from "./sync-hotfix";
+export { mergeReverseSync } from "./merge-reverse-sync";
 
 // Incident Actions
 export { analyzeIncident } from "./analyze-incident";
