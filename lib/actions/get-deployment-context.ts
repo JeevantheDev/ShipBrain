@@ -137,17 +137,67 @@ export async function getRepoDeploymentContext(
   };
 
   try {
-    // 1. Get current production release (most recent deployed spec)
-    const { data: prodSpec } = await db
-      .from("specs")
-      .select("id, release_tag, release_sha, deployed_at, decomposed_tasks")
-      .eq("repo_full_name", repoFullName)
-      .eq("user_id", userId)
-      .eq("release_status", "deployed")
-      .order("deployed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // Run all independent database queries in parallel for better performance
+    const [
+      prodSpecResult,
+      previewSpecResult,
+      recentSpecsResult,
+      rollbacksResult,
+      pendingResult,
+      tracesResult
+    ] = await Promise.all([
+      // 1. Get current production release
+      db.from("specs")
+        .select("id, release_tag, release_sha, deployed_at, decomposed_tasks")
+        .eq("repo_full_name", repoFullName)
+        .eq("user_id", userId)
+        .eq("release_status", "deployed")
+        .order("deployed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      // 2. Get current preview deployment
+      db.from("specs")
+        .select("id, branch_name, preview_url, preview_deployed_at, updated_at")
+        .eq("repo_full_name", repoFullName)
+        .eq("user_id", userId)
+        .eq("preview_status", "deployed")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      // 3. Get recent deployments
+      db.from("specs")
+        .select("id, release_tag, release_status, deployed_at, updated_at, decomposed_tasks")
+        .eq("repo_full_name", repoFullName)
+        .eq("user_id", userId)
+        .in("release_status", ["deployed", "rolled_back", "deploying"])
+        .order("updated_at", { ascending: false })
+        .limit(5),
+      // 4. Get recent rollbacks
+      db.from("rollback_history")
+        .select("source_release_tag, target_release_tag, initiated_at, status")
+        .eq("repo_full_name", repoFullName)
+        .eq("user_id", userId)
+        .order("initiated_at", { ascending: false })
+        .limit(3),
+      // 5. Get pending releases
+      db.from("specs")
+        .select("id, release_tag, release_status, release_pr_number")
+        .eq("repo_full_name", repoFullName)
+        .eq("user_id", userId)
+        .in("release_status", ["ready_for_prod", "pending_deploy", "deploying"])
+        .order("updated_at", { ascending: false })
+        .limit(5),
+      // 6. Get recent traces (for activity)
+      db.from("release_traces")
+        .select("id, title")
+        .eq("repo_full_name", repoFullName)
+        .eq("user_id", userId)
+        .order("updated_at", { ascending: false })
+        .limit(5)
+    ]);
 
+    // Process production spec
+    const prodSpec = prodSpecResult.data;
     if (prodSpec) {
       context.currentProduction = {
         releaseTag: prodSpec.release_tag,
@@ -158,17 +208,8 @@ export async function getRepoDeploymentContext(
       };
     }
 
-    // 2. Get current preview deployment
-    const { data: previewSpec } = await db
-      .from("specs")
-      .select("id, branch_name, preview_url, preview_deployed_at, updated_at")
-      .eq("repo_full_name", repoFullName)
-      .eq("user_id", userId)
-      .eq("preview_status", "deployed")
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
+    // Process preview spec
+    const previewSpec = previewSpecResult.data;
     if (previewSpec) {
       context.currentPreview = {
         branch: previewSpec.branch_name,
@@ -178,16 +219,8 @@ export async function getRepoDeploymentContext(
       };
     }
 
-    // 3. Get recent deployments
-    const { data: recentSpecs } = await db
-      .from("specs")
-      .select("id, release_tag, release_status, deployed_at, updated_at, decomposed_tasks")
-      .eq("repo_full_name", repoFullName)
-      .eq("user_id", userId)
-      .in("release_status", ["deployed", "rolled_back", "deploying"])
-      .order("updated_at", { ascending: false })
-      .limit(5);
-
+    // Process recent deployments
+    const recentSpecs = recentSpecsResult.data;
     if (recentSpecs) {
       context.recentDeployments = recentSpecs.map(s => ({
         type: s.release_status === "rolled_back" ? "rollback" as const : "production" as const,
@@ -198,15 +231,8 @@ export async function getRepoDeploymentContext(
       }));
     }
 
-    // 4. Get recent rollbacks
-    const { data: rollbacks } = await db
-      .from("rollback_history")
-      .select("source_release_tag, target_release_tag, initiated_at, status")
-      .eq("repo_full_name", repoFullName)
-      .eq("user_id", userId)
-      .order("initiated_at", { ascending: false })
-      .limit(3);
-
+    // Process rollbacks
+    const rollbacks = rollbacksResult.data;
     if (rollbacks) {
       context.recentRollbacks = rollbacks.map(r => ({
         sourceTag: r.source_release_tag,
@@ -216,37 +242,8 @@ export async function getRepoDeploymentContext(
       }));
     }
 
-    // 5. Get features currently in production (linked to current release)
-    if (context.currentProduction?.releaseTag) {
-      const { data: features } = await db
-        .from("specs")
-        .select("id, decomposed_tasks, pr_number, release_tag")
-        .eq("repo_full_name", repoFullName)
-        .eq("user_id", userId)
-        .eq("release_status", "deployed")
-        .eq("release_tag", context.currentProduction.releaseTag)
-        .limit(10);
-
-      if (features) {
-        context.productionFeatures = features.map(f => ({
-          specId: f.id,
-          title: (f.decomposed_tasks as any)?.prTitle || null,
-          prNumber: f.pr_number,
-          releaseTag: f.release_tag
-        }));
-      }
-    }
-
-    // 6. Get pending releases
-    const { data: pending } = await db
-      .from("specs")
-      .select("id, release_tag, release_status, release_pr_number")
-      .eq("repo_full_name", repoFullName)
-      .eq("user_id", userId)
-      .in("release_status", ["ready_for_prod", "pending_deploy", "deploying"])
-      .order("updated_at", { ascending: false })
-      .limit(5);
-
+    // Process pending releases
+    const pending = pendingResult.data;
     if (pending) {
       context.pendingReleases = pending.map(p => ({
         specId: p.id,
@@ -256,33 +253,58 @@ export async function getRepoDeploymentContext(
       }));
     }
 
-    // 7. Get recent trace activity
-    const { data: traces } = await db
-      .from("release_traces")
-      .select("id, title")
-      .eq("repo_full_name", repoFullName)
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(5);
+    // Run dependent queries in parallel (features + trace events)
+    const traces = tracesResult.data;
+    const dependentQueries: Promise<any>[] = [];
 
+    // Features query depends on currentProduction
+    if (context.currentProduction?.releaseTag) {
+      dependentQueries.push(
+        db.from("specs")
+          .select("id, decomposed_tasks, pr_number, release_tag")
+          .eq("repo_full_name", repoFullName)
+          .eq("user_id", userId)
+          .eq("release_status", "deployed")
+          .eq("release_tag", context.currentProduction.releaseTag)
+          .limit(10)
+          .then(result => ({ type: 'features', data: result.data }))
+      );
+    }
+
+    // Trace events query depends on traces
     if (traces?.length) {
       const traceIds = traces.map(t => t.id);
-      const { data: events } = await db
-        .from("trace_events")
-        .select("event_type, trace_id, created_at, actor, details")
-        .in("trace_id", traceIds)
-        .order("created_at", { ascending: false })
-        .limit(10);
+      dependentQueries.push(
+        db.from("trace_events")
+          .select("event_type, trace_id, created_at, actor, details")
+          .in("trace_id", traceIds)
+          .order("created_at", { ascending: false })
+          .limit(10)
+          .then(result => ({ type: 'events', data: result.data, traces }))
+      );
+    }
 
-      if (events) {
-        const traceMap = new Map(traces.map(t => [t.id, t.title]));
-        context.recentActivity = events.map(e => ({
-          eventType: e.event_type,
-          traceTitle: traceMap.get(e.trace_id) || null,
-          createdAt: e.created_at,
-          actor: e.actor,
-          details: e.details || {}
-        }));
+    // Wait for dependent queries
+    if (dependentQueries.length > 0) {
+      const dependentResults = await Promise.all(dependentQueries);
+      for (const result of dependentResults) {
+        if (result.type === 'features' && result.data) {
+          context.productionFeatures = result.data.map((f: any) => ({
+            specId: f.id,
+            title: (f.decomposed_tasks as any)?.prTitle || null,
+            prNumber: f.pr_number,
+            releaseTag: f.release_tag
+          }));
+        } else if (result.type === 'events' && result.data) {
+          const traceMap = new Map(result.traces.map((t: any) => [t.id, t.title]));
+          context.recentActivity = result.data.map((e: any) => ({
+            eventType: e.event_type,
+            traceTitle: traceMap.get(e.trace_id) || null,
+            createdAt: e.created_at,
+            actor: e.actor,
+            details: e.details || {}
+          }));
+        }
       }
     }
 
