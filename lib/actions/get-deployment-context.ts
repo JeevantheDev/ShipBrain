@@ -112,8 +112,13 @@ export async function getRepoDeploymentContext(
   db: SupabaseClient,
   userId: string,
   repoFullName: string,
-  githubToken?: string
+  options?: {
+    githubToken?: string;
+    /** Skip GitHub API calls for faster response (default: true for performance) */
+    includeGitHubData?: boolean;
+  }
 ): Promise<DeploymentContext> {
+  const { githubToken, includeGitHubData = false } = options ?? {};
   const context: DeploymentContext = {
     repoFullName,
     currentProduction: null,
@@ -281,144 +286,95 @@ export async function getRepoDeploymentContext(
       }
     }
 
-    // 8. Get GitHub token and fetch recent commits/branch comparison
-    let token = githubToken;
-    if (!token) {
-      try {
-        const adminDb = getSupabaseAdminClient();
-        const { data: profile } = await adminDb
-          .from("profiles")
-          .select("github_access_token")
-          .eq("id", userId)
-          .maybeSingle();
-        token = profile?.github_access_token || undefined;
-      } catch (err) {
-        console.error("[getRepoDeploymentContext] Failed to get GitHub token:", err);
-      }
-    }
-
-    if (token) {
-      const [owner, repo] = repoFullName.split("/");
-      if (owner && repo) {
+    // 8. Optionally fetch GitHub data (commits and branch comparison)
+    // This is disabled by default for performance - enable with includeGitHubData: true
+    if (includeGitHubData) {
+      let token = githubToken;
+      if (!token) {
         try {
-          const octokit = getOctokit(token);
+          const adminDb = getSupabaseAdminClient();
+          const { data: profile } = await adminDb
+            .from("profiles")
+            .select("github_access_token")
+            .eq("id", userId)
+            .maybeSingle();
+          token = profile?.github_access_token || undefined;
+        } catch (err) {
+          console.error("[getRepoDeploymentContext] Failed to get GitHub token:", err);
+        }
+      }
 
-          // 8a. Get recent commits on main branch
+      if (token) {
+        const [owner, repo] = repoFullName.split("/");
+        if (owner && repo) {
           try {
-            const { data: mainCommits } = await octokit.repos.listCommits({
-              owner,
-              repo,
-              sha: "main",
-              per_page: 10
-            });
+            const octokit = getOctokit(token);
 
-            context.recentMainCommits = mainCommits.map(c => ({
-              sha: c.sha,
-              shortSha: c.sha.slice(0, 7),
-              message: c.commit.message.split("\n")[0] || "Commit",
-              author: c.commit.author?.name || c.author?.login || null,
-              date: c.commit.author?.date || new Date().toISOString(),
-              url: c.html_url
-            }));
-          } catch (mainErr: any) {
-            // Main branch might not exist, try master
-            if (mainErr.status === 404) {
-              try {
-                const { data: masterCommits } = await octokit.repos.listCommits({
-                  owner,
-                  repo,
-                  sha: "master",
-                  per_page: 10
-                });
-                context.recentMainCommits = masterCommits.map(c => ({
-                  sha: c.sha,
-                  shortSha: c.sha.slice(0, 7),
-                  message: c.commit.message.split("\n")[0] || "Commit",
-                  author: c.commit.author?.name || c.author?.login || null,
-                  date: c.commit.author?.date || new Date().toISOString(),
-                  url: c.html_url
-                }));
-              } catch {
-                // Silently fail if master also doesn't exist
-              }
+            // Run all GitHub API calls in parallel for better performance
+            const [mainCommitsResult, developCommitsResult, comparisonResult] = await Promise.allSettled([
+              // Main branch commits
+              octokit.repos.listCommits({ owner, repo, sha: "main", per_page: 10 })
+                .catch(async (err: any) => {
+                  if (err.status === 404) {
+                    return octokit.repos.listCommits({ owner, repo, sha: "master", per_page: 10 });
+                  }
+                  throw err;
+                }),
+              // Develop branch commits
+              octokit.repos.listCommits({ owner, repo, sha: "develop", per_page: 10 }),
+              // Branch comparison
+              octokit.repos.compareCommits({ owner, repo, base: "main", head: "develop" })
+                .catch(async (err: any) => {
+                  if (err.status === 404) {
+                    return octokit.repos.compareCommits({ owner, repo, base: "master", head: "develop" });
+                  }
+                  throw err;
+                })
+            ]);
+
+            // Process main commits
+            if (mainCommitsResult.status === "fulfilled") {
+              context.recentMainCommits = mainCommitsResult.value.data.map(c => ({
+                sha: c.sha,
+                shortSha: c.sha.slice(0, 7),
+                message: c.commit.message.split("\n")[0] || "Commit",
+                author: c.commit.author?.name || c.author?.login || null,
+                date: c.commit.author?.date || new Date().toISOString(),
+                url: c.html_url
+              }));
             }
-          }
 
-          // 8b. Get recent commits on develop branch
-          try {
-            const { data: developCommits } = await octokit.repos.listCommits({
-              owner,
-              repo,
-              sha: "develop",
-              per_page: 10
-            });
-
-            context.recentDevelopCommits = developCommits.map(c => ({
-              sha: c.sha,
-              shortSha: c.sha.slice(0, 7),
-              message: c.commit.message.split("\n")[0] || "Commit",
-              author: c.commit.author?.name || c.author?.login || null,
-              date: c.commit.author?.date || new Date().toISOString(),
-              url: c.html_url
-            }));
-          } catch {
-            // Develop branch might not exist
-          }
-
-          // 8c. Get branch comparison (develop vs main)
-          try {
-            const { data: comparison } = await octokit.repos.compareCommits({
-              owner,
-              repo,
-              base: "main",
-              head: "develop"
-            });
-
-            context.branchComparison = {
-              developAhead: comparison.ahead_by,
-              developBehind: comparison.behind_by,
-              lastSyncedAt: comparison.merge_base_commit?.commit?.author?.date || null
-            };
-
-            // Get pending commits (develop commits not on main)
-            context.pendingCommits = comparison.commits.slice(0, 10).map(c => ({
-              sha: c.sha,
-              shortSha: c.sha.slice(0, 7),
-              message: c.commit.message.split("\n")[0] || "Commit",
-              author: c.commit.author?.name || c.author?.login || null,
-              date: c.commit.author?.date || new Date().toISOString()
-            }));
-          } catch (compareErr: any) {
-            // Try with master branch
-            if (compareErr.status === 404) {
-              try {
-                const { data: comparison } = await octokit.repos.compareCommits({
-                  owner,
-                  repo,
-                  base: "master",
-                  head: "develop"
-                });
-
-                context.branchComparison = {
-                  developAhead: comparison.ahead_by,
-                  developBehind: comparison.behind_by,
-                  lastSyncedAt: comparison.merge_base_commit?.commit?.author?.date || null
-                };
-
-                context.pendingCommits = comparison.commits.slice(0, 10).map(c => ({
-                  sha: c.sha,
-                  shortSha: c.sha.slice(0, 7),
-                  message: c.commit.message.split("\n")[0] || "Commit",
-                  author: c.commit.author?.name || c.author?.login || null,
-                  date: c.commit.author?.date || new Date().toISOString()
-                }));
-              } catch {
-                // Silently fail
-              }
+            // Process develop commits
+            if (developCommitsResult.status === "fulfilled") {
+              context.recentDevelopCommits = developCommitsResult.value.data.map(c => ({
+                sha: c.sha,
+                shortSha: c.sha.slice(0, 7),
+                message: c.commit.message.split("\n")[0] || "Commit",
+                author: c.commit.author?.name || c.author?.login || null,
+                date: c.commit.author?.date || new Date().toISOString(),
+                url: c.html_url
+              }));
             }
+
+            // Process branch comparison
+            if (comparisonResult.status === "fulfilled") {
+              const comparison = comparisonResult.value.data;
+              context.branchComparison = {
+                developAhead: comparison.ahead_by,
+                developBehind: comparison.behind_by,
+                lastSyncedAt: comparison.merge_base_commit?.commit?.author?.date || null
+              };
+              context.pendingCommits = comparison.commits.slice(0, 10).map(c => ({
+                sha: c.sha,
+                shortSha: c.sha.slice(0, 7),
+                message: c.commit.message.split("\n")[0] || "Commit",
+                author: c.commit.author?.name || c.author?.login || null,
+                date: c.commit.author?.date || new Date().toISOString()
+              }));
+            }
+          } catch (githubErr) {
+            console.error("[getRepoDeploymentContext] GitHub API error:", githubErr);
           }
-        } catch (githubErr) {
-          console.error("[getRepoDeploymentContext] GitHub API error:", githubErr);
         }
       }
     }
@@ -526,7 +482,8 @@ function formatRelativeTime(dateStr: string | null): string {
  */
 export async function getAllReposDeploymentContext(
   db: SupabaseClient,
-  userId: string
+  userId: string,
+  options?: { includeGitHubData?: boolean }
 ): Promise<Array<{
   repoFullName: string;
   summary: string;
@@ -550,7 +507,9 @@ export async function getAllReposDeploymentContext(
   }> = [];
 
   for (const repo of repos) {
-    const ctx = await getRepoDeploymentContext(db, userId, repo.full_name);
+    const ctx = await getRepoDeploymentContext(db, userId, repo.full_name, {
+      includeGitHubData: options?.includeGitHubData ?? false
+    });
     summaries.push({
       repoFullName: repo.full_name,
       summary: ctx.summary,

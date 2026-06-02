@@ -828,7 +828,8 @@ export async function getPendingCommits(user: TelegramUser) {
   const sections: string[] = ["📦 *Pending Commits (develop → main)*", ""];
 
   for (const repoFullName of repos.slice(0, 3)) {
-    const ctx = await getRepoDeploymentContext(db, user.user_id, repoFullName);
+    // Include GitHub data for detailed commit info
+    const ctx = await getRepoDeploymentContext(db, user.user_id, repoFullName, { includeGitHubData: true });
     const repoName = repoFullName.split("/")[1] || repoFullName;
 
     if (!ctx.branchComparison) {
