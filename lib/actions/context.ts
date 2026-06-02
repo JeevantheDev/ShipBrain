@@ -5,6 +5,7 @@
  */
 
 import { SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ActionContext, ActionSource } from "./types";
 
 /**
@@ -19,8 +20,11 @@ export async function buildActionContext(params: {
 }): Promise<ActionContext | null> {
   const { db, userId, source, repoFullName, actor } = params;
 
+  // Always use admin client for profile lookup to bypass RLS
+  const adminDb = getSupabaseAdminClient();
+
   // Get user's GitHub token
-  const { data: profile } = await db
+  const { data: profile } = await adminDb
     .from("profiles")
     .select("github_access_token, email")
     .eq("id", userId)

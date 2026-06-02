@@ -192,20 +192,19 @@ export async function POST(request: Request) {
   // Step 4: Create release traces for tracking
   const traces: any[] = [];
 
-  // Preview trace (develop deployment)
+  // Preview trace (develop deployment) - no specId to keep it separate from production trace
   try {
     const previewTrace = await createOrUpdateTrace({
       repoFullName,
-      type: "release",
+      type: "feature",
       title: "Initial Preview Deployment",
       description: `ShipBrain onboarding - initial preview deployment from ${devBranch}`,
-      status: "merged_develop",
+      status: "preview_live",
       sourceBranch: devBranch,
       targetBranch: devBranch,
-      specId: spec?.id,
       source: "system",
       actor: profile?.github_login ?? "ShipBrain",
-      eventType: "deployment_started",
+      eventType: "preview_deployed",
       details: {
         type: "onboarding",
         environment: "preview",
@@ -224,13 +223,13 @@ export async function POST(request: Request) {
       type: "release",
       title: `Release ${releaseTag}`,
       description: `ShipBrain onboarding - initial production deployment`,
-      status: "merged_main",
+      status: "production_live",
       sourceBranch: prodBranch,
       targetBranch: prodBranch,
       specId: spec?.id,
       source: "system",
       actor: profile?.github_login ?? "ShipBrain",
-      eventType: "deployment_started",
+      eventType: "deployment_succeeded",
       details: {
         type: "onboarding",
         environment: "production",
