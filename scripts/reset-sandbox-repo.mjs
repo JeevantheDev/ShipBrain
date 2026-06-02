@@ -93,10 +93,10 @@ async function main() {
   }
   console.log(`  Deleted ${remoteBranches.length} branches`);
 
-  // Step 3: Delete release tags
+  // Step 3: Delete all release tags (release-*, hotfix-*, v* semver tags)
   console.log("\n[3/5] Deleting release tags...");
-  const tagOutput = exec("git tag -l 'release-*' && git tag -l 'hotfix-*'", { cwd });
-  const tags = tagOutput.split("\n").filter(Boolean);
+  const tagOutput = exec("git tag -l 'release-*' && git tag -l 'hotfix-*' && git tag -l 'v*'", { cwd });
+  const tags = [...new Set(tagOutput.split("\n").filter(Boolean))]; // dedupe
 
   for (const tag of tags) {
     exec(`git push origin --delete "${tag}"`, { ...execOpts, ignoreError: true });

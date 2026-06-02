@@ -237,12 +237,28 @@ export async function createReleaseTag(input: CreateReleaseTagInput) {
   });
 
   // Create the tag reference
-  await octokit.git.createRef({
-    owner: input.owner,
-    repo: input.repo,
-    ref: `refs/tags/${input.tag}`,
-    sha: tagObject.sha
-  });
+  try {
+    await octokit.git.createRef({
+      owner: input.owner,
+      repo: input.repo,
+      ref: `refs/tags/${input.tag}`,
+      sha: tagObject.sha
+    });
+  } catch (error) {
+    const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
+    if (status === 422) {
+      // Force update the tag reference if it already exists
+      await octokit.git.updateRef({
+        owner: input.owner,
+        repo: input.repo,
+        ref: `tags/${input.tag}`,
+        sha: tagObject.sha,
+        force: true
+      });
+    } else {
+      throw error;
+    }
+  }
 
   return {
     tag: input.tag,
