@@ -49,7 +49,8 @@ export async function getNextSemverReleaseTag(db: SupabaseClient | any, repoFull
     .from("specs")
     .select("release_tag")
     .eq("repo_full_name", repoFullName)
-    .not("release_tag", "is", null);
+    .not("release_tag", "is", null)
+    .neq("release_status", "rolled_back");
 
   if (error || !data || data.length === 0) {
     return "v1.0.0";

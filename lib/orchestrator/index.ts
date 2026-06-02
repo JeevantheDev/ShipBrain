@@ -484,7 +484,8 @@ export async function completeRollback(input: {
         if (!spec.release_tag) continue;
         const isNewer = compareSemver(spec.release_tag, rollback.target_release_tag) > 0;
         const newStatus = isNewer ? "rolled_back" : "deployed";
-        if (spec.release_status !== newStatus) {
+        const isTarget = spec.release_tag === rollback.target_release_tag;
+        if (spec.release_status !== newStatus || isTarget) {
           await db
             .from("specs")
             .update({
@@ -505,8 +506,9 @@ export async function completeRollback(input: {
 
         const isNewer = compareSemver(tag, rollback.target_release_tag) > 0;
         const targetTraceStatus = isNewer ? "rolled_back" : "production_live";
+        const isTarget = tag === rollback.target_release_tag;
 
-        if (trace.status !== targetTraceStatus) {
+        if (trace.status !== targetTraceStatus || isTarget) {
           const productionDeployment = {
             ...(trace.production_deployment ?? {}),
             status: isNewer ? "rolled_back" : "deployed",
@@ -666,7 +668,11 @@ async function propagateReleaseState(db: any, releaseTrace: any) {
         ? "failed"
         : releaseTrace.status === "merged_main"
           ? "deploying"
-          : "ready_for_prod",
+          : releaseTrace.status === "rolled_back"
+            ? "rolled_back"
+            : releaseTrace.status === "rolling_back"
+              ? "rolling_back"
+              : "ready_for_prod",
     deployed_at: releaseTrace.completed_at,
     updated_at: new Date().toISOString()
   };
