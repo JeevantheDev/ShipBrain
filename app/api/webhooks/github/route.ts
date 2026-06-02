@@ -152,17 +152,26 @@ export async function POST(request: Request) {
     }
 
     if (spec?.id) {
+      const { data: currentSpec } = await supabase
+        .from("specs")
+        .select("release_status")
+        .eq("id", spec.id)
+        .maybeSingle();
+
+      const isRolledBack = currentSpec?.release_status === "rolled_back";
+
       const specUpdate = isVercelDeploy
         ? {
             deployment_run_id: workflowRun.id,
             deployment_url: workflowRun.html_url ?? null,
-            release_status:
-              workflowRun.status === "completed"
+            release_status: isRolledBack
+              ? "rolled_back"
+              : workflowRun.status === "completed"
                 ? workflowRun.conclusion === "success"
                   ? "deployed"
                   : "failed"
                 : "deploying",
-            deployed_at: workflowRun.status === "completed" && workflowRun.conclusion === "success" ? new Date().toISOString() : null,
+            deployed_at: !isRolledBack && workflowRun.status === "completed" && workflowRun.conclusion === "success" ? new Date().toISOString() : null,
             updated_at: new Date().toISOString()
           }
         : {
