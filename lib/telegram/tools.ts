@@ -22,7 +22,9 @@ import {
   analyzeIncident as analyzeIncidentAction,
   syncHotfix as syncHotfixAction,
   mergeReverseSync as mergeReverseSyncAction,
-  buildActionContext
+  buildActionContext,
+  getRepoDeploymentContext,
+  getAllReposDeploymentContext
 } from "@/lib/actions";
 
 type TelegramUser = {
@@ -949,6 +951,10 @@ export async function getPendingDeployments(user: TelegramUser) {
 
 export async function getTraceStatus(user: TelegramUser) {
   const db = getSupabaseAdminClient();
+
+  // Get fresh deployment context for all repos
+  const repoContexts = await getAllReposDeploymentContext(db, user.user_id);
+
   const { data, error } = await db
     .from("release_traces")
     .select("id, title, repo_full_name, status, current_phase, pending_action, updated_at")
@@ -958,9 +964,23 @@ export async function getTraceStatus(user: TelegramUser) {
   if (error) throw new Error(error.message);
   const traces = data ?? [];
   const pending = traces.filter((trace) => trace.pending_action).slice(0, 6);
+
+  // Build current production section
+  const prodSection = repoContexts.length
+    ? [
+        "*Current Production:*",
+        ...repoContexts.slice(0, 3).map((ctx) => {
+          const tag = ctx.currentTag ? `\`${ctx.currentTag}\`` : "not deployed";
+          return `• ${ctx.repoFullName.split("/")[1]}: ${tag}`;
+        }),
+        ""
+      ]
+    : [];
+
   return [
     "📊 *ShipBrain Release Status*",
     "",
+    ...prodSection,
     `Active traces: ${traces.filter((trace) => !["completed", "cancelled"].includes(trace.status)).length}`,
     `Pending actions: ${pending.length}`,
     `Failed: ${traces.filter((trace) => trace.status === "failed").length}`,
@@ -1499,6 +1519,10 @@ export async function getRollbackReleases(user: TelegramUser) {
   const repos = await connectedRepos(user.user_id);
   if (!repos.length) return "No connected repositories yet.";
 
+  // Get fresh deployment context to find current production
+  const repoContexts = await getAllReposDeploymentContext(db, user.user_id);
+  const currentTags = new Set(repoContexts.map(c => c.currentTag).filter(Boolean));
+
   const { data, error } = await db
     .from("specs")
     .select("id, repo_full_name, release_tag, release_sha, release_status, deployed_at, decomposed_tasks")
@@ -1513,17 +1537,32 @@ export async function getRollbackReleases(user: TelegramUser) {
   if (error) throw new Error(error.message);
   if (!data?.length) return "No releases available for rollback yet.";
 
+  // Build current production info
+  const currentProdInfo = repoContexts.length
+    ? repoContexts.slice(0, 3).map(ctx => {
+        const tag = ctx.currentTag ? `\`${ctx.currentTag}\`` : "none";
+        return `• ${ctx.repoFullName.split("/")[1]}: ${tag}`;
+      }).join("\n")
+    : "None deployed";
+
   return [
     "🔄 *Available releases for rollback*",
     "",
-    ...data.map((item, index) => {
-      const tasks = item.decomposed_tasks as { prTitle?: string } | null;
-      const title = tasks?.prTitle ?? "Release";
-      const date = item.deployed_at ? new Date(item.deployed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "n/a";
-      return `${index + 1}. \`${item.release_tag}\` - ${escapeTelegram(title).slice(0, 50)} (${date})`;
-    }),
+    "*Current Production:*",
+    currentProdInfo,
     "",
-    "To rollback: /rollback release-v2026.05.XX-XXXXXX"
+    "*Previous Releases:*",
+    ...data
+      .filter(item => !currentTags.has(item.release_tag)) // Exclude current production
+      .slice(0, 8)
+      .map((item, index) => {
+        const tasks = item.decomposed_tasks as { prTitle?: string } | null;
+        const title = tasks?.prTitle ?? "Release";
+        const date = item.deployed_at ? new Date(item.deployed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "n/a";
+        return `${index + 1}. \`${item.release_tag}\` - ${escapeTelegram(title).slice(0, 50)} (${date})`;
+      }),
+    "",
+    "To rollback: /rollback <tag>"
   ].join("\n");
 }
 

@@ -41,5 +41,9 @@ export { analyzeIncident } from "./analyze-incident";
 export { resolveIncident } from "./resolve-incident";
 export { acknowledgeIncident } from "./acknowledge-incident";
 
+// Deployment Context (for AI Chat and Telegram)
+export { getRepoDeploymentContext, getAllReposDeploymentContext } from "./get-deployment-context";
+export type { DeploymentContext } from "./get-deployment-context";
+
 // Utilities (for internal use)
 export * from "./utils";

@@ -73,7 +73,18 @@ You have access to a set of tools for BOTH reading data AND executing operations
 - Use bullet points for lists
 - Use backticks for IDs, tags, branch names
 - Explain risks for production operations
-- Reference specific data from the context provided`;
+- Reference specific data from the context provided
+
+## Current Deployment State
+The context includes a \`deploymentState\` object with FRESH, real-time data about:
+- \`currentProductionTag\`: The release tag currently live in production
+- \`currentProductionDeployedAt\`: When it was deployed
+- \`recentRollbacks\`: Recent rollback history (source → target tags)
+- \`pendingReleases\`: Releases waiting for deployment
+- \`summary\`: Human-readable summary of current state
+
+**IMPORTANT**: Always use \`deploymentState\` for questions about current production version, recent rollbacks, or deployment status. This data is fetched fresh on every request and reflects the actual current state.`;
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

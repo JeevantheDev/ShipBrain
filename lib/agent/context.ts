@@ -1,4 +1,5 @@
 import { DEFAULT_SPEC_PR_RECIPES, recipeHeading } from "@/lib/spec-recipes";
+import { getRepoDeploymentContext, type DeploymentContext } from "@/lib/actions/get-deployment-context";
 
 type SupabaseLike = {
   from: (table: string) => any;
@@ -89,6 +90,16 @@ export async function getShipBrainAgentContext({
   if (failed?.error) throw new Error(failed.error.message);
   const recipeRows = recipes.error ? DEFAULT_SPEC_PR_RECIPES : (recipes.data ?? DEFAULT_SPEC_PR_RECIPES);
 
+  // Get fresh deployment context for the active repo
+  let deploymentContext: DeploymentContext | null = null;
+  if (repoFilter) {
+    try {
+      deploymentContext = await getRepoDeploymentContext(supabase as any, userId, repoFilter);
+    } catch (err) {
+      console.error("[getShipBrainAgentContext] Failed to get deployment context:", err);
+    }
+  }
+
   const recentPrs = specs.data ?? [];
   const repoRows = (repos.data ?? []).map((repo: any) => ({
     ...repo,
@@ -135,6 +146,19 @@ export async function getShipBrainAgentContext({
       baseBranch: recipe.base_branch ?? recipe.baseBranch ?? "develop",
       sourceBranch: recipe.source_branch ?? recipe.sourceBranch ?? null,
       isSample: recipe.is_sample ?? recipe.isSample ?? false
-    }))
+    })),
+    // Fresh deployment context with current state
+    deploymentState: deploymentContext ? {
+      currentProductionTag: deploymentContext.currentProduction?.releaseTag ?? null,
+      currentProductionSha: deploymentContext.currentProduction?.releaseSha ?? null,
+      currentProductionDeployedAt: deploymentContext.currentProduction?.deployedAt ?? null,
+      currentPreviewBranch: deploymentContext.currentPreview?.branch ?? null,
+      currentPreviewUrl: deploymentContext.currentPreview?.previewUrl ?? null,
+      recentRollbacks: deploymentContext.recentRollbacks,
+      pendingReleases: deploymentContext.pendingReleases,
+      productionFeatureCount: deploymentContext.productionFeatures.length,
+      summary: deploymentContext.summary,
+      fetchedAt: deploymentContext.fetchedAt
+    } : null
   };
 }
