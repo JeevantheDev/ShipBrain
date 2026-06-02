@@ -157,6 +157,85 @@ export async function POST() {
     }
   }
 
+  // Also scan GitHub for merged release PRs that don't have specs
+  const { data: repos } = await db
+    .from("repos")
+    .select("full_name")
+    .eq("user_id", user.id);
+
+  for (const repo of repos ?? []) {
+    try {
+      const { owner, repo: repoName } = splitRepo(repo.full_name);
+
+      // Find recently merged PRs from develop to main
+      const { data: prs } = await octokit.pulls.list({
+        owner,
+        repo: repoName,
+        state: "closed",
+        base: "main",
+        head: `${owner}:develop`,
+        sort: "updated",
+        direction: "desc",
+        per_page: 5
+      });
+
+      for (const pr of prs) {
+        if (!pr.merged_at) continue;
+
+        // Check if we have a spec for this PR
+        const { data: existingSpec } = await db
+          .from("specs")
+          .select("id, release_status, release_pr_status")
+          .eq("repo_full_name", repo.full_name)
+          .or(`pr_number.eq.${pr.number},release_pr_number.eq.${pr.number}`)
+          .maybeSingle();
+
+        if (existingSpec) {
+          // Spec exists - ensure it has correct status
+          if (existingSpec.release_status !== "deployed" && existingSpec.release_status !== "pending_deploy") {
+            await db.from("specs").update({
+              release_status: "pending_deploy",
+              release_pr_status: "merged",
+              updated_at: new Date().toISOString()
+            }).eq("id", existingSpec.id);
+            fixed++;
+          }
+        } else {
+          // No spec exists - create one for this merged release PR
+          const { error: insertError } = await db
+            .from("specs")
+            .insert({
+              user_id: user.id,
+              raw_spec: `Release PR #${pr.number}: ${pr.title}`,
+              decomposed_tasks: { prTitle: pr.title, type: "release" },
+              status: "merged",
+              repo_full_name: repo.full_name,
+              branch_name: "develop",
+              base_branch: "main",
+              pr_number: pr.number,
+              pr_url: pr.html_url,
+              merged_at: pr.merged_at,
+              merge_sha: pr.merge_commit_sha,
+              release_sha: pr.merge_commit_sha,
+              release_pr_number: pr.number,
+              release_pr_url: pr.html_url,
+              release_pr_status: "merged",
+              release_status: "pending_deploy",
+              updated_at: new Date().toISOString()
+            });
+
+          if (!insertError) {
+            fixed++;
+          } else {
+            errors.push(`Failed to create spec for PR #${pr.number}: ${insertError.message}`);
+          }
+        }
+      }
+    } catch (err) {
+      errors.push(`Failed to scan repo ${repo.full_name}: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     fixed,

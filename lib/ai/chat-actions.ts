@@ -420,7 +420,7 @@ export async function executeAction(
 
         const { data: mergedSpecs } = await supabase
           .from("specs")
-          .select("id, title, pr_number, pr_url, branch_name")
+          .select("id, decomposed_tasks, pr_number, pr_url, branch_name, raw_spec")
           .eq("repo_full_name", repoFullName)
           .eq("user_id", userId)
           .eq("status", "merged")
@@ -428,14 +428,22 @@ export async function executeAction(
           .is("release_pr_number", null)
           .order("merged_at", { ascending: false });
 
+        // Extract title from decomposed_tasks.prTitle or use branch name as fallback
+        const getSpecTitle = (spec: any): string => {
+          const tasks = spec.decomposed_tasks as { prTitle?: string } | null;
+          if (tasks?.prTitle) return tasks.prTitle;
+          if (spec.branch_name) return spec.branch_name.replace(/^(feature|fix|hotfix)\//, "").replace(/-/g, " ");
+          return `PR #${spec.pr_number}`;
+        };
+
         const featuresSection = mergedSpecs?.length
           ? [
               "### Features included in this release",
               "",
               ...mergedSpecs.map((s) =>
                 s.pr_number
-                  ? `- ${s.title} ([#${s.pr_number}](${s.pr_url}))`
-                  : `- ${s.title}`
+                  ? `- ${getSpecTitle(s)} ([#${s.pr_number}](${s.pr_url}))`
+                  : `- ${getSpecTitle(s)}`
               ),
               ""
             ]

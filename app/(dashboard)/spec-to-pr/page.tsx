@@ -1107,7 +1107,79 @@ export default function SpecToPrPage() {
               </div>
             ) : (
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
-                
+
+                {/* Create Draft PR button at the top */}
+                <div className="gate-zone" style={{ marginBottom: 8 }}>
+                  <div className="gate-zone-label mono">
+                    <span>Create Draft PR</span>
+                    <span className={`gate-state ${result.pr ? "passed" : ""}`}>
+                      {result.pr ? (
+                        <>✓ created</>
+                      ) : isConfirmingPr ? (
+                        <>
+                          <span className="live-dot"></span>reviewing · {gateCountdown}s left
+                        </>
+                      ) : (
+                        <>ready</>
+                      )}
+                    </span>
+                  </div>
+
+                  {result.pr ? (
+                    <div className="gate-done" style={{ borderRadius: "4px" }}>
+                      <div className="gate-done-left">
+                        <span className="gate-check" aria-hidden="true">
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                            <path d="M2.5 6.5l2.2 2.2L9.5 3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </span>
+                        <span>PR #{result.pr.number} created on <span style={{ fontFamily: "monospace", fontSize: "12.5px" }}>{repo}</span></span>
+                      </div>
+                      <a href={result.pr.html_url || `https://github.com/${repo}/pull/${result.pr.number}`} target="_blank" rel="noreferrer" className="link">
+                        view on GitHub →
+                      </a>
+                    </div>
+                  ) : isConfirmingPr ? (
+                    <div className="gate" role="group" aria-label="Approval gate">
+                      <div className="gate-summary-row">
+                        <span className="gate-summary">
+                          <span className="muted">Will open Draft PR to</span>{" "}
+                          <span className="repo">{repo}</span>
+                          <span className="muted">:</span>
+                          <span className="repo">{baseBranch}</span>
+                        </span>
+                        <div className="gate-btns">
+                          <button className="gate-btn ghost" type="button" onClick={() => setIsConfirmingPr(false)}>Cancel</button>
+                          <button className="gate-btn primary" type="button" onClick={() => {
+                            setIsConfirmingPr(false);
+                            void approvePr("");
+                          }}>
+                            Confirm
+                            <span className="countdown">{gateCountdown}s</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="gate-progress" aria-hidden="true">
+                        <div style={{
+                          height: "100%",
+                          width: `${((3.0 - gateCountdown) / 3.0) * 100}%`,
+                          background: "var(--brand)",
+                          transition: "width 0.1s linear"
+                        }} />
+                      </div>
+                      <div className="gate-foot">
+                        <span className="what-happens">opens · drafts only · reviewers not tagged yet</span>
+                        <span className="undo-hint mono" style={{ fontSize: "10.5px", letterSpacing: "0.04em", textTransform: "uppercase" }}>⌘Z to cancel</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="gate-default" type="button" onClick={requestDraftPrApproval} style={{ width: "100%" }}>
+                      <GitPullRequest size={14} style={{ marginRight: 6 }} />
+                      Create Draft PR
+                    </button>
+                  )}
+                </div>
+
                 <div>
                   <div className="section-label mono" style={{ fontSize: "11px", marginBottom: "6px" }}>
                     <span>Pull request</span>
@@ -1260,76 +1332,6 @@ export default function SpecToPrPage() {
                       Copy Scaffold
                     </button>
                   </div>
-                </div>
-
-                <div className="gate-zone">
-                  <div className="gate-zone-label mono">
-                    <span>Approval gate</span>
-                    <span className={`gate-state ${result.pr ? "passed" : ""}`}>
-                      {result.pr ? (
-                        <>✓ created</>
-                      ) : isConfirmingPr ? (
-                        <>
-                          <span className="live-dot"></span>reviewing · {gateCountdown}s left
-                        </>
-                      ) : (
-                        <>idle</>
-                      )}
-                    </span>
-                  </div>
-
-                  {result.pr ? (
-                    <div className="gate-done" style={{ borderRadius: "4px" }}>
-                      <div className="gate-done-left">
-                        <span className="gate-check" aria-hidden="true">
-                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                            <path d="M2.5 6.5l2.2 2.2L9.5 3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </span>
-                        <span>PR #{result.pr.number} created on <span style={{ fontFamily: "monospace", fontSize: "12.5px" }}>{repo}</span></span>
-                      </div>
-                      <a href={result.pr.html_url || `https://github.com/${repo}/pull/${result.pr.number}`} target="_blank" rel="noreferrer" className="link">
-                        view on GitHub →
-                      </a>
-                    </div>
-                  ) : isConfirmingPr ? (
-                    <div className="gate" role="group" aria-label="Approval gate">
-                      <div className="gate-summary-row">
-                        <span className="gate-summary">
-                          <span className="muted">Will open Draft PR to</span>{" "}
-                          <span className="repo">{repo}</span>
-                          <span className="muted">:</span>
-                          <span className="repo">{baseBranch}</span>
-                        </span>
-                        <div className="gate-btns">
-                          <button className="gate-btn ghost" type="button" onClick={() => setIsConfirmingPr(false)}>Cancel</button>
-                          <button className="gate-btn primary" type="button" onClick={() => {
-                            setIsConfirmingPr(false);
-                            void approvePr("");
-                          }}>
-                            Confirm
-                            <span className="countdown">{gateCountdown}s</span>
-                          </button>
-                        </div>
-                      </div>
-                      <div className="gate-progress" aria-hidden="true">
-                        <div style={{
-                          height: "100%",
-                          width: `${((3.0 - gateCountdown) / 3.0) * 100}%`,
-                          background: "var(--brand)",
-                          transition: "width 0.1s linear"
-                        }} />
-                      </div>
-                      <div className="gate-foot">
-                        <span className="what-happens">opens · drafts only · reviewers not tagged yet</span>
-                        <span className="undo-hint mono" style={{ fontSize: "10.5px", letterSpacing: "0.04em", textTransform: "uppercase" }}>⌘Z to cancel</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <button className="gate-default" type="button" onClick={requestDraftPrApproval}>
-                      Create Draft PR
-                    </button>
-                  )}
                 </div>
 
               </div>
