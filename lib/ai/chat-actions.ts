@@ -334,9 +334,13 @@ async function buildChatActionContext(
   userId: string,
   repoFullName: string | null
 ): Promise<ActionContext | null> {
-  const { data: profile } = await supabase
+  // Use admin client to bypass RLS for profile lookup
+  const { getSupabaseAdminClient } = await import("@/lib/supabase/admin");
+  const adminDb = getSupabaseAdminClient();
+
+  const { data: profile } = await adminDb
     .from("profiles")
-    .select("github_access_token, email")
+    .select("github_access_token, github_login")
     .eq("id", userId)
     .maybeSingle();
 
@@ -349,7 +353,7 @@ async function buildChatActionContext(
     userId,
     githubToken: profile.github_access_token,
     source: "chat" as const,
-    actor: profile.email || userId,
+    actor: profile.github_login || userId,
     repoFullName: repoFullName || ""
   };
 }
@@ -431,26 +435,11 @@ export async function executeAction(
           throw new Error("No active repository selected.");
         }
 
-        // Get user's GitHub token
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("github_access_token, email")
-          .eq("id", userId)
-          .maybeSingle();
-
-        if (!profile?.github_access_token) {
+        // Build unified action context (uses admin client internally)
+        const ctx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!ctx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
-
-        // Build action context for AI Chat
-        const ctx = {
-          db: supabase,
-          userId,
-          githubToken: profile.github_access_token,
-          source: "chat" as const,
-          actor: profile.email || userId,
-          repoFullName
-        };
 
         // Use unified createReleasePR action
         const result = await createReleasePRAction(ctx, {

@@ -60,6 +60,11 @@ type BoardColumn = {
   color: string;
 };
 
+// Helper to check if a trace is a production-targeted trace (hotfix or release PR to main)
+const isProductionTrace = (trace: Trace) =>
+  (trace.type === "hotfix" && trace.target_branch === "main") ||
+  (trace.type === "release" && trace.target_branch === "main");
+
 const columns: BoardColumn[] = [
   {
     id: "attention",
@@ -75,7 +80,7 @@ const columns: BoardColumn[] = [
     description: "Draft PRs, reviews, and develop merges.",
     empty: "No draft work in progress.",
     matches: (trace) =>
-      !(trace.type === "hotfix" && trace.target_branch === "main") &&
+      !isProductionTrace(trace) &&
       ["draft", "ready_for_review", "approved"].includes(trace.status),
     color: "#1e6091",
   },
@@ -85,7 +90,7 @@ const columns: BoardColumn[] = [
     description: "Develop preview validation before promotion.",
     empty: "No preview validations.",
     matches: (trace) =>
-      !(trace.type === "hotfix" && trace.target_branch === "main") &&
+      !isProductionTrace(trace) &&
       ["merged_develop", "preview_live"].includes(trace.status),
     color: "#ffd000",
   },
@@ -95,7 +100,7 @@ const columns: BoardColumn[] = [
     description: "Release PRs, tags, active deploys, and hotfixes.",
     empty: "No production deployments in flight.",
     matches: (trace) =>
-      (trace.type === "hotfix" && trace.target_branch === "main" && ["draft", "ready_for_review", "approved", "merged_main", "production_live", "failed", "rolling_back"].includes(trace.status)) ||
+      (isProductionTrace(trace) && ["draft", "ready_for_review", "approved", "merged_main", "production_live", "failed", "rolling_back"].includes(trace.status)) ||
       ["release_pending", "merged_main", "production_live", "completed", "rolling_back"].includes(trace.status),
     color: "#613dc1",
   },
