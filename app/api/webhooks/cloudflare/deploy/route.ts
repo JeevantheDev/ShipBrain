@@ -105,6 +105,86 @@ export async function POST(request: Request) {
     details: body
   });
 
+  // Update spec status based on deployment result
+  if (succeeded) {
+    const specUpdate: Record<string, any> = {
+      updated_at: new Date().toISOString()
+    };
+
+    if (isPreview) {
+      specUpdate.preview_status = "deployed";
+      if (url) specUpdate.preview_url = url;
+      await db.from("specs").update(specUpdate).eq("id", spec.id);
+    } else {
+      // Production deployment succeeded
+      specUpdate.release_status = "deployed";
+      specUpdate.deployed_at = new Date().toISOString();
+      if (url) specUpdate.production_url = url;
+
+      // Update the main spec
+      await db.from("specs").update(specUpdate).eq("id", spec.id);
+
+      // Also update all linked feature specs that were part of this release
+      // Find the release spec to get its release_pr_number
+      const { data: releaseSpec } = await db
+        .from("specs")
+        .select("release_pr_number, repo_full_name")
+        .eq("id", spec.id)
+        .single();
+
+      if (releaseSpec?.release_pr_number) {
+        // Update all feature specs linked to this release PR
+        const { data: linkedSpecs } = await db
+          .from("specs")
+          .select("id")
+          .eq("repo_full_name", releaseSpec.repo_full_name)
+          .eq("release_pr_number", releaseSpec.release_pr_number)
+          .neq("id", spec.id);
+
+        if (linkedSpecs?.length) {
+          await db
+            .from("specs")
+            .update({
+              release_status: "deployed",
+              deployed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq("repo_full_name", releaseSpec.repo_full_name)
+            .eq("release_pr_number", releaseSpec.release_pr_number)
+            .neq("id", spec.id);
+
+          // Also update all linked traces to production_live
+          for (const linkedSpec of linkedSpecs) {
+            await updateTraceBySpec(linkedSpec.id, {
+              status: "production_live",
+              production_deployment: { status: "deployed", url, sha, timestamp: new Date().toISOString() }
+            }, {
+              eventType: "deployment_succeeded",
+              source: "cloudflare",
+              actor: "cloudflare",
+              actorType: "system",
+              details: { linkedFromReleaseSpec: spec.id, releaseTag: body.releaseTag || body.release_tag }
+            }).catch((err) => console.error(`[Cloudflare Deploy] Failed to update linked trace for spec ${linkedSpec.id}:`, err));
+          }
+
+          console.log(`[Cloudflare Deploy] Updated ${linkedSpecs.length} linked specs and traces for release PR #${releaseSpec.release_pr_number}`);
+        }
+      }
+    }
+  } else if (failed) {
+    const specUpdate: Record<string, any> = {
+      updated_at: new Date().toISOString()
+    };
+
+    if (isPreview) {
+      specUpdate.preview_status = "failed";
+    } else {
+      specUpdate.release_status = "failed";
+    }
+
+    await db.from("specs").update(specUpdate).eq("id", spec.id);
+  }
+
   await db.from("cloudflare_webhook_events").update({
     status: "processed",
     processed_at: new Date().toISOString(),
