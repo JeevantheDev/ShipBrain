@@ -401,7 +401,7 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, open]);
 
-  async function sendMessage(nextInput?: string) {
+  const sendMessage = useCallback(async (nextInput?: string) => {
     const text = (nextInput ?? input).trim();
     if (!text || loading) return;
 
@@ -484,7 +484,18 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
       streamingMessageIdRef.current = null;
       setLoading(false);
     }
-  }
+  }, [input, loading, threadId, pendingAction]);
+
+  useEffect(() => {
+    const handleOpenChatPrompt = (e: Event) => {
+      const customEvent = e as CustomEvent<{ prompt?: string }>;
+      if (customEvent.detail?.prompt) {
+        void sendMessage(customEvent.detail.prompt);
+      }
+    };
+    window.addEventListener("shipbrain-open-chat", handleOpenChatPrompt);
+    return () => window.removeEventListener("shipbrain-open-chat", handleOpenChatPrompt);
+  }, [sendMessage]);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

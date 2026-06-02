@@ -4,6 +4,7 @@ import { EnvironmentsWidget } from "@/components/dashboard/EnvironmentsWidget";
 import { EnvVarsWidget } from "@/components/dashboard/EnvVarsWidget";
 import { PendingDeployQueue } from "@/components/dashboard/PendingDeployQueue";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
+import { AskAiWidget } from "@/components/dashboard/AskAiWidget";
 
 export default function DashboardPage() {
   return (
@@ -29,6 +30,7 @@ export default function DashboardPage() {
       </header>
 
       <DashboardPrOverview />
+      <AskAiWidget />
 
       <div className="body-grid" style={{ marginTop: 24 }}>
         {/* Left Column */}

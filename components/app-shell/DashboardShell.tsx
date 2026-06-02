@@ -38,6 +38,14 @@ export function DashboardShell({ children, provider, user }: DashboardShellProps
   }, [pathname]);
 
   useEffect(() => {
+    const handleOpenChat = () => {
+      setChatOpen(true);
+    };
+    window.addEventListener("shipbrain-open-chat", handleOpenChat);
+    return () => window.removeEventListener("shipbrain-open-chat", handleOpenChat);
+  }, []);
+
+  useEffect(() => {
     let focusTimer: number | null = null;
     const handleFocus = () => {
       if (focusTimer) window.clearTimeout(focusTimer);
