@@ -260,14 +260,15 @@ export async function getRepoDeploymentContext(
     // Features query depends on currentProduction
     if (context.currentProduction?.releaseTag) {
       dependentQueries.push(
-        db.from("specs")
-          .select("id, decomposed_tasks, pr_number, release_tag")
-          .eq("repo_full_name", repoFullName)
-          .eq("user_id", userId)
-          .eq("release_status", "deployed")
-          .eq("release_tag", context.currentProduction.releaseTag)
-          .limit(10)
-          .then(result => ({ type: 'features', data: result.data }))
+        Promise.resolve(
+          db.from("specs")
+            .select("id, decomposed_tasks, pr_number, release_tag")
+            .eq("repo_full_name", repoFullName)
+            .eq("user_id", userId)
+            .eq("release_status", "deployed")
+            .eq("release_tag", context.currentProduction.releaseTag)
+            .limit(10)
+        ).then(result => ({ type: 'features', data: result.data }))
       );
     }
 
@@ -275,12 +276,13 @@ export async function getRepoDeploymentContext(
     if (traces?.length) {
       const traceIds = traces.map(t => t.id);
       dependentQueries.push(
-        db.from("trace_events")
-          .select("event_type, trace_id, created_at, actor, details")
-          .in("trace_id", traceIds)
-          .order("created_at", { ascending: false })
-          .limit(10)
-          .then(result => ({ type: 'events', data: result.data, traces }))
+        Promise.resolve(
+          db.from("trace_events")
+            .select("event_type, trace_id, created_at, actor, details")
+            .in("trace_id", traceIds)
+            .order("created_at", { ascending: false })
+            .limit(10)
+        ).then(result => ({ type: 'events', data: result.data, traces }))
       );
     }
 

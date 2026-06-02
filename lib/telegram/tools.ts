@@ -1745,6 +1745,16 @@ export async function resolveTelegramIncident(user: TelegramUser, token?: string
     return `❌ *Failed to resolve incident:* ${escapeTelegram(result.error || result.message)}`;
   }
 
+  // Check if incident was already resolved (state validation in unified action)
+  if (result.data?.previousStatus === "resolved" || result.message?.includes("already resolved")) {
+    return [
+      "ℹ️ *Incident already resolved*",
+      `Incident: \`${shortId(incident.id)}\` · ${escapeTelegram(incident.title ?? "Incident")}`,
+      `Status: \`resolved\``,
+      "This incident was already marked as resolved."
+    ].join("\n");
+  }
+
   return [
     "✅ *Incident resolved manually*",
     `Incident: \`${shortId(incident.id)}\` · ${escapeTelegram(incident.title ?? "Incident")}`,

@@ -18,6 +18,7 @@ import {
   executeAction,
   formatActionResult,
   generateConfirmation,
+  validateActionState,
   type ChatAction
 } from "@/lib/ai/chat-actions";
 import {
@@ -621,11 +622,32 @@ export async function answerShipBrainQuestion(input: {
     };
   }
 
-  // Write tool → resolve params, check for options
+  // Write tool → resolve params, validate state, check for options
   const tool = TOOL_BY_NAME[toolName];
   const resolvedParams = await resolveWriteToolParams(toolName, args, context);
+
+  // Validate current state before asking for confirmation (prevents stale responses)
+  const stateValidation = await validateActionState(
+    toolName as any,
+    resolvedParams,
+    input.supabase as any,
+    input.userId
+  );
+
+  // If state is invalid, return the validation message directly (no confirmation needed)
+  if (!stateValidation.valid) {
+    return {
+      ...base,
+      reply: stateValidation.message ?? "Action not available in current state.",
+      action: { type: toolName as any, status: "completed", params: resolvedParams, result: stateValidation.currentState }
+    };
+  }
+
+  // If valid but has an info message (e.g., "already analyzed, re-running..."), prepend it
   const options = resolveActionOptions(toolName, args, context);
-  const confirmMsg = generateConfirmation(toolName as any, resolvedParams, context);
+  const confirmMsg = stateValidation.message
+    ? `${stateValidation.message}\n\n${generateConfirmation(toolName as any, resolvedParams, context)}`
+    : generateConfirmation(toolName as any, resolvedParams, context);
 
   return {
     ...base,
@@ -812,10 +834,31 @@ export async function streamShipBrainQuestion(input: {
     };
   }
 
-  // Write tool → resolve params + options → pending_confirmation
+  // Write tool → resolve params, validate state, check for options
   const resolvedParams = await resolveWriteToolParams(toolName, args, context);
+
+  // Validate current state before asking for confirmation (prevents stale responses)
+  const stateValidation = await validateActionState(
+    toolName as any,
+    resolvedParams,
+    input.supabase as any,
+    input.userId
+  );
+
+  // If state is invalid, return the validation message directly (no confirmation needed)
+  if (!stateValidation.valid) {
+    return {
+      ...base,
+      action: { type: toolName as any, status: "completed", params: resolvedParams, result: stateValidation.currentState },
+      stream: textStream(stateValidation.message ?? "Action not available in current state.")
+    };
+  }
+
+  // If valid but has an info message (e.g., "already analyzed, re-running..."), prepend it
   const options = resolveActionOptions(toolName, args, context);
-  const confirmMsg = generateConfirmation(toolName as any, resolvedParams, context);
+  const confirmMsg = stateValidation.message
+    ? `${stateValidation.message}\n\n${generateConfirmation(toolName as any, resolvedParams, context)}`
+    : generateConfirmation(toolName as any, resolvedParams, context);
 
   const action: ChatAction = {
     type: toolName as any,

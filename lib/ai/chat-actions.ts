@@ -75,6 +75,271 @@ export type ActionIntent = {
   clarifyingQuestion?: string;
 };
 
+// State validation result - if invalid, contains message to show user
+export type StateValidationResult = {
+  valid: boolean;
+  /** Message to show user if state is invalid */
+  message?: string;
+  /** Current state from database (for context) */
+  currentState?: Record<string, any>;
+};
+
+/**
+ * Validates the current state of an entity before asking for confirmation.
+ * This prevents stale responses where e.g. an already-resolved incident asks for resolve confirmation.
+ *
+ * @param action - The action type
+ * @param params - Resolved params for the action
+ * @param supabase - Database client
+ * @param userId - Current user ID
+ * @returns Validation result - if invalid, includes message to show user
+ */
+export async function validateActionState(
+  action: ActionType,
+  params: Record<string, any>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<StateValidationResult> {
+  try {
+    switch (action) {
+      case "resolve_incident": {
+        if (!params.incidentId) {
+          return { valid: false, message: "No incident specified to resolve." };
+        }
+        const { data: incident } = await supabase
+          .from("incidents")
+          .select("id, title, status, resolved_at, resolution_note")
+          .eq("id", params.incidentId)
+          .eq("user_id", userId)
+          .single();
+
+        if (!incident) {
+          return { valid: false, message: "Incident not found." };
+        }
+        if (incident.status === "resolved") {
+          const resolvedTime = incident.resolved_at
+            ? new Date(incident.resolved_at).toLocaleString()
+            : "earlier";
+          return {
+            valid: false,
+            message: `✅ **Incident Already Resolved**\n\nIncident "${incident.title ?? incident.id.slice(0, 8)}" was already resolved at ${resolvedTime}.\n\n${incident.resolution_note ? `**Note:** ${incident.resolution_note}` : ""}`,
+            currentState: { status: incident.status, resolvedAt: incident.resolved_at }
+          };
+        }
+        return { valid: true, currentState: { status: incident.status } };
+      }
+
+      case "acknowledge_incident": {
+        if (!params.incidentId) {
+          return { valid: false, message: "No incident specified to acknowledge." };
+        }
+        const { data: incident } = await supabase
+          .from("incidents")
+          .select("id, title, status, acknowledged_at, acknowledged_by")
+          .eq("id", params.incidentId)
+          .eq("user_id", userId)
+          .single();
+
+        if (!incident) {
+          return { valid: false, message: "Incident not found." };
+        }
+        if (incident.status !== "open") {
+          const statusText = incident.status === "resolved"
+            ? "already resolved"
+            : `already being investigated (status: \`${incident.status}\`)`;
+          return {
+            valid: false,
+            message: `ℹ️ **Incident Already Acknowledged**\n\nIncident "${incident.title ?? incident.id.slice(0, 8)}" is ${statusText}.${incident.acknowledged_by ? `\n\n**Acknowledged by:** ${incident.acknowledged_by}` : ""}`,
+            currentState: { status: incident.status, acknowledgedBy: incident.acknowledged_by }
+          };
+        }
+        return { valid: true, currentState: { status: incident.status } };
+      }
+
+      case "analyze_incident": {
+        if (!params.incidentId) {
+          return { valid: false, message: "No incident specified to analyze." };
+        }
+        const { data: incident } = await supabase
+          .from("incidents")
+          .select("id, title, status, ai_analysis, root_cause")
+          .eq("id", params.incidentId)
+          .eq("user_id", userId)
+          .single();
+
+        if (!incident) {
+          return { valid: false, message: "Incident not found." };
+        }
+        // Analysis can be re-run even if resolved, but notify if already analyzed
+        if (incident.ai_analysis && incident.root_cause) {
+          // Allow re-analysis but inform user
+          return {
+            valid: true,
+            message: `ℹ️ This incident was already analyzed. Running analysis again will refresh the results.\n\n**Previous Root Cause:** ${incident.root_cause.slice(0, 100)}...`,
+            currentState: { status: incident.status, hasAnalysis: true }
+          };
+        }
+        return { valid: true, currentState: { status: incident.status } };
+      }
+
+      case "deploy_preview": {
+        if (!params.specId) {
+          return { valid: false, message: "No spec specified for preview deployment." };
+        }
+        const { data: spec } = await supabase
+          .from("specs")
+          .select("id, pr_number, status, preview_status, preview_url, base_branch")
+          .eq("id", params.specId)
+          .eq("user_id", userId)
+          .single();
+
+        if (!spec) {
+          return { valid: false, message: "Spec not found." };
+        }
+        if (spec.preview_status === "deployed" && spec.preview_url) {
+          return {
+            valid: false,
+            message: `✅ **Already Deployed to Preview**\n\nPR #${spec.pr_number ?? "?"} is already deployed to preview.\n\n**Preview URL:** ${spec.preview_url}`,
+            currentState: { previewStatus: spec.preview_status, previewUrl: spec.preview_url }
+          };
+        }
+        if (spec.preview_status === "deploying") {
+          return {
+            valid: false,
+            message: `🔄 **Preview Deployment In Progress**\n\nPR #${spec.pr_number ?? "?"} is currently being deployed to preview. Please wait for completion.`,
+            currentState: { previewStatus: spec.preview_status }
+          };
+        }
+        return { valid: true, currentState: { status: spec.status, previewStatus: spec.preview_status } };
+      }
+
+      case "deploy_production": {
+        if (!params.specId) {
+          return { valid: false, message: "No spec specified for production deployment." };
+        }
+        const { data: spec } = await supabase
+          .from("specs")
+          .select("id, pr_number, status, release_status, release_tag, deployed_at, deployment_url")
+          .eq("id", params.specId)
+          .eq("user_id", userId)
+          .single();
+
+        if (!spec) {
+          return { valid: false, message: "Spec not found." };
+        }
+        if (spec.release_status === "deployed") {
+          const deployedTime = spec.deployed_at
+            ? new Date(spec.deployed_at).toLocaleString()
+            : "earlier";
+          return {
+            valid: false,
+            message: `✅ **Already Deployed to Production**\n\nPR #${spec.pr_number ?? "?"} with tag \`${spec.release_tag}\` was deployed at ${deployedTime}.${spec.deployment_url ? `\n\n**Production URL:** ${spec.deployment_url}` : ""}`,
+            currentState: { releaseStatus: spec.release_status, releaseTag: spec.release_tag }
+          };
+        }
+        if (spec.release_status === "deploying") {
+          return {
+            valid: false,
+            message: `🔄 **Production Deployment In Progress**\n\nPR #${spec.pr_number ?? "?"} is currently being deployed to production. Please wait for completion.`,
+            currentState: { releaseStatus: spec.release_status }
+          };
+        }
+        return { valid: true, currentState: { status: spec.status, releaseStatus: spec.release_status } };
+      }
+
+      case "approve_hotfix": {
+        if (!params.incidentId) {
+          return { valid: false, message: "No incident specified for hotfix approval." };
+        }
+        const { data: incident } = await supabase
+          .from("incidents")
+          .select("id, title, status, hotfix_pr_number, hotfix_pr_status, hotfix_merged_at")
+          .eq("id", params.incidentId)
+          .eq("user_id", userId)
+          .single();
+
+        if (!incident) {
+          return { valid: false, message: "Incident not found." };
+        }
+        if (!incident.hotfix_pr_number) {
+          return {
+            valid: false,
+            message: `❌ **No Hotfix PR**\n\nIncident "${incident.title ?? incident.id.slice(0, 8)}" doesn't have a hotfix PR yet. Create one first with "create hotfix".`,
+            currentState: { status: incident.status, hasHotfix: false }
+          };
+        }
+        if (incident.hotfix_pr_status === "merged" || incident.hotfix_merged_at) {
+          return {
+            valid: false,
+            message: `✅ **Hotfix Already Merged**\n\nHotfix PR #${incident.hotfix_pr_number} was already merged${incident.hotfix_merged_at ? ` at ${new Date(incident.hotfix_merged_at).toLocaleString()}` : ""}.`,
+            currentState: { hotfixStatus: incident.hotfix_pr_status, merged: true }
+          };
+        }
+        return { valid: true, currentState: { status: incident.status, hotfixPr: incident.hotfix_pr_number } };
+      }
+
+      case "create_hotfix": {
+        if (!params.incidentId) {
+          return { valid: false, message: "No incident specified for hotfix creation." };
+        }
+        const { data: incident } = await supabase
+          .from("incidents")
+          .select("id, title, status, hotfix_pr_number, hotfix_pr_url")
+          .eq("id", params.incidentId)
+          .eq("user_id", userId)
+          .single();
+
+        if (!incident) {
+          return { valid: false, message: "Incident not found." };
+        }
+        if (incident.status === "resolved") {
+          return {
+            valid: false,
+            message: `✅ **Incident Already Resolved**\n\nIncident "${incident.title ?? incident.id.slice(0, 8)}" is already resolved. No hotfix needed.`,
+            currentState: { status: incident.status }
+          };
+        }
+        if (incident.hotfix_pr_number) {
+          return {
+            valid: false,
+            message: `ℹ️ **Hotfix PR Already Exists**\n\nIncident "${incident.title ?? incident.id.slice(0, 8)}" already has hotfix PR #${incident.hotfix_pr_number}.\n\n${incident.hotfix_pr_url ? `**PR URL:** ${incident.hotfix_pr_url}` : ""}\n\nTo deploy it, say "approve hotfix".`,
+            currentState: { status: incident.status, hotfixPr: incident.hotfix_pr_number }
+          };
+        }
+        return { valid: true, currentState: { status: incident.status } };
+      }
+
+      case "rollback": {
+        // Rollback validation - check if target release exists and is different from current
+        if (!params.targetReleaseTag) {
+          return { valid: false, message: "No target release tag specified for rollback." };
+        }
+        // Validation will happen in the action itself since we need repo context
+        return { valid: true };
+      }
+
+      // These actions don't need pre-validation
+      case "spec_to_pr":
+      case "create_release_pr":
+      case "approve_release":
+      case "view_status":
+      case "view_prs":
+      case "view_deployments":
+      case "view_incidents":
+      case "view_releases":
+      case "view_ci":
+        return { valid: true };
+
+      default:
+        return { valid: true };
+    }
+  } catch (error) {
+    console.error("[validateActionState] Error:", error);
+    // On error, allow the action to proceed - it will fail with proper error handling
+    return { valid: true };
+  }
+}
+
 // Action definitions with required parameters
 const ACTION_DEFINITIONS: Record<ActionType, {
   label: string;
