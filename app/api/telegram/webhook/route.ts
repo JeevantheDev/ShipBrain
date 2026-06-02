@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { sendTelegramMessage } from "@/lib/telegram/client";
 import { runTelegramCommand } from "@/lib/telegram/tools";
-import { toTelegramMarkdown } from "@/lib/telegram/formatter";
+import { toTelegramMarkdown, escapeMarkdown } from "@/lib/telegram/formatter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -138,7 +138,7 @@ export async function POST(request: Request) {
       text: [
         "*ShipBrain Telegram needs attention.*",
         "",
-        detail,
+        escapeMarkdown(detail),
         "",
         "Send a new command when you are ready; I will not repeat this same failed update."
       ].join("\n"),

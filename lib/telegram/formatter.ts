@@ -6,31 +6,74 @@ export function escapeTelegram(value: unknown) {
 }
 
 /**
+ * Escape text for Telegram Markdown parse mode.
+ * This escapes all markdown special characters to prevent parsing errors.
+ */
+export function escapeMarkdown(value: unknown) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\*/g, "\\*")
+    .replace(/_/g, "\\_")
+    .replace(/`/g, "\\`")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/~/g, "\\~")
+    .replace(/>/g, "\\>")
+    .replace(/#/g, "\\#")
+    .replace(/\+/g, "\\+")
+    .replace(/-/g, "\\-")
+    .replace(/=/g, "\\=")
+    .replace(/\|/g, "\\|")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}")
+    .replace(/\./g, "\\.")
+    .replace(/!/g, "\\!");
+}
+
+/**
  * Convert standard markdown to Telegram-compatible markdown.
  * Telegram uses:
  * - *bold* (single asterisk, not double)
  * - _italic_ (underscore)
  * - `code` (backticks)
  * - [text](url) for links
+ *
+ * This function tries to fix unbalanced markdown entities that would cause
+ * Telegram API to reject the message.
  */
 export function toTelegramMarkdown(text: string): string {
-  return text
+  let result = text
     // Convert **bold** to *bold* (Telegram uses single asterisk for bold)
     .replace(/\*\*(.+?)\*\*/g, "*$1*")
     // Convert __text__ to _text_ (already Telegram italic format)
-    .replace(/__(.+?)__/g, "_$1_")
-    // Escape special characters that might break Telegram markdown
-    // but preserve intentional formatting
-    .replace(/([_*`\[])/g, (match, char, offset, str) => {
-      // Check if this is part of a formatting pair
-      const before = str.slice(Math.max(0, offset - 2), offset);
-      const after = str.slice(offset + 1, offset + 3);
-      // If it looks like intentional formatting, keep it
-      if (char === '*' || char === '_' || char === '`' || char === '[') {
-        return match;
+    .replace(/__(.+?)__/g, "_$1_");
+
+  // Count occurrences of formatting characters
+  // If there's an odd number of any character, we have unbalanced formatting
+  // which will cause Telegram to reject the message
+  const countOccurrences = (str: string, char: string) => {
+    let count = 0;
+    for (let i = 0; i < str.length; i++) {
+      if (str[i] === char && (i === 0 || str[i - 1] !== '\\')) {
+        count++;
       }
-      return '\\' + char;
-    });
+    }
+    return count;
+  };
+
+  // Check for unbalanced formatting characters and escape if needed
+  const formatChars = ['*', '_', '`'];
+  for (const char of formatChars) {
+    const count = countOccurrences(result, char);
+    if (count % 2 !== 0) {
+      // Unbalanced - escape ALL occurrences of this character
+      result = result.replace(new RegExp(`(?<!\\\\)\\${char}`, 'g'), `\\${char}`);
+    }
+  }
+
+  return result;
 }
 
 export function formatNotificationForTelegram(item: {
