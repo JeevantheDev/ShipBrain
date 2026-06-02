@@ -110,6 +110,7 @@ export async function createReleasePR(
     logAction("createReleasePR:prCreated", ctx, { prNumber: pr.number, prUrl: pr.html_url });
 
     // Create a spec for this release PR
+    // IMPORTANT: Set release_pr_number so the webhook can find this spec when PR is merged
     const { data: releaseSpec, error: specError } = await ctx.db
       .from("specs")
       .insert({
@@ -122,6 +123,10 @@ export async function createReleasePR(
         status: "pending_pr",
         release_tag: releaseTag,
         release_status: "ready_for_prod",
+        // Set release_pr_number so webhook can find this spec when merged
+        release_pr_number: pr.number,
+        release_pr_url: pr.html_url,
+        release_pr_status: "open",
         decomposed_tasks: {
           type: "release",
           prTitle: `Release ${releaseTag}`,
