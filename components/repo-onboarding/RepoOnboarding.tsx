@@ -1026,9 +1026,6 @@ function SetupSuccess({ setup, copied, hidden, onShow, onCopy }: { setup: any; c
                 <li><strong>Preview:</strong> Deploy <code>develop</code> branch to preview environment</li>
                 <li><strong>Production:</strong> Create <code>v1.0.0</code> release and deploy to production</li>
               </ul>
-              <p style={{ margin: "8px 0 0", fontSize: 11.5, color: "var(--text-muted)" }}>
-                Check the <a href="/releases" style={{ color: "var(--brand)" }}>Release Trace Board</a> to track deployment progress.
-              </p>
             </div>
           ) : deployStarted ? (
             <div className="success-panel" style={{ padding: "10px 14px" }}>
