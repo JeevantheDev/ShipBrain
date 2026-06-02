@@ -527,7 +527,13 @@ function formatRelativeTime(dateStr: string | null): string {
 export async function getAllReposDeploymentContext(
   db: SupabaseClient,
   userId: string
-): Promise<Array<{ repoFullName: string; summary: string; currentTag: string | null }>> {
+): Promise<Array<{
+  repoFullName: string;
+  summary: string;
+  currentTag: string | null;
+  pendingCommitsCount: number;
+  developAhead: number;
+}>> {
   const { data: repos } = await db
     .from("repos")
     .select("full_name")
@@ -535,14 +541,22 @@ export async function getAllReposDeploymentContext(
 
   if (!repos?.length) return [];
 
-  const summaries: Array<{ repoFullName: string; summary: string; currentTag: string | null }> = [];
+  const summaries: Array<{
+    repoFullName: string;
+    summary: string;
+    currentTag: string | null;
+    pendingCommitsCount: number;
+    developAhead: number;
+  }> = [];
 
   for (const repo of repos) {
     const ctx = await getRepoDeploymentContext(db, userId, repo.full_name);
     summaries.push({
       repoFullName: repo.full_name,
       summary: ctx.summary,
-      currentTag: ctx.currentProduction?.releaseTag || null
+      currentTag: ctx.currentProduction?.releaseTag || null,
+      pendingCommitsCount: ctx.pendingCommits.length,
+      developAhead: ctx.branchComparison?.developAhead || 0
     });
   }
 

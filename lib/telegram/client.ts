@@ -87,6 +87,7 @@ export async function setTelegramCommands() {
         { command: "resolve", description: "Manually resolve incident by id with a note" },
         { command: "postmortem", description: "Generate incident post-mortem by id" },
         { command: "releases", description: "Recent releases" },
+        { command: "pending", description: "Pending commits on develop not yet released" },
         { command: "ci", description: "Latest CI workflow runs" },
         { command: "help", description: "Show available commands" }
       ]

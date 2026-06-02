@@ -165,6 +165,7 @@ export async function runTelegramCommand(user: TelegramUser, text: string) {
   if (input.startsWith("/incident ") || input.startsWith("incident ")) return getIncidentDetail(user, parts[1]);
   if (input.startsWith("/incidents")) return getIncidents(user);
   if (input.startsWith("/releases")) return getReleases(user);
+  if (input.startsWith("/pending")) return getPendingCommits(user);
   if (input.startsWith("/ci")) return getCiStatus(user);
   if (input.startsWith("/prs")) return getPendingPrs(user);
   // Route non-slash messages to AI chatbot for natural language understanding
@@ -269,6 +270,7 @@ function helpText() {
     "• /approve_fix <id> - merge hotfix and dispatch dev/prod deploy",
     "• /postmortem <id> - generate and save post-mortem",
     "• /releases - recent release status",
+    "• /pending - commits on develop not yet released",
     "• /ci - latest CI workflow runs",
     "• /deployments - pending dev/prod deployment queue",
     "• /status - release trace pending-action summary",
@@ -818,6 +820,52 @@ export async function getReleases(user: TelegramUser) {
   ].join("\n");
 }
 
+export async function getPendingCommits(user: TelegramUser) {
+  const db = getSupabaseAdminClient();
+  const repos = await connectedRepos(user.user_id);
+  if (!repos.length) return "No connected repositories yet.";
+
+  const sections: string[] = ["📦 *Pending Commits (develop → main)*", ""];
+
+  for (const repoFullName of repos.slice(0, 3)) {
+    const ctx = await getRepoDeploymentContext(db, user.user_id, repoFullName);
+    const repoName = repoFullName.split("/")[1] || repoFullName;
+
+    if (!ctx.branchComparison) {
+      sections.push(`*${escapeTelegram(repoName)}*: Unable to compare branches`);
+      continue;
+    }
+
+    const { developAhead, developBehind } = ctx.branchComparison;
+
+    if (developAhead === 0) {
+      sections.push(`*${escapeTelegram(repoName)}*: ✅ In sync (no pending commits)`);
+      continue;
+    }
+
+    sections.push(`*${escapeTelegram(repoName)}*: ${developAhead} commits ahead${developBehind > 0 ? `, ${developBehind} behind` : ""}`);
+
+    if (ctx.pendingCommits.length > 0) {
+      sections.push("");
+      ctx.pendingCommits.slice(0, 5).forEach((commit, i) => {
+        const msg = commit.message.length > 50 ? commit.message.slice(0, 50) + "..." : commit.message;
+        sections.push(`  ${i + 1}. \`${commit.shortSha}\` ${escapeTelegram(msg)}`);
+        if (commit.author) sections.push(`      by ${escapeTelegram(commit.author)}`);
+      });
+      if (ctx.pendingCommits.length > 5) {
+        sections.push(`  ... and ${ctx.pendingCommits.length - 5} more`);
+      }
+    }
+    sections.push("");
+  }
+
+  if (sections.length === 2) {
+    return "No pending commits found.";
+  }
+
+  return sections.join("\n");
+}
+
 export async function getCiStatus(user: TelegramUser) {
   const db = getSupabaseAdminClient();
   const repos = await connectedRepos(user.user_id);
@@ -965,13 +1013,17 @@ export async function getTraceStatus(user: TelegramUser) {
   const traces = data ?? [];
   const pending = traces.filter((trace) => trace.pending_action).slice(0, 6);
 
-  // Build current production section
+  // Build current production section with pending commits info
   const prodSection = repoContexts.length
     ? [
         "*Current Production:*",
         ...repoContexts.slice(0, 3).map((ctx) => {
+          const repoName = ctx.repoFullName.split("/")[1];
           const tag = ctx.currentTag ? `\`${ctx.currentTag}\`` : "not deployed";
-          return `• ${ctx.repoFullName.split("/")[1]}: ${tag}`;
+          const pending = ctx.developAhead > 0
+            ? ` (${ctx.developAhead} commits pending)`
+            : "";
+          return `• ${repoName}: ${tag}${pending}`;
         }),
         ""
       ]
