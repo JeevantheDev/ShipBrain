@@ -122,12 +122,13 @@ export async function rollback(
       .select("id")
       .maybeSingle();
 
-    // Mark current release and its features as "rolling_back"
+    // Mark current release and its features as "rolled_back"
     let specsRolledBack = 0;
     let tracesUpdated = 0;
+    let featuresRolledBack = 0;
 
-    if (currentReleaseTag) {
-      // Update specs with current release tag
+    if (currentReleaseTag && currentSpec) {
+      // 1. Update the release spec itself (the one with the release_tag)
       specsRolledBack = await updateLinkedSpecs(
         ctx.db,
         repoFullName,
@@ -138,7 +139,75 @@ export async function rollback(
         } as any
       );
 
-      // Update traces with current release tag
+      // 2. Find and update all feature specs that were part of this release
+      // Features are linked via release_pr_number (the PR that merged develop->main)
+      if (currentSpec.release_pr_number) {
+        const { data: featureSpecs } = await ctx.db
+          .from("specs")
+          .select("id")
+          .eq("repo_full_name", repoFullName)
+          .eq("release_pr_number", currentSpec.release_pr_number)
+          .neq("id", currentSpec.id);
+
+        if (featureSpecs?.length) {
+          const featureIds = featureSpecs.map(s => s.id);
+
+          // Mark feature specs as rolled_back
+          await ctx.db
+            .from("specs")
+            .update({
+              release_status: "rolled_back",
+              updated_at: new Date().toISOString()
+            })
+            .in("id", featureIds);
+
+          featuresRolledBack = featureIds.length;
+
+          // Update feature traces to rolled_back status and add audit events
+          for (const featureId of featureIds) {
+            // Get the trace for this feature
+            const { data: featureTrace } = await ctx.db
+              .from("release_traces")
+              .select("id, title")
+              .eq("spec_id", featureId)
+              .maybeSingle();
+
+            if (featureTrace) {
+              // Update trace status
+              await ctx.db
+                .from("release_traces")
+                .update({
+                  status: "rolled_back",
+                  rollback_metadata: {
+                    rolledBackAt: new Date().toISOString(),
+                    rolledBackTo: targetReleaseTag,
+                    rolledBackFrom: currentReleaseTag,
+                    initiatedBy: ctx.actor,
+                    source: ctx.source
+                  },
+                  updated_at: new Date().toISOString()
+                })
+                .eq("id", featureTrace.id);
+
+              // Add audit trail event
+              await ctx.db.from("trace_events").insert({
+                trace_id: featureTrace.id,
+                event_type: "feature_rolled_back",
+                actor: ctx.actor,
+                actor_type: ctx.source === "system" || ctx.source === "webhook" ? "system" : "user",
+                source: ctx.source,
+                details: {
+                  rolledBackFrom: currentReleaseTag,
+                  rolledBackTo: targetReleaseTag,
+                  reason: `Feature was part of release ${currentReleaseTag} which was rolled back to ${targetReleaseTag}`
+                }
+              });
+            }
+          }
+        }
+      }
+
+      // 3. Update traces with current release tag (release traces)
       tracesUpdated = await updateLinkedTraces(
         ctx.db,
         repoFullName,
@@ -154,6 +223,68 @@ export async function rollback(
           }
         } as any
       );
+    }
+
+    // 4. Re-mark the target release as "deployed" so it shows as current
+    await ctx.db
+      .from("specs")
+      .update({
+        release_status: "deployed",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", targetSpec.id);
+
+    // 5. Also update any feature specs that were part of the target release back to deployed
+    if (targetSpec.release_pr_number) {
+      await ctx.db
+        .from("specs")
+        .update({
+          release_status: "deployed",
+          updated_at: new Date().toISOString()
+        })
+        .eq("repo_full_name", repoFullName)
+        .eq("release_pr_number", targetSpec.release_pr_number);
+
+      // 6. Update feature traces for target release back to production_live
+      const { data: targetFeatureSpecs } = await ctx.db
+        .from("specs")
+        .select("id")
+        .eq("repo_full_name", repoFullName)
+        .eq("release_pr_number", targetSpec.release_pr_number);
+
+      if (targetFeatureSpecs?.length) {
+        for (const spec of targetFeatureSpecs) {
+          const { data: trace } = await ctx.db
+            .from("release_traces")
+            .select("id")
+            .eq("spec_id", spec.id)
+            .maybeSingle();
+
+          if (trace) {
+            await ctx.db
+              .from("release_traces")
+              .update({
+                status: "production_live",
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", trace.id);
+
+            // Add audit event for restored feature
+            await ctx.db.from("trace_events").insert({
+              trace_id: trace.id,
+              event_type: "feature_restored",
+              actor: ctx.actor,
+              actor_type: ctx.source === "system" || ctx.source === "webhook" ? "system" : "user",
+              source: ctx.source,
+              details: {
+                restoredViaRollback: true,
+                releaseTag: targetReleaseTag,
+                rolledBackFrom: currentReleaseTag
+              }
+            });
+          }
+        }
+      }
     }
 
     // Update target release trace to show it's being redeployed
@@ -206,18 +337,19 @@ export async function rollback(
       sourceTag: currentReleaseTag,
       targetTag: targetReleaseTag,
       specsRolledBack,
+      featuresRolledBack,
       tracesUpdated,
       workflowUrl: deployment.workflowUrl
     });
 
     return success(
-      `Rollback to ${targetReleaseTag} initiated. ${specsRolledBack} specs and ${tracesUpdated} traces updated.`,
+      `Rollback to ${targetReleaseTag} initiated. ${specsRolledBack + featuresRolledBack} specs and ${tracesUpdated} traces rolled back.`,
       {
         rollbackId: rollbackRecord?.id || "",
         sourceTag: currentReleaseTag || "unknown",
         targetTag: targetReleaseTag,
         workflowUrl: deployment.workflowUrl,
-        specsRolledBack,
+        specsRolledBack: specsRolledBack + featuresRolledBack,
         tracesUpdated
       },
       chainUpdates

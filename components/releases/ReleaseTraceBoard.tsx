@@ -208,7 +208,9 @@ function eventTypeLabel(eventType: string): string {
     status_changed: "Status changed",
     rollback_initiated: "Rollback initiated",
     rollback_deployed: "Rollback completed",
-    rollback_failed: "Rollback failed"
+    rollback_failed: "Rollback failed",
+    feature_rolled_back: "Feature rolled back",
+    feature_restored: "Feature restored"
   };
   return labels[eventType] ?? eventType.replace(/_/g, " ");
 }
