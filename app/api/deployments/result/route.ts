@@ -54,7 +54,7 @@ export async function POST(request: Request) {
 
   const { data: spec } = await supabase
     .from("specs")
-    .select("id")
+    .select("id, release_status")
     .eq("repo_full_name", repoFullName)
     .eq("release_tag", tag)
     .order("updated_at", { ascending: false })
@@ -62,21 +62,22 @@ export async function POST(request: Request) {
     .maybeSingle();
 
   if (spec?.id) {
+    const nextStatus = spec.release_status === "rolled_back" ? "rolled_back" : releaseStatus;
     await supabase
       .from("specs")
       .update({
-        release_status: releaseStatus,
+        release_status: nextStatus,
         deployment_url: body.run_url ?? null,
         release_sha: sha || null,
-        deployed_at: releaseStatus === "deployed" ? new Date().toISOString() : null,
+        deployed_at: nextStatus === "deployed" ? new Date().toISOString() : null,
         updated_at: new Date().toISOString()
       })
       .eq("id", spec.id);
 
     await updateTraceBySpec(spec.id, {
-      status: releaseStatus === "deployed" ? "production_live" : "failed",
+      status: nextStatus === "rolled_back" ? "rolled_back" : (releaseStatus === "deployed" ? "production_live" : "failed"),
       production_deployment: {
-        status: releaseStatus,
+        status: nextStatus === "rolled_back" ? "rolled_back" : releaseStatus,
         tag,
         sha,
         url: body.deploy_url ?? body.run_url ?? null,
