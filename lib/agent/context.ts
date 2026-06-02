@@ -157,6 +157,13 @@ export async function getShipBrainAgentContext({
       recentRollbacks: deploymentContext.recentRollbacks,
       pendingReleases: deploymentContext.pendingReleases,
       productionFeatureCount: deploymentContext.productionFeatures.length,
+      // New: Recent commits for incident analysis
+      recentMainCommits: deploymentContext.recentMainCommits.slice(0, 5),
+      recentDevelopCommits: deploymentContext.recentDevelopCommits.slice(0, 5),
+      // New: Branch comparison (develop vs main)
+      branchComparison: deploymentContext.branchComparison,
+      pendingCommitsCount: deploymentContext.pendingCommits.length,
+      pendingCommits: deploymentContext.pendingCommits.slice(0, 5),
       summary: deploymentContext.summary,
       fetchedAt: deploymentContext.fetchedAt
     } : null

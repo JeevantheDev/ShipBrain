@@ -6,6 +6,8 @@
  */
 
 import { SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getOctokit } from "@/lib/github/client";
 import { logAction, logError } from "./utils";
 import { ActionContext } from "./types";
 
@@ -64,6 +66,38 @@ export interface DeploymentContext {
     actor: string | null;
     details: Record<string, unknown>;
   }>;
+  /** Recent commits on main branch (for incident analysis) */
+  recentMainCommits: Array<{
+    sha: string;
+    shortSha: string;
+    message: string;
+    author: string | null;
+    date: string;
+    url: string;
+  }>;
+  /** Recent commits on develop branch */
+  recentDevelopCommits: Array<{
+    sha: string;
+    shortSha: string;
+    message: string;
+    author: string | null;
+    date: string;
+    url: string;
+  }>;
+  /** Commits on develop that are not yet on main (pending for release) */
+  pendingCommits: Array<{
+    sha: string;
+    shortSha: string;
+    message: string;
+    author: string | null;
+    date: string;
+  }>;
+  /** Branch comparison summary */
+  branchComparison: {
+    developAhead: number;
+    developBehind: number;
+    lastSyncedAt: string | null;
+  } | null;
   /** Summary for AI context */
   summary: string;
   /** Timestamp when this context was fetched */
@@ -77,7 +111,8 @@ export interface DeploymentContext {
 export async function getRepoDeploymentContext(
   db: SupabaseClient,
   userId: string,
-  repoFullName: string
+  repoFullName: string,
+  githubToken?: string
 ): Promise<DeploymentContext> {
   const context: DeploymentContext = {
     repoFullName,
@@ -88,6 +123,10 @@ export async function getRepoDeploymentContext(
     productionFeatures: [],
     pendingReleases: [],
     recentActivity: [],
+    recentMainCommits: [],
+    recentDevelopCommits: [],
+    pendingCommits: [],
+    branchComparison: null,
     summary: "",
     fetchedAt: new Date().toISOString()
   };
@@ -242,7 +281,149 @@ export async function getRepoDeploymentContext(
       }
     }
 
-    // 8. Build summary for AI
+    // 8. Get GitHub token and fetch recent commits/branch comparison
+    let token = githubToken;
+    if (!token) {
+      try {
+        const adminDb = getSupabaseAdminClient();
+        const { data: profile } = await adminDb
+          .from("profiles")
+          .select("github_access_token")
+          .eq("id", userId)
+          .maybeSingle();
+        token = profile?.github_access_token || undefined;
+      } catch (err) {
+        console.error("[getRepoDeploymentContext] Failed to get GitHub token:", err);
+      }
+    }
+
+    if (token) {
+      const [owner, repo] = repoFullName.split("/");
+      if (owner && repo) {
+        try {
+          const octokit = getOctokit(token);
+
+          // 8a. Get recent commits on main branch
+          try {
+            const { data: mainCommits } = await octokit.repos.listCommits({
+              owner,
+              repo,
+              sha: "main",
+              per_page: 10
+            });
+
+            context.recentMainCommits = mainCommits.map(c => ({
+              sha: c.sha,
+              shortSha: c.sha.slice(0, 7),
+              message: c.commit.message.split("\n")[0] || "Commit",
+              author: c.commit.author?.name || c.author?.login || null,
+              date: c.commit.author?.date || new Date().toISOString(),
+              url: c.html_url
+            }));
+          } catch (mainErr: any) {
+            // Main branch might not exist, try master
+            if (mainErr.status === 404) {
+              try {
+                const { data: masterCommits } = await octokit.repos.listCommits({
+                  owner,
+                  repo,
+                  sha: "master",
+                  per_page: 10
+                });
+                context.recentMainCommits = masterCommits.map(c => ({
+                  sha: c.sha,
+                  shortSha: c.sha.slice(0, 7),
+                  message: c.commit.message.split("\n")[0] || "Commit",
+                  author: c.commit.author?.name || c.author?.login || null,
+                  date: c.commit.author?.date || new Date().toISOString(),
+                  url: c.html_url
+                }));
+              } catch {
+                // Silently fail if master also doesn't exist
+              }
+            }
+          }
+
+          // 8b. Get recent commits on develop branch
+          try {
+            const { data: developCommits } = await octokit.repos.listCommits({
+              owner,
+              repo,
+              sha: "develop",
+              per_page: 10
+            });
+
+            context.recentDevelopCommits = developCommits.map(c => ({
+              sha: c.sha,
+              shortSha: c.sha.slice(0, 7),
+              message: c.commit.message.split("\n")[0] || "Commit",
+              author: c.commit.author?.name || c.author?.login || null,
+              date: c.commit.author?.date || new Date().toISOString(),
+              url: c.html_url
+            }));
+          } catch {
+            // Develop branch might not exist
+          }
+
+          // 8c. Get branch comparison (develop vs main)
+          try {
+            const { data: comparison } = await octokit.repos.compareCommits({
+              owner,
+              repo,
+              base: "main",
+              head: "develop"
+            });
+
+            context.branchComparison = {
+              developAhead: comparison.ahead_by,
+              developBehind: comparison.behind_by,
+              lastSyncedAt: comparison.merge_base_commit?.commit?.author?.date || null
+            };
+
+            // Get pending commits (develop commits not on main)
+            context.pendingCommits = comparison.commits.slice(0, 10).map(c => ({
+              sha: c.sha,
+              shortSha: c.sha.slice(0, 7),
+              message: c.commit.message.split("\n")[0] || "Commit",
+              author: c.commit.author?.name || c.author?.login || null,
+              date: c.commit.author?.date || new Date().toISOString()
+            }));
+          } catch (compareErr: any) {
+            // Try with master branch
+            if (compareErr.status === 404) {
+              try {
+                const { data: comparison } = await octokit.repos.compareCommits({
+                  owner,
+                  repo,
+                  base: "master",
+                  head: "develop"
+                });
+
+                context.branchComparison = {
+                  developAhead: comparison.ahead_by,
+                  developBehind: comparison.behind_by,
+                  lastSyncedAt: comparison.merge_base_commit?.commit?.author?.date || null
+                };
+
+                context.pendingCommits = comparison.commits.slice(0, 10).map(c => ({
+                  sha: c.sha,
+                  shortSha: c.sha.slice(0, 7),
+                  message: c.commit.message.split("\n")[0] || "Commit",
+                  author: c.commit.author?.name || c.author?.login || null,
+                  date: c.commit.author?.date || new Date().toISOString()
+                }));
+              } catch {
+                // Silently fail
+              }
+            }
+          }
+        } catch (githubErr) {
+          console.error("[getRepoDeploymentContext] GitHub API error:", githubErr);
+        }
+      }
+    }
+
+    // 9. Build summary for AI
     context.summary = buildContextSummary(context);
 
   } catch (error) {
@@ -276,6 +457,20 @@ function buildContextSummary(ctx: DeploymentContext): string {
     parts.push(`Last rollback: ${latest.sourceTag} → ${latest.targetTag} (${latest.status}, ${formatRelativeTime(latest.initiatedAt)})`);
   }
 
+  // Branch comparison (develop vs main)
+  if (ctx.branchComparison) {
+    if (ctx.branchComparison.developAhead > 0) {
+      parts.push(`Develop is ${ctx.branchComparison.developAhead} commits ahead of main`);
+    } else {
+      parts.push("Develop is in sync with main");
+    }
+  }
+
+  // Pending commits count
+  if (ctx.pendingCommits.length > 0) {
+    parts.push(`${ctx.pendingCommits.length} commits pending for release`);
+  }
+
   // Pending releases
   if (ctx.pendingReleases.length > 0) {
     const pendingTags = ctx.pendingReleases
@@ -296,6 +491,12 @@ function buildContextSummary(ctx: DeploymentContext): string {
   if (ctx.recentActivity.length > 0) {
     const latestEvent = ctx.recentActivity[0];
     parts.push(`Latest activity: ${latestEvent.eventType.replace(/_/g, " ")} (${formatRelativeTime(latestEvent.createdAt)})`);
+  }
+
+  // Recent main commits hint
+  if (ctx.recentMainCommits.length > 0) {
+    const latest = ctx.recentMainCommits[0];
+    parts.push(`Latest main commit: "${latest.message.slice(0, 40)}${latest.message.length > 40 ? "..." : ""}" (${formatRelativeTime(latest.date)})`);
   }
 
   return parts.join(" | ");

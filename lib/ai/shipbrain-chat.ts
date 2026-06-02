@@ -83,7 +83,24 @@ The context includes a \`deploymentState\` object with FRESH, real-time data abo
 - \`pendingReleases\`: Releases waiting for deployment
 - \`summary\`: Human-readable summary of current state
 
-**IMPORTANT**: Always use \`deploymentState\` for questions about current production version, recent rollbacks, or deployment status. This data is fetched fresh on every request and reflects the actual current state.`;
+### Recent Commits (for incident analysis)
+- \`recentMainCommits\`: Last 5 commits on main branch (sha, message, author, date)
+- \`recentDevelopCommits\`: Last 5 commits on develop branch
+
+### Branch Comparison (develop vs main)
+- \`branchComparison\`: Shows how far develop is ahead/behind main
+- \`pendingCommitsCount\`: Number of commits on develop not yet released
+- \`pendingCommits\`: The actual pending commits (up to 5)
+
+**IMPORTANT**: Always use \`deploymentState\` for questions about:
+- Current production version
+- Recent rollbacks
+- Deployment status
+- What's changed recently (use recentMainCommits)
+- What's pending for release (use pendingCommits and branchComparison)
+- Incident root cause analysis (correlate deployment timing with commits)
+
+This data is fetched fresh on every request and reflects the actual current state.`;
 
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
