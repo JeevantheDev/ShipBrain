@@ -154,7 +154,8 @@ export function DashboardPrOverview() {
   const pendingPrs = useMemo(() => runs.filter((run) => run.status === "pending_pr").length, [runs]);
   const activeCiRuns = useMemo(() => runs.filter((run) => run.ciStatus && run.ciStatus !== "completed").length, [runs]);
   const conflictedPrs = useMemo(() => runs.filter((run) => run.hasMergeConflicts).length, [runs]);
-  const latestRelease = useMemo(() => runs.find((run) => run.releaseTag), [runs]);
+  const latestRelease = useMemo(() => runs.find((run) => run.releaseTag && run.releaseStatus !== "rolled_back"), [runs]);
+  const hasRollback = useMemo(() => runs.some((run) => run.releaseStatus === "rolled_back"), [runs]);
   const activeRuns = useMemo(() => runs.filter((run) => {
     const activeRelease = run.releaseStatus === "release_pr_open" || run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying";
     return run.status !== "closed" && (run.status !== "merged" || activeRelease);
@@ -241,9 +242,15 @@ export function DashboardPrOverview() {
         <div className="metric">
           <div className="metric-label">
             <span>Current Version</span>
-            <span className="status-pill passed">
-              <span className="dot"></span>stable
-            </span>
+            {hasRollback ? (
+              <span className="status-pill rolled_back" title="A release rollback was executed">
+                <span className="dot"></span>rolledback
+              </span>
+            ) : (
+              <span className="status-pill passed">
+                <span className="dot"></span>stable
+              </span>
+            )}
           </div>
           <div className="metric-row">
             <span className="metric-version">{latestRelease?.releaseTag ?? "NA"}</span>
