@@ -26,6 +26,14 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Get user's GitHub token for API calls
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("github_access_token")
+    .eq("id", user.id)
+    .maybeSingle();
+  const userGitHubToken = profile?.github_access_token;
+
   // Get all specs that might need attention - explicitly exclude deployed ones
   const { data: specs, error: specsError } = await supabase
     .from("specs")
@@ -40,7 +48,8 @@ export async function GET() {
     return NextResponse.json({ error: "Unable to load specs.", detail: specsError.message }, { status: 500 });
   }
 
-  const octokit = getOctokit();
+  // Use user's token if available, otherwise fall back to app token
+  const octokit = getOctokit(userGitHubToken || undefined);
   const queue: any[] = [];
 
   // Deduplicate specs by pr_number + repo_full_name to prevent showing same PR twice
@@ -130,7 +139,9 @@ export async function GET() {
           if (nextStatus === "merged") {
             updates.merged_at = pr.merged_at ?? new Date().toISOString();
             updates.merge_sha = nextMergeSha;
-            if (nextBaseBranch === "develop" && !spec.release_status) {
+            // Set release_status when merged - "not_started" counts as not set
+            const hasNoReleaseStatus = !spec.release_status || spec.release_status === "not_started";
+            if (nextBaseBranch === "develop" && hasNoReleaseStatus) {
               updates.release_status = "ready_for_prod";
             } else if (nextBaseBranch === "main" && spec.release_status !== "deployed" && spec.release_status !== "deploying") {
               // Both hotfix PRs and release PRs (develop -> main) should be pending_deploy
