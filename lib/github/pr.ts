@@ -638,11 +638,15 @@ export type TagCommitInput = {
 export async function ensureReleaseTagAvailable(input: TagCommitInput) {
   const octokit = getOctokit(input.token);
   try {
-    await octokit.git.getRef({
+    const existingRef = await octokit.git.getRef({
       owner: input.owner,
       repo: input.repo,
       ref: `tags/${input.releaseTag}`
     });
+    // If the tag exists and points to the same SHA, it is safe to reuse
+    if (existingRef.data.object.sha === input.sha) {
+      return;
+    }
     throw new Error(`Release tag ${input.releaseTag} already exists. Choose a unique release tag before approving deployment.`);
   } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
@@ -653,18 +657,36 @@ export async function ensureReleaseTagAvailable(input: TagCommitInput) {
 
 export async function tagCommitForRelease(input: TagCommitInput) {
   const octokit = getOctokit(input.token);
-  await octokit.git.createRef({
-    owner: input.owner,
-    repo: input.repo,
-    ref: `refs/tags/${input.releaseTag}`,
-    sha: input.sha
-  }).catch((error) => {
+  try {
+    await octokit.git.createRef({
+      owner: input.owner,
+      repo: input.repo,
+      ref: `refs/tags/${input.releaseTag}`,
+      sha: input.sha
+    });
+  } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
     if (status === 422) {
+      try {
+        const existingRef = await octokit.git.getRef({
+          owner: input.owner,
+          repo: input.repo,
+          ref: `tags/${input.releaseTag}`
+        });
+        if (existingRef.data.object.sha === input.sha) {
+          return {
+            sha: input.sha,
+            releaseTag: input.releaseTag,
+            releaseUrl: `https://github.com/${input.owner}/${input.repo}/releases/tag/${input.releaseTag}`
+          };
+        }
+      } catch {
+        // ignore and let original error throw
+      }
       throw new Error(`Release tag ${input.releaseTag} already exists.`);
     }
     throw error;
-  });
+  }
 
   return {
     sha: input.sha,

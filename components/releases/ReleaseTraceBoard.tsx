@@ -413,9 +413,6 @@ export function ReleaseTraceBoard({ traces, eventsByTrace, userId }: { traces: T
           </span>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          <button className="btn subtle" type="button" onClick={fixStaleTraces} disabled={isFixing || isPending}>
-            {isFixing ? "Fixing..." : "Fix Stale"}
-          </button>
           <button className="btn subtle" type="button" onClick={() => refreshBoard("manual")} disabled={isPending || liveStatus === "syncing"}>
             <RefreshCw size={13} className={isPending || liveStatus === "syncing" ? "spin" : ""} />
             Refresh

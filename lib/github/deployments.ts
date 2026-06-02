@@ -38,29 +38,46 @@ export async function dispatchCloudflareProductionDeploy(input: DispatchCloudfla
       // Reverse sync PRs are now created by ShipBrain backend using user's GitHub token.
     }
 
-    try {
-      // Use the release tag as ref so the workflow run is linked to the spec via release_tag
-      const dispatchRef = isNewWorkflow ? input.releaseTag : "main";
-      await octokit.actions.createWorkflowDispatch({
-        owner: input.owner,
-        repo: input.repo,
-        workflow_id: workflowId,
-        ref: dispatchRef,
-        inputs
-      });
-      usedWorkflowId = workflowId;
-      lastError = null;
-      break;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
-      const message = typeof error === "object" && error && "message" in error ? (error as { message?: string }).message : "";
+    // We try to dispatch, retrying on 422 "No ref found" propagation delays
+    const maxRetries = 3;
+    let attempt = 0;
 
-      // If workflow not found (404) or doesn't have dispatch trigger, try next candidate
-      if ((status === 404 || message?.includes("does not have")) && workflowCandidates.indexOf(workflowId) < workflowCandidates.length - 1) {
-        continue;
+    while (attempt < maxRetries) {
+      try {
+        // Use the release tag as ref so the workflow run is linked to the spec via release_tag
+        const dispatchRef = isNewWorkflow ? input.releaseTag : "main";
+        await octokit.actions.createWorkflowDispatch({
+          owner: input.owner,
+          repo: input.repo,
+          workflow_id: workflowId,
+          ref: dispatchRef,
+          inputs
+        });
+        usedWorkflowId = workflowId;
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
+        const message = (typeof error === "object" && error && "message" in error ? (error as { message?: string }).message : "") || "";
+
+        if (status === 422 && message.includes("No ref found") && attempt < maxRetries - 1) {
+          attempt++;
+          console.warn(`[dispatch] Ref ${input.releaseTag} not found by GitHub Actions yet. Retrying in 2 seconds (attempt ${attempt}/${maxRetries})...`);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          continue;
+        }
+
+        // If workflow not found (404) or doesn't have dispatch trigger, try next candidate
+        if ((status === 404 || message?.includes("does not have")) && workflowCandidates.indexOf(workflowId) < workflowCandidates.length - 1) {
+          break; // break retry loop to try next candidate in outer loop
+        }
+        throw error;
       }
-      throw error;
+    }
+
+    if (!lastError) {
+      break;
     }
   }
 

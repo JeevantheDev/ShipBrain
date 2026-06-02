@@ -174,7 +174,7 @@ export default function SpecToPrPage() {
   const displayedPercent = flowStage === "planning" || flowStage === "creating_pr" ? livePercent : flow.percent;
 
   const scaffoldText = useMemo(() => {
-    if (!result) return "";
+    if (!result || !result.scaffold) return "";
     return Object.entries(result.scaffold)
       .map(([filename, content]) => `// ${filename}\n${content}`)
       .join("\n\n");
@@ -349,7 +349,7 @@ export default function SpecToPrPage() {
     setSpec(run.spec);
     setResult(run.result);
     setPrTitle(run.result.prTitle);
-    setReviewers(run.result.suggestedReviewers);
+    setReviewers(run.result.suggestedReviewers || []);
     setIsConfirmingPr(false);
     setBranchName(run.branchName);
     setBaseBranch(run.baseBranch ?? "develop");
@@ -769,19 +769,19 @@ export default function SpecToPrPage() {
   const syncedRecentRuns = recentRuns.filter((run) => !canManageRecentRun(run)).slice(0, 3);
 
   const uniqueFilesCount = useMemo(() => {
-    if (!result) return 0;
+    if (!result || !result.tasks) return 0;
     const files = new Set<string>();
     result.tasks.forEach((t) => t.files.forEach((f) => files.add(f)));
     return files.size;
   }, [result]);
 
   const totalLoc = useMemo(() => {
-    if (!result) return 0;
+    if (!result || !result.tasks) return 0;
     return result.tasks.reduce((sum, t) => sum + (t.estimatedLines ?? t.files.length * 30 + 10), 0);
   }, [result]);
 
   const estMin = useMemo(() => {
-    if (!result) return 0;
+    if (!result || !result.tasks) return 0;
     return Math.max(2, Math.round(totalLoc / 12));
   }, [result, totalLoc]);
 
@@ -942,7 +942,7 @@ export default function SpecToPrPage() {
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <span className="ready-pill">
                       <span className="dot"></span>
-                      plan ready · {result.tasks.length} tasks
+                      plan ready · {result.tasks?.length ?? 0} tasks
                     </span>
                   </div>
                 ) : (
@@ -1043,7 +1043,7 @@ export default function SpecToPrPage() {
               </span>
               <span className="progress-status" style={{ color: result ? "var(--success)" : "var(--text-muted)" }}>
                 <span className="dot" style={{ background: result ? "var(--success)" : "var(--text-muted)" }}></span>
-                {result ? `${result.tasks.length} of ${result.tasks.length} steps generated` : flow.label}
+                {result ? `${result.tasks?.length ?? 0} of ${result.tasks?.length ?? 0} steps generated` : flow.label}
               </span>
             </div>
             <div className="progress-bar">
@@ -1112,8 +1112,8 @@ export default function SpecToPrPage() {
                 <div className="gate-zone" style={{ marginBottom: 8 }}>
                   <div className="gate-zone-label mono">
                     <span>Create Draft PR</span>
-                    <span className={`gate-state ${result.pr ? "passed" : ""}`}>
-                      {result.pr ? (
+                    <span className={`gate-state ${result?.pr ? "passed" : ""}`}>
+                      {result?.pr ? (
                         <>✓ created</>
                       ) : isConfirmingPr ? (
                         <>
@@ -1125,7 +1125,7 @@ export default function SpecToPrPage() {
                     </span>
                   </div>
 
-                  {result.pr ? (
+                  {result?.pr ? (
                     <div className="gate-done" style={{ borderRadius: "4px" }}>
                       <div className="gate-done-left">
                         <span className="gate-check" aria-hidden="true">
@@ -1278,10 +1278,10 @@ export default function SpecToPrPage() {
                 <div>
                   <div className="section-label mono" style={{ fontSize: "11px", marginBottom: "6px" }}>
                     <span>Tasks</span>
-                    <span className="count">{result.tasks.length} · ~{totalLoc} LOC</span>
+                    <span className="count">{result.tasks?.length ?? 0} · ~{totalLoc} LOC</span>
                   </div>
                   <div className="task-list">
-                    {result.tasks.map((task, idx) => {
+                    {(result.tasks || []).map((task, idx) => {
                       const fileCount = task.files.length;
                       const estLines = task.estimatedLines ?? (fileCount * 30 + 10);
                       return (
@@ -1414,7 +1414,7 @@ export default function SpecToPrPage() {
         confirmLabel="Save"
         onClose={() => setTaskEditModal({ open: false, taskIndex: -1, defaultValue: "" })}
         onConfirm={(value) => {
-          if (result && taskEditModal.taskIndex >= 0) {
+          if (result && result.tasks && taskEditModal.taskIndex >= 0) {
             const updatedTasks = [...result.tasks];
             updatedTasks[taskEditModal.taskIndex] = { ...updatedTasks[taskEditModal.taskIndex], title: value };
             setResult({ ...result, tasks: updatedTasks });

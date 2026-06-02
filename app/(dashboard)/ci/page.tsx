@@ -142,10 +142,13 @@ export default function CiPage() {
   const [productionDeployTarget, setProductionDeployTarget] = useState<PendingDeploy | null>(null);
   const [releasePrTarget, setReleasePrTarget] = useState<PendingDeploy | null>(null);
   const [refreshing, setRefreshing] = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [totalRuns, setTotalRuns] = useState(0);
-  const pageSize = 10;
+  const [activeTab, setActiveTab] = useState<"CI" | "Notify" | "Release">("CI");
+  const [tabPages, setTabPages] = useState<Record<"CI" | "Notify" | "Release", number>>({
+    CI: 1,
+    Notify: 1,
+    Release: 1
+  });
+  const tabPageSize = 10;
   const selectedHasRejectionAudit = selected ? audits.some((audit) => audit.action === "deploy_rejected") : false;
   const previewRepo = repos.find((repo) => !repo.vercel_preview_env_confirmed && !repo.setup_metadata?.skipVercel);
   useEffect(() => {
@@ -168,23 +171,21 @@ export default function CiPage() {
     };
   }, []);
 
-  async function loadRuns(page = currentPage) {
+  async function loadRuns() {
     try {
       const query = requestedRunId
         ? `run=${encodeURIComponent(requestedRunId)}`
-        : `page=${page}&limit=${pageSize}`;
+        : `page=1&limit=100`;
       const response = await fetch(`/api/ci-runs?${query}`, { cache: "no-store" });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to load CI runs");
-      setRuns(json.runs ?? []);
-      setTotalPages(json.pagination?.totalPages ?? 1);
-      setTotalRuns(json.pagination?.total ?? 0);
-      setCurrentPage(json.pagination?.page ?? 1);
+      const loadedRuns = json.runs ?? [];
+      setRuns(loadedRuns);
       setError("");
       setSelected((current) => {
-        if (requestedRunId) return (json.runs ?? []).find((run: CiRun) => run.id === requestedRunId) ?? current;
+        if (requestedRunId) return loadedRuns.find((run: CiRun) => run.id === requestedRunId) ?? current;
         if (!current) return current;
-        return (json.runs ?? []).find((run: CiRun) => run.id === current.id) ?? current;
+        return loadedRuns.find((run: CiRun) => run.id === current.id) ?? current;
       });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to load CI runs");
@@ -194,9 +195,13 @@ export default function CiPage() {
   }
 
   function goToPage(page: number) {
-    if (page < 1 || page > totalPages) return;
-    setCurrentPage(page);
-    void loadRuns(page);
+    const categoryRuns = runs.filter(run => getRunCategory(run) === activeTab);
+    const totalPagesForTab = Math.ceil(categoryRuns.length / tabPageSize);
+    if (page < 1 || page > totalPagesForTab) return;
+    setTabPages(prev => ({
+      ...prev,
+      [activeTab]: page
+    }));
   }
 
   async function loadRepos() {
@@ -394,6 +399,33 @@ export default function CiPage() {
     if (name.includes("ci") || name.includes("test") || name.includes("lint")) return "CI";
     return null;
   }
+
+  function getRunCategory(run: CiRun): "CI" | "Notify" | "Release" {
+    const name = (run.workflowName ?? run.title ?? "").toLowerCase();
+    if (name.includes("notify")) {
+      return "Notify";
+    }
+    if (name.includes("production") || name.includes("release") || name.includes("deploy")) {
+      if (name.includes("preview")) {
+        return "CI";
+      }
+      return "Release";
+    }
+    return "CI";
+  }
+
+  function hasInProgressForCategory(category: "CI" | "Notify" | "Release") {
+    return runs.some(run => getRunCategory(run) === category && run.status !== "completed");
+  }
+
+  function hasFailedForCategory(category: "CI" | "Notify" | "Release") {
+    return runs.some(run => getRunCategory(run) === category && run.conclusion && run.conclusion !== "success");
+  }
+
+  const filteredRuns = runs.filter(run => getRunCategory(run) === activeTab);
+  const totalPagesForTab = Math.ceil(filteredRuns.length / tabPageSize);
+  const currentPageForTab = Math.max(1, Math.min(tabPages[activeTab], totalPagesForTab));
+  const paginatedRuns = filteredRuns.slice((currentPageForTab - 1) * tabPageSize, currentPageForTab * tabPageSize);
 
   function envClass(env: "PROD" | "DEV" | "CI" | null) {
     if (env === "PROD") return "prod-env";
@@ -721,7 +753,7 @@ export default function CiPage() {
           <header className="panel-head">
             <h2>
               Workflow Runs
-              <span className="badge-count">{totalRuns} total</span>
+              <span className="badge-count">{filteredRuns.length} runs</span>
             </h2>
             <div className="tools">
               <button className="btn subtle" onClick={() => void loadRuns()} disabled={loading}>
@@ -729,6 +761,72 @@ export default function CiPage() {
               </button>
             </div>
           </header>
+
+          {/* Category Tabs */}
+          <div style={{
+            display: "flex",
+            borderBottom: "1px solid var(--line)",
+            background: "var(--panel-2)",
+            padding: "0 12px",
+            gap: "8px"
+          }}>
+            {(["CI", "Notify", "Release"] as const).map((tab) => {
+              const isActive = activeTab === tab;
+              const hasInProgress = hasInProgressForCategory(tab);
+              const hasFailed = hasFailedForCategory(tab);
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  style={{
+                    padding: "10px 16px",
+                    fontSize: "13px",
+                    fontWeight: isActive ? 600 : 400,
+                    color: isActive ? "var(--text)" : "var(--text-muted)",
+                    border: "none",
+                    borderBottom: isActive ? "2px solid var(--brand)" : "2px solid transparent",
+                    background: "transparent",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    outline: "none"
+                  }}
+                >
+                  {tab}
+                  {/* Progress Indicator */}
+                  {hasInProgress && (
+                    <span 
+                      style={{ 
+                        width: 7, 
+                        height: 7, 
+                        borderRadius: "50%", 
+                        background: "var(--brand)", 
+                        boxShadow: "0 0 0 2px rgba(9, 105, 218, 0.3)",
+                        display: "inline-block",
+                        animation: "pulse 1.5s infinite ease-in-out"
+                      }} 
+                      title={`${tab} workflow in progress`} 
+                    />
+                  )}
+                  {/* Failed Indicator */}
+                  {hasFailed && (
+                    <span 
+                      style={{ 
+                        width: 7, 
+                        height: 7, 
+                        borderRadius: "50%", 
+                        background: "var(--red)", 
+                        display: "inline-block" 
+                      }} 
+                      title={`${tab} workflow failed`} 
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
           <div style={{ padding: 12 }}>
             {error ? (
@@ -744,10 +842,10 @@ export default function CiPage() {
                 <strong>Loading workflow runs</strong>
                 <p style={{ fontSize: 12 }}>Checking database for GitHub Actions webhook events.</p>
               </div>
-            ) : runs.length ? (
+            ) : filteredRuns.length ? (
               <>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {runs.map((run) => {
+                  {paginatedRuns.map((run) => {
                     const env = getEnvironment(run);
                     const hasFailed = run.conclusion && run.conclusion !== "success";
                     const isSel = selected?.id === run.id;
@@ -795,35 +893,35 @@ export default function CiPage() {
                 </div>
 
                 {/* Pagination Controls */}
-                {totalPages > 1 && (
+                {totalPagesForTab > 1 && (
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "12px 0", borderTop: "1px solid var(--line-muted)" }}>
                     <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                      Showing {((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, totalRuns)} of {totalRuns}
+                      Showing {((currentPageForTab - 1) * tabPageSize) + 1}-{Math.min(currentPageForTab * tabPageSize, filteredRuns.length)} of {filteredRuns.length}
                     </span>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <button
                         className="btn subtle"
-                        onClick={() => goToPage(currentPage - 1)}
-                        disabled={currentPage <= 1}
+                        onClick={() => goToPage(currentPageForTab - 1)}
+                        disabled={currentPageForTab <= 1}
                         style={{ padding: "6px" }}
                       >
                         <ChevronLeft size={14} />
                       </button>
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      {Array.from({ length: Math.min(5, totalPagesForTab) }, (_, i) => {
                         let pageNum: number;
-                        if (totalPages <= 5) {
+                        if (totalPagesForTab <= 5) {
                           pageNum = i + 1;
-                        } else if (currentPage <= 3) {
+                        } else if (currentPageForTab <= 3) {
                           pageNum = i + 1;
-                        } else if (currentPage >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i;
+                        } else if (currentPageForTab >= totalPagesForTab - 2) {
+                          pageNum = totalPagesForTab - 4 + i;
                         } else {
-                          pageNum = currentPage - 2 + i;
+                          pageNum = currentPageForTab - 2 + i;
                         }
                         return (
                           <button
                             key={pageNum}
-                            className={`btn ${currentPage === pageNum ? "primary" : "subtle"}`}
+                            className={`btn ${currentPageForTab === pageNum ? "primary" : "subtle"}`}
                             onClick={() => goToPage(pageNum)}
                             style={{ padding: "4px 10px", minWidth: 28, fontSize: 11 }}
                           >
@@ -833,8 +931,8 @@ export default function CiPage() {
                       })}
                       <button
                         className="btn subtle"
-                        onClick={() => goToPage(currentPage + 1)}
-                        disabled={currentPage >= totalPages}
+                        onClick={() => goToPage(currentPageForTab + 1)}
+                        disabled={currentPageForTab >= totalPagesForTab}
                         style={{ padding: "6px" }}
                       >
                         <ChevronRight size={14} />
@@ -845,8 +943,8 @@ export default function CiPage() {
               </>
             ) : (
               <div style={{ padding: "36px", textAlign: "center", color: "var(--text-muted)" }}>
-                <strong>No CI runs received</strong>
-                <p style={{ fontSize: 12, marginTop: 4 }}>Configure the GitHub webhook for the connected repo.</p>
+                <strong>No runs found in {activeTab}</strong>
+                <p style={{ fontSize: 12, marginTop: 4 }}>No workflow runs matched this tab&apos;s criteria.</p>
               </div>
             )}
           </div>
