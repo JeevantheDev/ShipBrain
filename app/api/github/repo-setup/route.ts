@@ -5,7 +5,8 @@ import {
   scanRepository,
   workflowFiles,
   commitWorkflowsToDefaultBranch,
-  deleteExistingSetupBranchesAndPRs
+  deleteExistingSetupBranchesAndPRs,
+  ensureGitHubWebhook
 } from "@/lib/github/setup";
 import {
   ensureCloudflareProject,
@@ -215,6 +216,25 @@ async function runSetup({
     await emit?.({ type: "step", label: "Cleaning up existing setup branches", status: "done", detail: `Deleted ${deleted.branches.length} branches, ${deleted.prs.length} PRs` });
   } else {
     await emit?.({ type: "step", label: "Cleaning up existing setup branches", status: "done", detail: "No existing setup found" });
+  }
+
+  // Create GitHub webhook to receive PR events for setup PR merge detection
+  await emit?.({ type: "step", label: "Creating GitHub webhook", status: "running" });
+  const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? "";
+  const webhookUrl = `${apiUrl}/api/webhooks/github`;
+  let webhookResult: { created: boolean; hookId: number | null } = { created: false, hookId: null };
+  try {
+    webhookResult = await ensureGitHubWebhook(repoFullName, webhookUrl, webhookSecret, token);
+    await emit?.({
+      type: "step",
+      label: "Creating GitHub webhook",
+      status: "done",
+      detail: webhookResult.created ? "Webhook created" : webhookResult.hookId ? "Webhook updated" : "Skipped (no admin access)"
+    });
+  } catch (err: any) {
+    // Non-fatal: webhook creation can fail but setup can continue
+    await emit?.({ type: "step", label: "Creating GitHub webhook", status: "error", detail: err.message });
+    console.warn(`Could not create GitHub webhook for ${repoFullName}:`, err.message);
   }
 
   // Prepare workflow files

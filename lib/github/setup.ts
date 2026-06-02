@@ -167,6 +167,69 @@ export async function branchExists(repoFullName: string, branch: string, token?:
   return exists(() => octokit.git.getRef({ owner, repo, ref: `heads/${branch}` }));
 }
 
+/**
+ * Create or update a GitHub webhook for PR events so ShipBrain can detect when the setup PR is merged.
+ */
+export async function ensureGitHubWebhook(
+  repoFullName: string,
+  webhookUrl: string,
+  webhookSecret: string,
+  token?: string
+): Promise<{ created: boolean; hookId: number | null }> {
+  const octokit = getOctokit(token);
+  const { owner, repo } = splitRepo(repoFullName);
+
+  try {
+    // Check if a ShipBrain webhook already exists
+    const { data: hooks } = await octokit.repos.listWebhooks({ owner, repo });
+    const existingHook = hooks.find(
+      (h) => h.config?.url === webhookUrl || h.config?.url?.includes("/api/webhooks/github")
+    );
+
+    if (existingHook) {
+      // Update existing webhook to ensure it has correct config
+      await octokit.repos.updateWebhook({
+        owner,
+        repo,
+        hook_id: existingHook.id,
+        config: {
+          url: webhookUrl,
+          content_type: "json",
+          secret: webhookSecret,
+          insecure_ssl: "0"
+        },
+        events: ["pull_request", "workflow_run"],
+        active: true
+      });
+      return { created: false, hookId: existingHook.id };
+    }
+
+    // Create new webhook
+    const { data: newHook } = await octokit.repos.createWebhook({
+      owner,
+      repo,
+      name: "web",
+      config: {
+        url: webhookUrl,
+        content_type: "json",
+        secret: webhookSecret,
+        insecure_ssl: "0"
+      },
+      events: ["pull_request", "workflow_run"],
+      active: true
+    });
+
+    return { created: true, hookId: newHook.id };
+  } catch (error: any) {
+    // If forbidden (no admin access), log but don't fail
+    if (error.status === 403 || error.status === 404) {
+      console.warn(`[Webhook] Could not create webhook for ${repoFullName}: ${error.message}`);
+      return { created: false, hookId: null };
+    }
+    throw error;
+  }
+}
+
 function branchList(input: WorkflowInput) {
   return input.devBranch ? `[${input.devBranch}, ${input.prodBranch}]` : `[${input.prodBranch}]`;
 }
