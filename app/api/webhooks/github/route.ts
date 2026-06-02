@@ -353,20 +353,43 @@ export async function POST(request: Request) {
 
       // When setup PR is merged, trigger initial deployments
       if (isSetupPr && nextStatus === "merged") {
-        // Find the repo and user for this setup PR
-        const { data: repoForSetup } = await supabase
+        console.log(`[Setup PR Merge] Detected setup PR merge for ${repoFullName}, PR #${pullRequest.number}`);
+
+        // Find the repo and user for this setup PR - try by setup_pr_number first, then fallback to full_name
+        let repoForSetup: { user_id: string; setup_pr_number: number | null } | null = null;
+
+        const { data: repoByPrNumber, error: prNumberError } = await supabase
           .from("repos")
           .select("user_id, setup_pr_number")
           .eq("full_name", repoFullName)
           .eq("setup_pr_number", pullRequest.number)
-          .single();
+          .maybeSingle();
+
+        if (repoByPrNumber) {
+          repoForSetup = repoByPrNumber;
+          console.log(`[Setup PR Merge] Found repo by setup_pr_number: ${pullRequest.number}`);
+        } else {
+          // Fallback: try finding by full_name only (in case setup_pr_number wasn't saved correctly)
+          const { data: repoByName, error: nameError } = await supabase
+            .from("repos")
+            .select("user_id, setup_pr_number")
+            .eq("full_name", repoFullName)
+            .maybeSingle();
+
+          if (repoByName) {
+            repoForSetup = repoByName;
+            console.log(`[Setup PR Merge] Found repo by full_name only (setup_pr_number was: ${repoByName.setup_pr_number}, expected: ${pullRequest.number})`);
+          } else {
+            console.log(`[Setup PR Merge] No repo found for ${repoFullName}. Errors: prNumber=${prNumberError?.message}, name=${nameError?.message}`);
+          }
+        }
 
         if (repoForSetup?.user_id) {
           // Update repo setup status
           await supabase.from("repos").update({
             setup_status: "setup_pr_merged",
             updated_at: new Date().toISOString()
-          }).eq("full_name", repoFullName).eq("setup_pr_number", pullRequest.number);
+          }).eq("full_name", repoFullName);
 
           // Trigger initial deployments - await to ensure it completes
           try {
