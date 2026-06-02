@@ -26,7 +26,8 @@ import {
   approveHotfix as approveHotfixAction,
   resolveIncident as resolveIncidentAction,
   createHotfix as createHotfixAction,
-  analyzeIncident as analyzeIncidentAction
+  analyzeIncident as analyzeIncidentAction,
+  buildActionContext
 } from "@/lib/actions";
 
 type TelegramUser = {
@@ -75,31 +76,17 @@ function hotfixReleaseTag(incidentId: string) {
 }
 
 /**
- * Build an action context for Telegram commands
+ * Build an action context for Telegram commands using unified buildActionContext
  */
 async function buildTelegramActionContext(userId: string, repoFullName: string) {
   const db = getSupabaseAdminClient();
-
-  // Get user's GitHub token
-  const { data: profile } = await db
-    .from("profiles")
-    .select("github_access_token, email")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (!profile?.github_access_token) {
-    return null;
-  }
-
-  // Return context with source set to "telegram"
-  return {
+  return buildActionContext({
     db,
     userId,
-    githubToken: profile.github_access_token,
-    source: "telegram" as const,
-    actor: "Telegram Bot",
-    repoFullName
-  };
+    source: "telegram",
+    repoFullName,
+    actor: "Telegram Bot"
+  });
 }
 
 export async function runTelegramCommand(user: TelegramUser, text: string) {

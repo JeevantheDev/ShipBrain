@@ -24,6 +24,7 @@ import {
   analyzeIncident as analyzeIncidentAction,
   resolveIncident as resolveIncidentAction,
   acknowledgeIncident as acknowledgeIncidentAction,
+  buildActionContext,
   ActionContext
 } from "@/lib/actions";
 
@@ -328,36 +329,6 @@ function getInternalApiBaseUrl(): string {
   return "http://localhost:3003";
 }
 
-// Build ActionContext for unified actions
-async function buildChatActionContext(
-  supabase: SupabaseClient,
-  userId: string,
-  repoFullName: string | null
-): Promise<ActionContext | null> {
-  // Use admin client to bypass RLS for profile lookup
-  const { getSupabaseAdminClient } = await import("@/lib/supabase/admin");
-  const adminDb = getSupabaseAdminClient();
-
-  const { data: profile } = await adminDb
-    .from("profiles")
-    .select("github_access_token, github_login")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (!profile?.github_access_token) {
-    return null;
-  }
-
-  return {
-    db: supabase,
-    userId,
-    githubToken: profile.github_access_token,
-    source: "chat" as const,
-    actor: profile.github_login || userId,
-    repoFullName: repoFullName || ""
-  };
-}
-
 // Execute action
 export async function executeAction(
   action: ActionType,
@@ -436,7 +407,7 @@ export async function executeAction(
         }
 
         // Build unified action context (uses admin client internally)
-        const ctx = await buildChatActionContext(supabase, userId, repoFullName);
+        const ctx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!ctx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -464,7 +435,7 @@ export async function executeAction(
 
       case "deploy_preview": {
         // Build unified action context
-        const previewCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const previewCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!previewCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -493,7 +464,7 @@ export async function executeAction(
 
       case "deploy_production": {
         // Build unified action context
-        const prodCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const prodCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!prodCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -575,7 +546,7 @@ export async function executeAction(
 
       case "rollback": {
         // Build unified action context
-        const rollbackCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const rollbackCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!rollbackCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -603,7 +574,7 @@ export async function executeAction(
 
       case "create_hotfix": {
         // Build unified action context
-        const hotfixCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const hotfixCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!hotfixCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -637,7 +608,7 @@ export async function executeAction(
 
       case "approve_hotfix": {
         // Build unified action context
-        const approveHotfixCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const approveHotfixCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!approveHotfixCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -670,7 +641,7 @@ export async function executeAction(
 
       case "analyze_incident": {
         // Build unified action context
-        const analyzeCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const analyzeCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!analyzeCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -701,7 +672,7 @@ export async function executeAction(
 
       case "resolve_incident": {
         // Build unified action context
-        const resolveCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const resolveCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!resolveCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
@@ -729,7 +700,7 @@ export async function executeAction(
 
       case "acknowledge_incident": {
         // Build unified action context
-        const ackCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        const ackCtx = await buildActionContext({ db: supabase, userId, source: "chat", repoFullName: repoFullName || undefined });
         if (!ackCtx) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
