@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     const adminDb = getSupabaseAdminClient();
     const { data: debugProfile, error: debugError } = await adminDb
       .from("profiles")
-      .select("id, email, github_access_token")
+      .select("id, github_login, github_access_token")
       .eq("id", user.id)
       .maybeSingle();
 

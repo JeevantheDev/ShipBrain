@@ -23,10 +23,10 @@ export async function buildActionContext(params: {
   // Always use admin client for profile lookup to bypass RLS
   const adminDb = getSupabaseAdminClient();
 
-  // Get user's GitHub token
+  // Get user's GitHub token (note: profiles table doesn't have email column)
   const { data: profile, error: profileError } = await adminDb
     .from("profiles")
-    .select("github_access_token, email")
+    .select("github_access_token, github_login")
     .eq("id", userId)
     .maybeSingle();
 
@@ -58,7 +58,7 @@ export async function buildActionContext(params: {
     userId,
     githubToken: profile.github_access_token,
     source,
-    actor: actor || profile.email || userId,
+    actor: actor || profile.github_login || userId,
     repoFullName: resolvedRepoFullName || ""
   };
 }
