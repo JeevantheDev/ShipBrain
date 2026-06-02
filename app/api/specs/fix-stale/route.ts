@@ -29,12 +29,13 @@ export async function POST() {
   let fixed = 0;
   let errors: string[] = [];
 
-  // Get all specs that might be stale - not deployed and not closed
+  // Get all specs that might be stale - not deployed, not rolled back, and not closed
   const { data: specs, error: specsError } = await db
     .from("specs")
     .select("*")
     .eq("user_id", user.id)
     .not("release_status", "eq", "deployed")
+    .not("release_status", "eq", "rolled_back")
     .not("status", "eq", "closed")
     .order("updated_at", { ascending: false })
     .limit(50);
@@ -192,7 +193,9 @@ export async function POST() {
 
         if (existingSpec) {
           // Spec exists - ensure it has correct status
-          if (existingSpec.release_status !== "deployed" && existingSpec.release_status !== "pending_deploy") {
+          if (existingSpec.release_status !== "deployed" && 
+              existingSpec.release_status !== "pending_deploy" && 
+              existingSpec.release_status !== "rolled_back") {
             await db.from("specs").update({
               release_status: "pending_deploy",
               release_pr_status: "merged",

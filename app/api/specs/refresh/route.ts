@@ -213,7 +213,7 @@ export async function POST(request: Request) {
     // Check production deployment workflow status
     // Check anytime there's a release_tag or release_sha, regardless of current status
     const shouldCheckProductionDeploy = spec.release_tag || spec.release_sha;
-    const isNotFinalState = spec.release_status !== "deployed";
+    const isNotFinalState = spec.release_status !== "deployed" && spec.release_status !== "rolled_back";
 
     if (shouldCheckProductionDeploy && isNotFinalState) {
       // Try multiple workflow names for backwards compatibility
