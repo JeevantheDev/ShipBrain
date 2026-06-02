@@ -368,24 +368,52 @@ export async function POST(request: Request) {
             updated_at: new Date().toISOString()
           }).eq("full_name", repoFullName).eq("setup_pr_number", pullRequest.number);
 
-          // Trigger initial deployments asynchronously
-          const origin = new URL(request.url).origin;
-          fetch(`${origin}/api/deployments/initial`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              repoFullName,
-              userId: repoForSetup.user_id,
-              setupPrNumber: pullRequest.number
-            })
-          }).catch(err => console.error("Failed to trigger initial deployments:", err));
+          // Trigger initial deployments - await to ensure it completes
+          try {
+            const origin = new URL(request.url).origin;
+            console.log(`[Initial Deploy] Triggering for ${repoFullName} at ${origin}/api/deployments/initial`);
+
+            const initialDeployResponse = await fetch(`${origin}/api/deployments/initial`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                repoFullName,
+                userId: repoForSetup.user_id,
+                setupPrNumber: pullRequest.number
+              })
+            });
+
+            const initialDeployResult = await initialDeployResponse.json();
+            console.log(`[Initial Deploy] Result:`, initialDeployResult);
+
+            if (!initialDeployResponse.ok) {
+              console.error(`[Initial Deploy] Failed:`, initialDeployResult);
+            }
+
+            return NextResponse.json({
+              type: "setup_pr_merged",
+              number: pullRequest.number,
+              repo: repoFullName,
+              message: "Setup PR merged. Initial deployments triggered.",
+              initialDeployment: initialDeployResult
+            });
+          } catch (err) {
+            console.error("[Initial Deploy] Error triggering initial deployments:", err);
+            return NextResponse.json({
+              type: "setup_pr_merged",
+              number: pullRequest.number,
+              repo: repoFullName,
+              message: "Setup PR merged. Initial deployments failed to trigger.",
+              error: err instanceof Error ? err.message : "Unknown error"
+            });
+          }
         }
 
         return NextResponse.json({
           type: "setup_pr_merged",
           number: pullRequest.number,
           repo: repoFullName,
-          message: "Setup PR merged. Initial deployments triggered."
+          message: "Setup PR merged but no repo found for initial deployments."
         });
       }
 
