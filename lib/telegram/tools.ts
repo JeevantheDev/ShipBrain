@@ -18,6 +18,16 @@ import { createOrUpdateTrace, updateTraceByIncident, updateTraceBySpec, initiate
 import { phaseForStatus } from "@/lib/orchestrator/state-machine";
 import { resolvePagerDutyIncident } from "@/lib/pagerduty/incidents";
 import { escapeTelegram } from "@/lib/telegram/formatter";
+import {
+  deployPreview,
+  deployProduction,
+  rollback as rollbackAction,
+  createReleasePR as createReleasePRAction,
+  approveHotfix as approveHotfixAction,
+  resolveIncident as resolveIncidentAction,
+  createHotfix as createHotfixAction,
+  analyzeIncident as analyzeIncidentAction
+} from "@/lib/actions";
 
 type TelegramUser = {
   user_id: string;
@@ -62,6 +72,34 @@ function slugify(value: string) {
 function hotfixReleaseTag(incidentId: string) {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
   return `hotfix-v${date}-${incidentId.slice(0, 8)}`;
+}
+
+/**
+ * Build an action context for Telegram commands
+ */
+async function buildTelegramActionContext(userId: string, repoFullName: string) {
+  const db = getSupabaseAdminClient();
+
+  // Get user's GitHub token
+  const { data: profile } = await db
+    .from("profiles")
+    .select("github_access_token, email")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (!profile?.github_access_token) {
+    return null;
+  }
+
+  // Return context with source set to "telegram"
+  return {
+    db,
+    userId,
+    githubToken: profile.github_access_token,
+    source: "telegram" as const,
+    actor: "Telegram Bot",
+    repoFullName
+  };
 }
 
 export async function runTelegramCommand(user: TelegramUser, text: string) {
@@ -640,32 +678,33 @@ async function incidentReleaseContext(user: TelegramUser, incident: any) {
 }
 
 export async function analyzeTelegramIncident(user: TelegramUser, token?: string) {
-  const db = getSupabaseAdminClient();
   const incident = await findIncident(user, token);
+
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, incident.repo_full_name || "");
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
+  }
+
+  // Use unified analyzeIncident action
   const releaseContext = await incidentReleaseContext(user, incident);
-  const analysis = await analyzeIncident({
-    source: incident.alert_source ?? "manual",
-    title: incident.title ?? "Incident",
-    logs: incident.raw_logs ?? "",
-    repo: incident.repo_full_name ?? "unknown",
-    releaseVersion: incident.release_version ?? "unknown",
+  const result = await analyzeIncidentAction(ctx, {
+    incidentId: incident.id,
     releaseContext
   });
 
-  await db.from("incidents").update({
-    status: incident.status === "open" ? "investigating" : incident.status,
-    root_cause: analysis.rootCause,
-    ai_fix_proposal: analysis.fixProposal,
-    ai_analysis: { ...analysis, releaseContext },
-    updated_at: new Date().toISOString()
-  }).eq("id", incident.id);
+  if (!result.ok) {
+    return `❌ *Analysis failed:* ${escapeTelegram(result.error || result.message)}`;
+  }
+
+  const analysis = result.data;
 
   return [
     "🧠 *Incident analyzed*",
     `Incident: \`${shortId(incident.id)}\` · ${escapeTelegram(incident.title ?? "Incident")}`,
-    `Confidence: ${Math.round((analysis.confidence ?? 0) * 100)}%`,
-    `Root cause: ${escapeTelegram(analysis.rootCause).slice(0, 700)}`,
-    `Fix: ${escapeTelegram(analysis.fixProposal).slice(0, 700)}`,
+    `Confidence: ${Math.round((analysis?.confidence ?? 0) * 100)}%`,
+    `Root cause: ${escapeTelegram(analysis?.rootCause ?? "Unknown").slice(0, 700)}`,
+    `Fix: ${escapeTelegram(analysis?.fixProposal ?? "Pending").slice(0, 700)}`,
     "",
     `Next: /create_hotfix ${shortId(incident.id)} develop`
   ].join("\n");
@@ -707,7 +746,6 @@ function renderTelegramHotfixHandoff(input: { incident: any; analysis: any; rele
 }
 
 export async function createTelegramHotfixPr(user: TelegramUser, token?: string, baseBranch?: string) {
-  const db = getSupabaseAdminClient();
   const incident = await findIncident(user, token);
   if (!incident.repo_full_name?.includes("/")) return "Incident is not linked to a connected GitHub repository.";
   if (incident.hotfix_pr_number) {
@@ -727,89 +765,43 @@ export async function createTelegramHotfixPr(user: TelegramUser, token?: string,
     ].join("\n");
   }
 
-  const base = baseBranch;
-  const { owner, repo } = splitRepo(incident.repo_full_name);
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, incident.repo_full_name);
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
+  }
+
+  // Get analysis context for the hotfix
   const analysis = incident.ai_analysis ?? {
     rootCause: incident.root_cause ?? "Pending analysis.",
-    fixProposal: incident.ai_fix_proposal ?? "Pending developer implementation."
+    fixProposal: incident.ai_fix_proposal ?? "Pending developer implementation.",
+    changeSummary: undefined,
+    releaseContext: await incidentReleaseContext(user, incident)
   };
-  const releaseContext = analysis.releaseContext ?? await incidentReleaseContext(user, incident);
-  const branch = `hotfix/incident-${incident.id.slice(0, 8)}-${slugify(incident.title ?? "fix") || "fix"}`;
-  const handoff = renderTelegramHotfixHandoff({ incident, analysis, releaseContext });
-  const pr = await createDraftPR({
-    owner,
-    repo,
-    base,
-    branch,
-    title: `hotfix: ${incident.title ?? "incident fix"}`,
-    body: [
-      "## ShipBrain incident hotfix",
-      "",
-      `Incident: \`${incident.id}\``,
-      `Release: \`${incident.release_version ?? releaseContext?.release?.tag ?? "not captured"}\``,
-      "",
-      "### AI root cause",
-      analysis.rootCause ?? "Pending analysis.",
-      "",
-      "### Fix direction",
-      analysis.fixProposal ?? "Pending developer implementation."
-    ].join("\n"),
-    files: { "SHIPBRAIN_INCIDENT_HOTFIX.md": handoff }
-  });
-  const commits = await listPullRequestCommits({ owner, repo, pullNumber: pr.number }).catch(() => []);
 
-  const { data: spec } = await db.from("specs").insert({
-    user_id: user.user_id,
-    raw_spec: handoff,
-    repo_full_name: incident.repo_full_name,
-    branch_name: branch,
-    base_branch: base,
-    pr_number: pr.number,
-    pr_url: pr.html_url,
-    status: "draft_created",
-    incident_id: incident.id,
-    updated_at: new Date().toISOString()
-  }).select("id").single();
-
-  const { error } = await db.from("incidents").update({
-    status: "investigating",
-    root_cause: analysis.rootCause ?? incident.root_cause,
-    ai_fix_proposal: analysis.fixProposal ?? incident.ai_fix_proposal,
-    ai_analysis: analysis,
-    hotfix_branch: branch,
-    hotfix_base_branch: base,
-    hotfix_pr_number: pr.number,
-    hotfix_pr_url: pr.html_url,
-    hotfix_pr_status: "draft_created",
-    hotfix_commits: commits,
-    updated_at: new Date().toISOString()
-  }).eq("id", incident.id);
-  if (error) throw new Error(error.message);
-
-  await createOrUpdateTrace({
-    userId: user.user_id,
-    repoFullName: incident.repo_full_name,
-    type: "hotfix",
-    title: `Hotfix: ${incident.title ?? "incident fix"}`,
-    description: incident.raw_logs,
-    status: "draft",
-    sourceBranch: branch,
-    targetBranch: base,
-    draftPrNumber: pr.number,
-    draftPrUrl: pr.html_url,
-    specId: spec?.id ?? null,
+  // Use unified createHotfix action
+  const result = await createHotfixAction(ctx, {
     incidentId: incident.id,
-    source: "telegram",
-    actor: "telegram",
-    eventType: "hotfix_created",
-    details: { command: "/create_hotfix", pr, base }
+    baseBranch,
+    analysis: {
+      rootCause: analysis.rootCause,
+      fixProposal: analysis.fixProposal,
+      changeSummary: analysis.changeSummary,
+      releaseContext: analysis.releaseContext
+    }
   });
+
+  if (!result.ok) {
+    return `❌ *Failed to create hotfix:* ${escapeTelegram(result.error || result.message)}`;
+  }
+
+  const data = result.data;
 
   return [
     "🛠️ *Hotfix Draft PR created*",
-    `Incident: \`${shortId(incident.id)}\` · Spec: \`${shortId(spec?.id ?? incident.id)}\``,
-    `PR #${pr.number}: ${pr.html_url}`,
-    `Branch: \`${branch}\` -> \`${base}\``,
+    `Incident: \`${shortId(incident.id)}\` · Spec: \`${shortId(data?.specId ?? incident.id)}\``,
+    `PR #${data?.prNumber}: ${data?.prUrl}`,
+    `Branch: \`${data?.branch}\` -> \`${data?.baseBranch}\``,
     "",
     `After developer commits: /sync_hotfix ${shortId(incident.id)}`,
     `Manager approval: /approve_fix ${shortId(incident.id)}`
@@ -1218,14 +1210,14 @@ async function defaultBranchForRepo(repoFullName: string) {
 }
 
 export async function startPreviewDeployment(user: TelegramUser, token?: string, options: { redeploy?: boolean } = {}) {
-  const db = getSupabaseAdminClient();
   const spec = await findSpecForAction(user, token);
 
+  // Preliminary validations for better Telegram UX
   if (spec.status !== "merged" || spec.base_branch !== "develop") {
     return `Preview deployment is only available after a feature PR is merged into develop. Current state: ${spec.status} -> ${spec.base_branch ?? "n/a"}.`;
   }
 
-  if (spec.preview_status === "deploying") {
+  if (spec.preview_status === "deploying" && !options.redeploy) {
     return "Preview deployment is already in progress. Check /ci or /deployments shortly.";
   }
 
@@ -1233,55 +1225,27 @@ export async function startPreviewDeployment(user: TelegramUser, token?: string,
     return `Preview is already ready: ${spec.preview_url}\nUse /redeploy_dev ${shortId(spec.id)} if you want to run it again.`;
   }
 
-  const { owner, repo } = splitRepo(spec.repo_full_name);
-  // Use the spec's base_branch to ensure we deploy from the correct branch
-  const targetBranch = spec.base_branch || "develop";
-  const deployment = await dispatchDevelopPreviewDeploy({
-    owner,
-    repo,
-    ref: targetBranch,
-    defaultBranch: await defaultBranchForRepo(spec.repo_full_name),
-    sourcePrNumber: spec.pr_number,
-    noFallback: true // Prevent falling back to main for preview deployments
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, spec.repo_full_name);
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
+  }
+
+  // Use unified deployPreview action
+  const result = await deployPreview(ctx, {
+    specId: spec.id,
+    forceRedeploy: options.redeploy
   });
 
-  await db.from("specs").update({
-    deployment_status: "develop_validated",
-    preview_status: "deploying",
-    preview_url: options.redeploy ? null : spec.preview_url,
-    updated_at: new Date().toISOString()
-  }).eq("id", spec.id);
-
-  await updateTraceBySpec(spec.id, {
-    status: "merged_develop",
-    preview_deployment: { status: "deploying", url: deployment.workflowUrl, timestamp: new Date().toISOString() }
-  }, {
-    eventType: options.redeploy ? "manual_action" : "deployment_started",
-    source: "telegram",
-    actor: "telegram",
-    actorType: "bot",
-    details: { command: options.redeploy ? "/redeploy_dev" : "/deploy_dev", deployment }
-  });
-
-  await db.from("approval_events").insert({
-    entity_type: "spec",
-    entity_id: spec.id,
-    action: options.redeploy ? "telegram_redeploy_preview" : "telegram_deploy_preview",
-    actor_id: user.user_id,
-    note: options.redeploy ? "Telegram requested develop preview redeploy" : "Telegram requested develop preview deploy",
-    metadata: {
-      specId: spec.id,
-      repo: spec.repo_full_name,
-      workflowUrl: deployment.workflowUrl,
-      command: options.redeploy ? "redeploy_dev" : "deploy_dev"
-    }
-  });
+  if (!result.ok) {
+    return `❌ Preview deployment failed: ${result.error || result.message}`;
+  }
 
   return [
     options.redeploy ? "🔁 Preview redeploy started." : "🚀 Preview deployment started.",
     `Repo: \`${spec.repo_full_name}\``,
     `Spec: \`${shortId(spec.id)}\` · PR #${spec.pr_number ?? "n/a"}`,
-    `Workflow: ${deployment.workflowUrl}`
+    `Workflow: ${result.data?.workflowUrl ?? "n/a"}`
   ].join("\n");
 }
 
@@ -1306,7 +1270,6 @@ export async function syncTelegramHotfix(user: TelegramUser, token?: string) {
 }
 
 export async function approveTelegramIncidentFix(user: TelegramUser, token?: string, options: { releaseTag?: string } = {}) {
-  const db = getSupabaseAdminClient();
   const incident = await findIncident(user, token);
   if (!incident.hotfix_pr_number) return "Create the incident hotfix Draft PR before approving the fix.";
   if (!incident.repo_full_name?.includes("/")) return "Incident is not linked to a connected GitHub repository.";
@@ -1339,167 +1302,36 @@ export async function approveTelegramIncidentFix(user: TelegramUser, token?: str
     ].join("\n");
   }
 
-  const commits = await listPullRequestCommits({ owner, repo, pullNumber: incident.hotfix_pr_number });
-  const merge = await mergePullRequest({
-    owner,
-    repo,
-    pullNumber: incident.hotfix_pr_number,
-    commitTitle: `hotfix: resolve ${incident.title ?? incident.id}`
-  });
-  const isProdDeploy = merge.baseBranch === "main";
-  // Use provided release tag or generate default
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, incident.repo_full_name);
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
+  }
+
+  // Use unified approveHotfix action
   const releaseTag = options.releaseTag || hotfixReleaseTag(incident.id);
-  let deployment: any = null;
-  let deploymentError: string | null = null;
-
-  try {
-    if (isProdDeploy) {
-      const release = await tagCommitForRelease({ owner, repo, sha: merge.sha, releaseTag });
-      deployment = await dispatchCloudflareProductionDeploy({
-        owner,
-        repo,
-        releaseTag: release.releaseTag,
-        releaseSha: release.sha,
-        isHotfix: true,
-        reverseSync: true
-      });
-    } else {
-      deployment = await dispatchDevelopPreviewDeploy({
-        owner,
-        repo,
-        ref: merge.baseBranch,
-        defaultBranch: await defaultBranchForRepo(incident.repo_full_name),
-        sourcePrNumber: incident.hotfix_pr_number
-      });
-    }
-  } catch (error) {
-    deploymentError = error instanceof Error ? error.message : "Hotfix deployment dispatch failed.";
-  }
-
-  let pagerDutySyncStatus = incident.pagerduty_sync_status ?? null;
-  let pagerDutySyncError = incident.pagerduty_sync_error ?? null;
-  if (incident.alert_source === "pagerduty" && incident.external_id) {
-    const pagerDutyResult = await resolvePagerDutyIncident({
-      incidentId: incident.external_id,
-      fromEmail: process.env.PAGERDUTY_FROM_EMAIL,
-      note: [
-        "ShipBrain approved and merged the incident hotfix from Telegram.",
-        `Hotfix PR: ${incident.hotfix_pr_url}`,
-        `Merge SHA: ${merge.sha}`,
-        incident.root_cause ? `Root cause: ${incident.root_cause}` : "",
-        incident.ai_fix_proposal ? `Fix proposal: ${incident.ai_fix_proposal}` : ""
-      ].filter(Boolean).join("\n\n")
-    });
-    pagerDutySyncStatus = pagerDutyResult.ok ? (pagerDutyResult.skipped ? "skipped" : "resolved") : "action_required";
-    pagerDutySyncError = pagerDutyResult.ok ? pagerDutyResult.detail ?? null : pagerDutyResult.detail ?? "Alert provider sync failed.";
-  }
-
-  let reverseSyncPr: Awaited<ReturnType<typeof createReverseSyncPR>> | null = null;
-  let reverseSyncError: string | null = null;
-  if (merge.baseBranch === "main") {
-    try {
-      reverseSyncPr = await createReverseSyncPR({
-        owner,
-        repo,
-        sourceBranch: "main",
-        targetBranch: "develop",
-        incidentId: incident.id,
-        incidentTitle: incident.title ?? "Incident fix",
-        hotfixPrNumber: incident.hotfix_pr_number,
-        releaseTag
-      });
-    } catch (error) {
-      reverseSyncError = error instanceof Error ? error.message : "Failed to create reverse sync PR";
-    }
-  }
-
-  await db.from("approval_events").insert({
-    entity_type: "incident",
-    entity_id: incident.id,
-    action: "telegram_fix_approved",
-    actor_id: user.user_id,
-    note: "Telegram approved and merged the incident hotfix.",
-    metadata: {
-      hotfixPrNumber: incident.hotfix_pr_number,
-      mergeSha: merge.sha,
-      releaseTag: isProdDeploy ? releaseTag : null,
-      deploymentDispatched: Boolean(deployment),
-      deploymentError,
-      reverseSyncPrNumber: reverseSyncPr?.number ?? null
-    }
+  const result = await approveHotfixAction(ctx, {
+    incidentId: incident.id,
+    releaseTag,
+    note: "Approved via Telegram"
   });
 
-  await db.from("incidents").update({
-    status: "investigating",
-    hotfix_pr_status: "merged",
-    hotfix_branch: merge.headBranch,
-    hotfix_base_branch: merge.baseBranch,
-    hotfix_merge_sha: merge.sha,
-    hotfix_commits: commits,
-    release_version: isProdDeploy ? releaseTag : incident.release_version,
-    fix_approved_at: new Date().toISOString(),
-    pagerduty_sync_status: pagerDutySyncStatus,
-    pagerduty_sync_error: pagerDutySyncError,
-    reverse_sync_pr_number: reverseSyncPr?.number ?? null,
-    reverse_sync_pr_url: reverseSyncPr?.html_url ?? null,
-    reverse_sync_pr_status: reverseSyncPr ? "open" : null,
-    reverse_sync_branch: reverseSyncPr ? "develop" : null,
-    reverse_sync_created_at: reverseSyncPr ? new Date().toISOString() : null,
-    reverse_sync_error: reverseSyncError,
-    updated_at: new Date().toISOString()
-  }).eq("id", incident.id);
-
-  const specUpdate: Record<string, any> = {
-    status: "merged",
-    branch_name: merge.headBranch,
-    base_branch: merge.baseBranch,
-    merge_sha: merge.sha,
-    feature_head_sha: merge.destinationSha,
-    deployment_url: deployment?.workflowUrl ?? null,
-    error_message: deploymentError,
-    merged_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
-  if (isProdDeploy) {
-    specUpdate.deployment_status = deployment ? "approved" : "not_requested";
-    specUpdate.release_tag = releaseTag;
-    specUpdate.release_sha = deployment ? merge.sha : null;
-    specUpdate.release_status = deployment ? "deploying" : "failed";
-  } else {
-    specUpdate.deployment_status = deployment ? "develop_validated" : "not_requested";
-    specUpdate.preview_status = deployment ? "deploying" : "failed";
+  if (!result.ok) {
+    return `❌ *Hotfix approval failed:* ${escapeTelegram(result.error || result.message)}`;
   }
-  await db.from("specs").update(specUpdate).eq("incident_id", incident.id);
 
-  const tracePatch: Record<string, any> = {
-    status: isProdDeploy ? (deployment ? "merged_main" : "failed") : (deployment ? "merged_develop" : "failed"),
-    reverse_sync_pr_number: reverseSyncPr?.number ?? null,
-    reverse_sync_pr_url: reverseSyncPr?.html_url ?? null,
-    reverse_sync_status: reverseSyncPr ? "pending" : null
-  };
-  if (isProdDeploy) {
-    tracePatch.merged_to_main = { sha: merge.sha, timestamp: new Date().toISOString(), actor: "telegram" };
-    tracePatch.production_deployment = { status: deployment ? "deploying" : "failed", url: deployment?.workflowUrl ?? null, timestamp: new Date().toISOString() };
-  } else {
-    tracePatch.merged_to_develop = { sha: merge.sha, timestamp: new Date().toISOString(), actor: "telegram" };
-    tracePatch.preview_deployment = { status: deployment ? "deploying" : "failed", url: deployment?.workflowUrl ?? null, timestamp: new Date().toISOString() };
-  }
-  await updateTraceByIncident(incident.id, tracePatch, {
-    eventType: "pr_merged",
-    source: "telegram",
-    actor: "telegram",
-    actorType: "bot",
-    details: { command: "/approve_fix", merge, deployment, deploymentError, reverseSyncPr, reverseSyncError }
-  });
+  const isProdDeploy = result.data?.isProdDeploy ?? false;
+  const reverseSyncPr = result.data?.reverseSync;
+  const workflowUrl = result.data?.workflowUrl;
+  const mergeSha = result.data?.mergeSha;
 
   return [
     "✅ *Incident fix approved*",
     `Incident: \`${shortId(incident.id)}\` · PR #${incident.hotfix_pr_number}`,
-    `Merged into: \`${merge.baseBranch}\` · SHA \`${merge.sha.slice(0, 12)}\``,
-    isProdDeploy ? `Release: \`${releaseTag}\`` : "Preview deployment dispatched",
-    deployment ? `Workflow: ${deployment.workflowUrl}` : `Deployment needs attention: ${deploymentError}`,
-    reverseSyncPr ? `Reverse sync PR: #${reverseSyncPr.number} ${reverseSyncPr.html_url}` : "",
-    pagerDutySyncError ? `Alert sync: ${pagerDutySyncError}` : ""
+    `Merged: SHA \`${mergeSha?.slice(0, 12) ?? "n/a"}\``,
+    isProdDeploy ? `Release: \`${result.data?.releaseTag ?? releaseTag}\`` : "Preview deployment dispatched",
+    workflowUrl ? `Workflow: ${workflowUrl}` : "",
+    reverseSyncPr ? `Reverse sync PR: #${reverseSyncPr.prNumber} ${reverseSyncPr.prUrl}` : ""
   ].filter(Boolean).join("\n");
 }
 
@@ -1542,98 +1374,30 @@ export async function generateTelegramPostmortem(user: TelegramUser, token?: str
 }
 
 async function createReleasePrFromSpec(user: TelegramUser, spec: any) {
-  const { owner, repo } = splitRepo(spec.repo_full_name);
-  const db = getSupabaseAdminClient();
-  const releaseTag = await getNextSemverReleaseTag(db, spec.repo_full_name);
   const title = (spec.decomposed_tasks as { prTitle?: string } | null)?.prTitle ?? spec.raw_spec ?? `PR #${spec.pr_number}`;
 
-  const pr = await createReleasePullRequest({
-    owner,
-    repo,
-    head: "develop",
-    base: "main",
-    releaseTag,
-    body: [
-      "## ShipBrain production release",
-      "",
-      `Feature: ${title}`,
-      `Spec: ${spec.id}`,
-      `Feature PR: #${spec.pr_number ?? "n/a"}`,
-      "",
-      "Created from Telegram. Production deploy still requires the release gate."
-    ].join("\n")
-  });
-
-  await db.from("specs").update({
-    release_tag: releaseTag,
-    release_status: "ready_for_prod",
-    release_pr_number: pr.number,
-    release_pr_url: pr.html_url,
-    release_pr_status: pr.state,
-    updated_at: new Date().toISOString()
-  }).eq("id", spec.id);
-
-  // Find and update associated trace if exists
-  // First try by spec_id, then by repo + source_branch if not found
-  let { data: trace } = await db
-    .from("release_traces")
-    .select("id")
-    .eq("user_id", user.user_id)
-    .eq("spec_id", spec.id)
-    .maybeSingle();
-
-  // If not found by spec_id, try by repo and branch
-  if (!trace) {
-    const { data: traceByBranch } = await db
-      .from("release_traces")
-      .select("id")
-      .eq("user_id", user.user_id)
-      .eq("repo_full_name", spec.repo_full_name)
-      .eq("source_branch", spec.branch_name)
-      .eq("target_branch", "develop")
-      .in("status", ["merged_develop", "preview_live"])
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    trace = traceByBranch;
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, spec.repo_full_name);
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
   }
 
-  if (trace) {
-    await db.from("release_traces").update({
-      status: "release_pending",
-      current_phase: "production",
-      release_pr_number: pr.number,
-      release_pr_url: pr.html_url,
-      target_branch: "main",  // Update target to main since we're now promoting to production
-      updated_at: new Date().toISOString()
-    }).eq("id", trace.id);
-
-    await db.from("trace_events").insert({
-      trace_id: trace.id,
-      event_type: "release_pr_created",
-      actor: "telegram",
-      actor_type: "bot",
-      source: "telegram",
-      details: { command: "/deploy", releaseTag, pr }
-    });
-  }
-
-  await db.from("approval_events").insert({
-    entity_type: "spec",
-    entity_id: spec.id,
-    action: "release_pr_created",
-    actor_id: user.user_id,
-    note: `Release PR created from Telegram /deploy command`,
-    metadata: { releaseTag, prNumber: pr.number, prUrl: pr.html_url }
+  // Use unified createReleasePR action
+  const result = await createReleasePRAction(ctx, {
+    repoFullName: spec.repo_full_name
   });
+
+  if (!result.ok) {
+    return `❌ Failed to create Release PR: ${result.error || result.message}`;
+  }
 
   return [
     "🚀 *Release PR created*",
-    `Spec: \`${shortId(spec.id)}\` · PR #${pr.number}`,
-    `Release tag: \`${releaseTag}\``,
+    `Spec: \`${shortId(spec.id)}\` · PR #${result.data?.prNumber}`,
+    `Release tag: \`${result.data?.releaseTag}\``,
     `Feature: ${escapeTelegram(title).slice(0, 60)}`,
     "",
-    pr.html_url,
+    result.data?.prUrl ?? "",
     "",
     `Next step: Merge the PR then run /deploy_prod ${shortId(spec.id)}`
   ].join("\n");
@@ -1680,6 +1444,7 @@ export async function startProductionDeployment(user: TelegramUser, token?: stri
   const db = getSupabaseAdminClient();
   const spec = await findSpecForAction(user, token);
 
+  // Preliminary validations for better Telegram UX
   if (options.redeploy) {
     if (!["deployed", "failed", "pending_deploy"].includes(spec.release_status ?? "")) {
       return `Production redeploy is not available for release status "${spec.release_status ?? "not_started"}".`;
@@ -1737,72 +1502,53 @@ export async function startProductionDeployment(user: TelegramUser, token?: stri
     ].join("\n");
   }
 
-  const { owner, repo } = splitRepo(spec.repo_full_name);
-  const releaseTag = options.releaseTag || defaultTag;
-  let releaseSha = spec.release_sha || spec.merge_sha;
-  if (!releaseSha) return "No release SHA is available yet. Refresh ShipBrain after the release PR merge and try again.";
-  releaseSha = await resolveReleaseSha(owner, repo, releaseSha);
-
-  if (!spec.release_tag) {
-    await createReleaseTag({
-      owner,
-      repo,
-      tag: releaseTag,
-      sha: releaseSha,
-      message: "Production release created by ShipBrain Telegram"
-    });
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, spec.repo_full_name);
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
   }
 
-  const deployment = await dispatchCloudflareProductionDeploy({
-    owner,
-    repo,
+  // Use unified deployProduction action
+  const releaseTag = options.releaseTag || defaultTag;
+  const result = await deployProduction(ctx, {
+    specId: spec.id,
     releaseTag,
-    releaseSha
+    releaseSha: spec.release_sha || spec.merge_sha,
+    forceRedeploy: options.redeploy
   });
 
-  await db.from("specs").update({
-    release_tag: releaseTag,
-    release_sha: releaseSha,
-    release_status: "deploying",
-    deployment_status: "deploying",
-    updated_at: new Date().toISOString()
-  }).eq("id", spec.id);
-
-  await updateTraceBySpec(spec.id, {
-    status: "merged_main",
-    release_pr_number: spec.release_pr_number ?? null,
-    release_pr_url: spec.release_pr_url ?? null,
-    production_deployment: { status: "deploying", url: deployment.workflowUrl, releaseTag, releaseSha, timestamp: new Date().toISOString() }
-  }, {
-    eventType: options.redeploy ? "manual_action" : "deployment_started",
-    source: "telegram",
-    actor: "telegram",
-    actorType: "bot",
-    details: { command: options.redeploy ? "/redeploy_prod" : "/deploy_prod", deployment, releaseTag, releaseSha }
-  });
-
-  await db.from("approval_events").insert({
-    entity_type: "spec",
-    entity_id: spec.id,
-    action: options.redeploy ? "telegram_redeploy_production" : "telegram_deploy_production",
-    actor_id: user.user_id,
-    note: options.redeploy ? "Telegram requested production redeploy" : "Telegram approved production deployment",
-    metadata: {
-      specId: spec.id,
-      repo: spec.repo_full_name,
-      releaseTag,
-      releaseSha,
-      workflowUrl: deployment.workflowUrl,
-      command: options.redeploy ? "redeploy_prod" : "deploy_prod"
+  if (!result.ok) {
+    // Check for specific action hints
+    if (result.error?.includes("No release PR exists")) {
+      return [
+        "⚠️ *No release PR exists yet*",
+        "",
+        "Create a Release PR first:",
+        `• Use /deploy ${shortId(spec.id)} to create one`,
+        "",
+        "Then merge the PR and run /deploy\\_prod again."
+      ].join("\n");
     }
-  });
+
+    if (result.error?.includes("not merged yet")) {
+      return [
+        "⚠️ *Release PR not merged yet*",
+        "",
+        `Please merge the Release PR on GitHub first.`,
+        "",
+        "After merging, run /deploy\\_prod again."
+      ].join("\n");
+    }
+
+    return `❌ Production deployment failed: ${result.error || result.message}`;
+  }
 
   return [
     options.redeploy ? "🔁 Production redeploy started." : "🏷️ Production tag and deploy started.",
     `Repo: \`${spec.repo_full_name}\``,
-    `Release: \`${releaseTag}\``,
-    `SHA: \`${releaseSha.slice(0, 12)}\``,
-    `Workflow: ${deployment.workflowUrl}`
+    `Release: \`${result.data?.releaseTag ?? releaseTag}\``,
+    `SHA: \`${result.data?.releaseSha?.slice(0, 12) ?? "n/a"}\``,
+    `Workflow: ${result.data?.workflowUrl ?? "n/a"}`
   ].join("\n");
 }
 
@@ -1899,10 +1645,10 @@ export async function initiateRollbackFromTelegram(user: TelegramUser, token?: s
 
   const targetTag = token.trim();
 
-  // Find target spec by release tag
+  // Find target spec to get the repo name
   const { data: targetSpec } = await db
     .from("specs")
-    .select("id, repo_full_name, release_tag, release_sha, release_status, decomposed_tasks")
+    .select("id, repo_full_name, release_tag, release_sha, decomposed_tasks")
     .eq("user_id", user.user_id)
     .in("repo_full_name", repos)
     .eq("release_tag", targetTag)
@@ -1914,115 +1660,21 @@ export async function initiateRollbackFromTelegram(user: TelegramUser, token?: s
     return `No deployed release found for tag "${targetTag}". Run /rollback_releases for available tags.`;
   }
 
-  if (!targetSpec.release_sha) {
-    return "Target release does not have a release SHA.";
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, targetSpec.repo_full_name);
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
   }
 
-  // Get current production release tag
-  const { data: currentSpec } = await db
-    .from("specs")
-    .select("id, release_tag, release_sha")
-    .eq("user_id", user.user_id)
-    .eq("repo_full_name", targetSpec.repo_full_name)
-    .eq("release_status", "deployed")
-    .order("deployed_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const sourceReleaseTag = currentSpec?.release_tag ?? "unknown";
-
-  // Check for active rollbacks
-  const { data: activeRollback } = await db
-    .from("rollback_history")
-    .select("id")
-    .eq("repo_full_name", targetSpec.repo_full_name)
-    .in("status", ["pending", "deploying"])
-    .maybeSingle();
-
-  if (activeRollback) {
-    return "A rollback is already in progress for this repository. Run /rollback_status to check.";
-  }
-
-  // Find the most recent production trace for this repo
-  const { data: trace } = await db
-    .from("release_traces")
-    .select("*")
-    .eq("user_id", user.user_id)
-    .eq("repo_full_name", targetSpec.repo_full_name)
-    .eq("type", "release")
-    .in("status", ["production_live", "merged_main", "failed"])
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  // Dispatch the rollback deployment
-  const { owner, repo } = splitRepo(targetSpec.repo_full_name);
-  let deployment;
-  try {
-    deployment = await dispatchCloudflareProductionDeploy({
-      owner,
-      repo,
-      releaseTag: targetTag,
-      releaseSha: targetSpec.release_sha,
-      isHotfix: false,
-      reverseSync: false
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Deployment dispatch failed";
-    return `❌ Rollback failed: ${message}`;
-  }
-
-  // Create rollback history record
-  const { data: rollbackRecord } = await db
-    .from("rollback_history")
-    .insert({
-      user_id: user.user_id,
-      repo_full_name: targetSpec.repo_full_name,
-      trace_id: trace?.id ?? null,
-      spec_id: targetSpec.id,
-      source_release_tag: sourceReleaseTag,
-      target_release_tag: targetTag,
-      target_release_sha: targetSpec.release_sha,
-      status: "deploying",
-      initiated_by: "telegram",
-      workflow_url: deployment.workflowUrl,
-      metadata: {
-        targetSpecId: targetSpec.id,
-        sourceSpecId: currentSpec?.id ?? null,
-        deploymentWorkflowId: deployment.workflowId
-      }
-    })
-    .select("id")
-    .single();
-
-  // Update trace if found
-  if (trace) {
-    await initiateRollback({
-      traceId: trace.id,
-      targetReleaseTag: targetTag,
-      targetReleaseSha: targetSpec.release_sha,
-      sourceReleaseTag,
-      workflowUrl: deployment.workflowUrl,
-      initiatedBy: "telegram",
-      rollbackId: rollbackRecord?.id
-    });
-  }
-
-  // Log approval event
-  await db.from("approval_events").insert({
-    entity_type: "spec",
-    entity_id: targetSpec.id,
-    action: "telegram_rollback_initiated",
-    actor_id: user.user_id,
-    note: `Telegram initiated rollback from ${sourceReleaseTag} to ${targetTag}`,
-    metadata: {
-      sourceReleaseTag,
-      targetReleaseTag: targetTag,
-      targetReleaseSha: targetSpec.release_sha,
-      rollbackId: rollbackRecord?.id,
-      workflowUrl: deployment.workflowUrl
-    }
+  // Use unified rollback action
+  const result = await rollbackAction(ctx, {
+    targetReleaseTag: targetTag,
+    repoFullName: targetSpec.repo_full_name
   });
+
+  if (!result.ok) {
+    return `❌ Rollback failed: ${result.error || result.message}`;
+  }
 
   const tasks = targetSpec.decomposed_tasks as { prTitle?: string } | null;
   const title = tasks?.prTitle ?? "Release";
@@ -2030,26 +1682,34 @@ export async function initiateRollbackFromTelegram(user: TelegramUser, token?: s
   return [
     "🔄 *Rollback initiated*",
     `Repo: \`${targetSpec.repo_full_name}\``,
-    `From: \`${sourceReleaseTag}\``,
+    `From: \`${result.data?.sourceTag ?? "current"}\``,
     `To: \`${targetTag}\``,
     `Title: ${escapeTelegram(title).slice(0, 60)}`,
-    `SHA: \`${targetSpec.release_sha.slice(0, 12)}\``,
-    `Workflow: ${deployment.workflowUrl}`,
+    `SHA: \`${targetSpec.release_sha?.slice(0, 12) ?? "n/a"}\``,
+    `Workflow: ${result.data?.workflowUrl ?? "n/a"}`,
     "",
     "Check progress: /rollback_status"
   ].join("\n");
 }
 
 export async function resolveTelegramIncident(user: TelegramUser, token?: string, note: string = "Resolved via Telegram") {
-  const db = getSupabaseAdminClient();
   const incident = await findIncident(user, token);
-  
-  await db.from("incidents").update({
-    status: "resolved",
-    resolved_at: new Date().toISOString(),
-    resolution_note: note,
-    updated_at: new Date().toISOString()
-  }).eq("id", incident.id);
+
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, incident.repo_full_name || "");
+  if (!ctx) {
+    return "GitHub is not connected. Please link your GitHub account in settings.";
+  }
+
+  // Use unified resolveIncident action
+  const result = await resolveIncidentAction(ctx, {
+    incidentId: incident.id,
+    note
+  });
+
+  if (!result.ok) {
+    return `❌ *Failed to resolve incident:* ${escapeTelegram(result.error || result.message)}`;
+  }
 
   return [
     "✅ *Incident resolved manually*",
@@ -2116,129 +1776,29 @@ export async function prepareTelegramReleaseHandbook(user: TelegramUser) {
 }
 
 export async function createReleasePrFromTelegram(user: TelegramUser, customTag?: string) {
-  const db = getSupabaseAdminClient();
   const repoFullName = await activeRepo(user.user_id);
   if (!repoFullName) return "No active repository selected.";
 
-  const { data: traces } = await db
-    .from("release_traces")
-    .select("*")
-    .eq("user_id", user.user_id)
-    .eq("repo_full_name", repoFullName)
-    .eq("type", "release")
-    .order("updated_at", { ascending: false });
-
-  let trace = traces?.find(t => t.status === "preview_live") || traces?.[0];
-  if (!trace) {
-    return "No active release trace found to promote.";
-  }
-
-  const { data: profile } = await db
-    .from("profiles")
-    .select("github_access_token")
-    .eq("id", user.user_id)
-    .maybeSingle();
-  const userGitHubToken = profile?.github_access_token;
-  if (!userGitHubToken) {
+  // Build action context for Telegram
+  const ctx = await buildTelegramActionContext(user.user_id, repoFullName);
+  if (!ctx) {
     return "GitHub is not connected. Please link your GitHub account in settings.";
   }
 
-  const { data: mergedSpecs } = await db
-    .from("specs")
-    .select("id, title, pr_number, pr_url, branch_name")
-    .eq("repo_full_name", repoFullName)
-    .eq("user_id", user.user_id)
-    .eq("status", "merged")
-    .eq("base_branch", "develop")
-    .is("release_pr_number", null)
-    .order("merged_at", { ascending: false });
+  // Use unified createReleasePR action
+  const result = await createReleasePRAction(ctx, {
+    repoFullName,
+    releaseTag: customTag?.trim() || undefined
+  });
 
-  const featuresSection = mergedSpecs?.length
-    ? [
-        "### Features included in this release",
-        "",
-        ...mergedSpecs.map((s) =>
-          s.pr_number
-            ? `- ${s.title} ([#${s.pr_number}](${s.pr_url}))`
-            : `- ${s.title}`
-        ),
-        ""
-      ]
-    : [];
-
-  const releaseTag = customTag?.trim() || trace.release_tag || `release-v${new Date().toISOString().slice(0, 10).replace(/-/g, ".")}-${Date.now().toString().slice(-6)}`;
-  const [owner, repo] = repoFullName.split("/");
-
-  try {
-    const pr = await createReleasePullRequest({
-      owner,
-      repo,
-      head: "develop",
-      base: "main",
-      releaseTag,
-      body: [
-        "## ShipBrain production release",
-        "",
-        `**Release tag:** \`${releaseTag}\``,
-        "",
-        ...featuresSection,
-        "---",
-        "",
-        `Trace: \`${trace.id}\``,
-        "",
-        "This PR promotes the validated develop branch into main. Production deploy will be triggered after merge."
-      ].join("\n"),
-      token: userGitHubToken
-    });
-
-    if (trace.spec_id) {
-      await db.from("specs").update({
-        release_tag: releaseTag,
-        release_status: "ready_for_prod",
-        release_pr_number: pr.number,
-        release_pr_url: pr.html_url,
-        release_pr_status: pr.state,
-        updated_at: new Date().toISOString()
-      }).eq("id", trace.spec_id);
-    }
-
-    await associateFeaturesWithRelease(
-      repoFullName,
-      pr.number,
-      pr.html_url,
-      pr.state
-    ).catch((err) => console.error("Failed to associate features with release:", err));
-
-    const nextStatus = "release_pending";
-    await db.from("release_traces").update({
-      status: nextStatus,
-      current_phase: phaseForStatus(nextStatus),
-      release_pr_number: pr.number,
-      release_pr_url: pr.html_url,
-      updated_at: new Date().toISOString()
-    }).eq("id", trace.id);
-
-    await addTraceEvent({
-      traceId: trace.id,
-      eventType: "status_changed",
-      actor: user.user_id,
-      actorType: "user",
-      source: "manual",
-      details: {
-        message: `Release PR #${pr.number} created to promote develop to main.`,
-        prNumber: pr.number,
-        prUrl: pr.html_url,
-        releaseTag
-      }
-    });
-
-    return [
-      `✅ *Release Draft PR Created!*`,
-      `Repository: \`${escapeTelegram(repoFullName)}\``,
-      `PR: [#${pr.number}](${pr.html_url})`,
-      `Release Tag: \`${escapeTelegram(releaseTag)}\``
-    ].join("\n");
-  } catch (error: any) {
-    return `❌ *Failed to create Release PR:* ${escapeTelegram(error.message)}`;
+  if (!result.ok) {
+    return `❌ *Failed to create Release PR:* ${escapeTelegram(result.error || result.message)}`;
   }
+
+  return [
+    `✅ *Release Draft PR Created!*`,
+    `Repository: \`${escapeTelegram(repoFullName)}\``,
+    `PR: [#${result.data?.prNumber}](${result.data?.prUrl})`,
+    `Release Tag: \`${escapeTelegram(result.data?.releaseTag ?? "")}\``
+  ].join("\n");
 }

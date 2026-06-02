@@ -14,6 +14,18 @@ import { createReleasePullRequest } from "@/lib/github/pr";
 import { addTraceEvent, associateFeaturesWithRelease, createOrUpdateTrace } from "@/lib/orchestrator";
 import { phaseForStatus } from "@/lib/orchestrator/state-machine";
 import { getNextSemverReleaseTag } from "@/lib/shipbrain/semver";
+import {
+  createReleasePR as createReleasePRAction,
+  deployPreview as deployPreviewAction,
+  deployProduction as deployProductionAction,
+  rollback as rollbackAction,
+  createHotfix as createHotfixAction,
+  approveHotfix as approveHotfixAction,
+  analyzeIncident as analyzeIncidentAction,
+  resolveIncident as resolveIncidentAction,
+  acknowledgeIncident as acknowledgeIncidentAction,
+  ActionContext
+} from "@/lib/actions";
 
 export type ActionType =
   | "spec_to_pr"
@@ -316,6 +328,32 @@ function getInternalApiBaseUrl(): string {
   return "http://localhost:3003";
 }
 
+// Build ActionContext for unified actions
+async function buildChatActionContext(
+  supabase: SupabaseClient,
+  userId: string,
+  repoFullName: string | null
+): Promise<ActionContext | null> {
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("github_access_token, email")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (!profile?.github_access_token) {
+    return null;
+  }
+
+  return {
+    db: supabase,
+    userId,
+    githubToken: profile.github_access_token,
+    source: "chat" as const,
+    actor: profile.email || userId,
+    repoFullName: repoFullName || ""
+  };
+}
+
 // Execute action
 export async function executeAction(
   action: ActionType,
@@ -393,305 +431,114 @@ export async function executeAction(
           throw new Error("No active repository selected.");
         }
 
-        const { data: traces, error: tracesError } = await supabase
-          .from("release_traces")
-          .select("*")
-          .eq("user_id", userId)
-          .eq("repo_full_name", repoFullName)
-          .order("updated_at", { ascending: false });
-
-        if (tracesError) throw new Error(`Failed to query release traces: ${tracesError.message}`);
-
-        let trace = traces?.find(t => t.status === "preview_live" || t.status === "merged_develop") || traces?.[0];
-        
-        if (!trace) {
-          throw new Error("No active release trace found to create a promotion PR for.");
-        }
-
+        // Get user's GitHub token
         const { data: profile } = await supabase
           .from("profiles")
-          .select("github_access_token")
+          .select("github_access_token, email")
           .eq("id", userId)
           .maybeSingle();
-        const userGitHubToken = profile?.github_access_token;
-        if (!userGitHubToken) {
+
+        if (!profile?.github_access_token) {
           throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
 
-        const { data: mergedSpecs } = await supabase
-          .from("specs")
-          .select("id, decomposed_tasks, pr_number, pr_url, branch_name, raw_spec")
-          .eq("repo_full_name", repoFullName)
-          .eq("user_id", userId)
-          .eq("status", "merged")
-          .eq("base_branch", "develop")
-          .is("release_pr_number", null)
-          .order("merged_at", { ascending: false });
-
-        // Extract title from decomposed_tasks.prTitle or use branch name as fallback
-        const getSpecTitle = (spec: any): string => {
-          const tasks = spec.decomposed_tasks as { prTitle?: string } | null;
-          if (tasks?.prTitle) return tasks.prTitle;
-          if (spec.branch_name) return spec.branch_name.replace(/^(feature|fix|hotfix)\//, "").replace(/-/g, " ");
-          return `PR #${spec.pr_number}`;
+        // Build action context for AI Chat
+        const ctx = {
+          db: supabase,
+          userId,
+          githubToken: profile.github_access_token,
+          source: "chat" as const,
+          actor: profile.email || userId,
+          repoFullName
         };
 
-        const featuresSection = mergedSpecs?.length
-          ? [
-              "### Features included in this release",
-              "",
-              ...mergedSpecs.map((s) =>
-                s.pr_number
-                  ? `- ${getSpecTitle(s)} ([#${s.pr_number}](${s.pr_url}))`
-                  : `- ${getSpecTitle(s)}`
-              ),
-              ""
-            ]
-          : [];
-
-        const releaseTag = params.releaseTag || trace.release_tag || await getNextSemverReleaseTag(supabase, repoFullName);
-        
-        const [owner, repo] = repoFullName.split("/");
-        const pr = await createReleasePullRequest({
-          owner,
-          repo,
-          head: "develop",
-          base: "main",
-          releaseTag,
-          body: [
-            "## ShipBrain production release",
-            "",
-            `**Release tag:** \`${releaseTag}\``,
-            "",
-            ...featuresSection,
-            "---",
-            "",
-            `Trace: \`${trace.id}\``,
-            "",
-            "This PR promotes the validated develop branch into main. Production deploy will be triggered after merge."
-          ].join("\n"),
-          token: userGitHubToken
+        // Use unified createReleasePR action
+        const result = await createReleasePRAction(ctx, {
+          repoFullName,
+          releaseTag: params.releaseTag
         });
 
-        if (trace.spec_id) {
-          await supabase.from("specs").update({
-            release_tag: releaseTag,
-            release_status: "ready_for_prod",
-            release_pr_number: pr.number,
-            release_pr_url: pr.html_url,
-            release_pr_status: pr.state,
-            updated_at: new Date().toISOString()
-          }).eq("id", trace.spec_id);
+        if (!result.ok) {
+          throw new Error(result.error || result.message);
         }
-
-        await associateFeaturesWithRelease(
-          repoFullName,
-          pr.number,
-          pr.html_url,
-          pr.state
-        ).catch((err) => console.error("Failed to associate features with release:", err));
-
-        const nextStatus = "release_pending";
-        const newTrace = await createOrUpdateTrace({
-          userId,
-          repoFullName,
-          type: "release",
-          title: `Release: Promote develop to production`,
-          description: `Create a production release PR from develop branch to main.`,
-          status: nextStatus,
-          sourceBranch: "develop",
-          targetBranch: "main",
-          releasePrNumber: pr.number,
-          releasePrUrl: pr.html_url,
-          specId: trace.spec_id,
-          source: "manual",
-          actor: userId,
-          eventType: "pr_opened",
-          details: {
-            message: `Release PR #${pr.number} created to promote develop to main.`,
-            prNumber: pr.number,
-            prUrl: pr.html_url,
-            releaseTag
-          }
-        });
 
         return {
           success: true,
           result: {
-            prNumber: pr.number,
-            prUrl: pr.html_url,
-            releaseTag,
-            traceId: newTrace.id
+            prNumber: result.data?.prNumber,
+            prUrl: result.data?.prUrl,
+            releaseTag: result.data?.releaseTag,
+            specId: result.data?.specId
           }
         };
       }
 
       case "deploy_preview": {
-        // Validate spec exists and belongs to user
-        const { data: spec, error: specError } = await supabase
-          .from("specs")
-          .select("id, status, repo_full_name, branch_name, base_branch, pr_number, merge_sha, preview_status, preview_url, decomposed_tasks")
-          .eq("id", params.specId)
-          .eq("user_id", userId)
-          .single();
-
-        if (specError || !spec) {
-          throw new Error("Spec not found or access denied");
+        // Build unified action context
+        const previewCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!previewCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
 
-        // Check if this is an onboarding spec
-        const isOnboarding = (spec.decomposed_tasks as any)?.type === "onboarding";
-
-        if (spec.status !== "merged") {
-          throw new Error(`Spec must be merged before preview deployment. Current status: ${spec.status}`);
-        }
-
-        // For onboarding specs, skip base_branch check since they deploy from main
-        if (!isOnboarding && spec.base_branch !== "develop") {
-          throw new Error("Preview deployment is only available for PRs merged to develop. This spec was merged to " + spec.base_branch + ". " +
-            (spec.base_branch === "main" ? "Use 'Deploy to Production' instead." : ""));
-        }
-
-        // If already deployed, offer redeploy option
-        if (spec.preview_url && !params.forceRedeploy) {
-          return {
-            success: false,
-            error: `Preview is already deployed at ${spec.preview_url}. To redeploy, say "redeploy preview" or confirm with "yes, redeploy".`
-          };
-        }
-
-        if (spec.preview_status === "deploying" && !params.forceRedeploy) {
-          return {
-            success: false,
-            error: "Preview deployment is already in progress. Wait for it to complete or say 'redeploy preview' to force a new deployment."
-          };
-        }
-
-        // Call the preview deployment API with internal flag
-        const response = await fetch(`${baseUrl}/api/deployments/start-preview`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId // Pass user ID for internal auth
-          },
-          body: JSON.stringify({ specId: params.specId, internalUserId: userId })
+        // Use unified deployPreview action
+        const previewResult = await deployPreviewAction(previewCtx, {
+          specId: params.specId,
+          repoFullName: repoFullName || undefined,
+          forceRedeploy: params.forceRedeploy
         });
-        const data = await response.json();
 
-        if (!response.ok) {
-          throw new Error(data.error || data.detail || "Failed to start preview deployment");
+        if (!previewResult.ok) {
+          throw new Error(previewResult.error || previewResult.message);
         }
 
-        // Create notification
-        const { error: notifError2 } = await supabase
-          .from("notifications")
-          .insert({
-            user_id: userId,
-            type: "preview_deploy_started",
-            title: "Preview Deployment Started",
-            body: `Deploying PR #${spec.pr_number} to preview environment`,
-            href: data.workflowUrl || data.ciRunUrl,
-            severity: "info",
-            repo_full_name: spec.repo_full_name,
-            metadata: { specId: spec.id, prNumber: spec.pr_number }
-          });
-        if (notifError2) console.error("notification creation failed:", notifError2);
-
-        return { success: true, result: data };
+        return {
+          success: true,
+          result: {
+            specId: previewResult.data?.specId,
+            workflowUrl: previewResult.data?.workflowUrl,
+            previewUrl: previewResult.data?.previewUrl,
+            status: previewResult.data?.status
+          }
+        };
       }
 
       case "deploy_production": {
-        // First check if spec exists and its current state
-        const { data: prodSpec, error: prodSpecError } = await supabase
-          .from("specs")
-          .select("id, release_status, release_tag, base_branch, decomposed_tasks")
-          .eq("id", params.specId)
-          .eq("user_id", userId)
-          .single();
-
-        if (prodSpecError || !prodSpec) {
-          throw new Error("Spec not found or access denied");
+        // Build unified action context
+        const prodCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!prodCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
         }
 
-        const isOnboarding = (prodSpec.decomposed_tasks as any)?.type === "onboarding";
-
-        // Check if already deployed and not a force redeploy
-        if (prodSpec.release_status === "deployed" && !params.forceRedeploy) {
-          return {
-            success: false,
-            error: `Production is already deployed with release ${prodSpec.release_tag || "unknown"}. ` +
-              `To redeploy, say "redeploy production" or "yes, redeploy".`
-          };
-        }
-
-        // Check if currently deploying
-        if (prodSpec.release_status === "deploying" && !params.forceRedeploy) {
-          return {
-            success: false,
-            error: `Production deployment is already in progress for ${prodSpec.release_tag || "this release"}. ` +
-              `Wait for it to complete or say "redeploy production" to force a new deployment.`
-          };
-        }
-
-        let releaseTag = params.releaseTag;
-        if (!releaseTag) {
-          // Use semver tag
-          releaseTag = await getNextSemverReleaseTag(supabase, repoFullName || "");
-        }
-        const response = await fetch(`${baseUrl}/api/deployments/start-production`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            specId: params.specId,
-            releaseTag,
-            forceRedeploy: params.forceRedeploy || false,
-            internalUserId: userId
-          })
+        // Use unified deployProduction action
+        const prodResult = await deployProductionAction(prodCtx, {
+          specId: params.specId,
+          releaseTag: params.releaseTag,
+          repoFullName: repoFullName || undefined,
+          forceRedeploy: params.forceRedeploy
         });
-        const data = await response.json();
 
-        // Handle specific error cases with helpful guidance
-        if (!response.ok) {
-          if (data.action === "create_release_pr") {
+        if (!prodResult.ok) {
+          // Provide helpful guidance for common errors
+          if (prodResult.message.includes("Release PR")) {
             return {
               success: false,
-              error: `${data.error} ${data.detail || ""}\n\nWould you like me to create a Release PR? Say "create release PR".`
+              error: `${prodResult.message}\n\nWould you like me to create a Release PR? Say "create release PR".`
             };
           }
-          if (data.action === "merge_release_pr") {
-            return {
-              success: false,
-              error: `${data.error} ${data.detail || ""}\n\nPlease merge the Release PR on GitHub first.`
-            };
-          }
-          if (data.action === "redeploy_production") {
-            return {
-              success: false,
-              error: `${data.error} To redeploy, say "redeploy production" or "yes, redeploy".`
-            };
-          }
-          throw new Error(data.error || data.detail || "Failed to start production deployment");
+          throw new Error(prodResult.error || prodResult.message);
         }
 
-        // Create notification
-        const { error: notifError3 } = await supabase
-          .from("notifications")
-          .insert({
-            user_id: userId,
-            type: "production_deploy_started",
-            title: "Production Deployment Started",
-            body: `Deploying ${data.releaseTag} to production`,
-            href: data.workflowUrl,
-            severity: "warning",
-            repo_full_name: repoFullName,
-            metadata: { specId: params.specId, releaseTag: data.releaseTag }
-          });
-        if (notifError3) console.error("notification creation failed:", notifError3);
-
-        return { success: true, result: data };
+        return {
+          success: true,
+          result: {
+            specId: prodResult.data?.specId,
+            releaseTag: prodResult.data?.releaseTag,
+            releaseSha: prodResult.data?.releaseSha,
+            workflowUrl: prodResult.data?.workflowUrl,
+            productionUrl: prodResult.data?.productionUrl,
+            status: prodResult.data?.status
+          }
+        };
       }
 
       case "approve_release": {
@@ -738,130 +585,185 @@ export async function executeAction(
       }
 
       case "rollback": {
-        const response = await fetch(`${baseUrl}/api/deployments/rollback`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            targetReleaseTag: params.targetReleaseTag,
-            repoFullName,
-            internalUserId: userId
-          })
+        // Build unified action context
+        const rollbackCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!rollbackCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        // Use unified rollback action
+        const rollbackResult = await rollbackAction(rollbackCtx, {
+          repoFullName: repoFullName || "",
+          targetReleaseTag: params.targetReleaseTag
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || data.detail || "Failed to initiate rollback");
 
-        // Create notification
-        const { error: notifError4 } = await supabase
-          .from("notifications")
-          .insert({
-            user_id: userId,
-            type: "rollback_initiated",
-            title: "Rollback Initiated",
-            body: `Rolling back to ${params.targetReleaseTag}`,
-            href: data.workflowUrl,
-            severity: "warning",
-            repo_full_name: repoFullName,
-            metadata: { targetReleaseTag: params.targetReleaseTag, rollbackId: data.rollbackId }
-          });
-        if (notifError4) console.error("notification creation failed:", notifError4);
+        if (!rollbackResult.ok) {
+          throw new Error(rollbackResult.error || rollbackResult.message);
+        }
 
-        return { success: true, result: data };
+        return {
+          success: true,
+          result: {
+            rollbackId: rollbackResult.data?.rollbackId,
+            sourceTag: rollbackResult.data?.sourceTag,
+            targetTag: rollbackResult.data?.targetTag,
+            workflowUrl: rollbackResult.data?.workflowUrl
+          }
+        };
       }
 
       case "create_hotfix": {
-        const response = await fetch(`${baseUrl}/api/incidents/hotfix`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            action: "create",
-            incidentId: params.incidentId,
-            baseBranch: params.baseBranch || "develop",
-            internalUserId: userId
-          })
+        // Build unified action context
+        const hotfixCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!hotfixCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        // Use unified createHotfix action
+        const hotfixResult = await createHotfixAction(hotfixCtx, {
+          incidentId: params.incidentId,
+          baseBranch: params.baseBranch || "develop",
+          analysis: params.analysis
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || data.detail || "Failed to create hotfix");
-        return { success: true, result: data };
+
+        if (!hotfixResult.ok) {
+          throw new Error(hotfixResult.error || hotfixResult.message);
+        }
+
+        return {
+          success: true,
+          result: {
+            incidentId: hotfixResult.data?.incidentId,
+            specId: hotfixResult.data?.specId,
+            pr: {
+              number: hotfixResult.data?.prNumber,
+              html_url: hotfixResult.data?.prUrl,
+              branch: hotfixResult.data?.branch
+            },
+            branch: hotfixResult.data?.branch,
+            baseBranch: hotfixResult.data?.baseBranch
+          }
+        };
       }
 
       case "approve_hotfix": {
-        const response = await fetch(`${baseUrl}/api/incidents/hotfix`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            action: "approve",
-            incidentId: params.incidentId,
-            releaseTag: params.releaseTag, // Pass custom release tag if provided
-            internalUserId: userId
-          })
+        // Build unified action context
+        const approveHotfixCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!approveHotfixCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        // Use unified approveHotfix action
+        const approveResult = await approveHotfixAction(approveHotfixCtx, {
+          incidentId: params.incidentId,
+          releaseTag: params.releaseTag,
+          note: params.note
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || data.detail || "Failed to approve hotfix");
-        return { success: true, result: data };
+
+        if (!approveResult.ok) {
+          throw new Error(approveResult.error || approveResult.message);
+        }
+
+        return {
+          success: true,
+          result: {
+            incidentId: approveResult.data?.incidentId,
+            merged: approveResult.data?.merged,
+            mergeSha: approveResult.data?.mergeSha,
+            releaseTag: approveResult.data?.releaseTag,
+            workflowUrl: approveResult.data?.workflowUrl,
+            reverseSync: approveResult.data?.reverseSync,
+            isProdDeploy: approveResult.data?.isProdDeploy,
+            environment: approveResult.data?.isProdDeploy ? "Production" : "Preview"
+          }
+        };
       }
 
       case "analyze_incident": {
-        const response = await fetch(`${baseUrl}/api/ai/incident`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            action: "analyze",
-            incidentId: params.incidentId,
-            internalUserId: userId
-          })
+        // Build unified action context
+        const analyzeCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!analyzeCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        // Use unified analyzeIncident action
+        const analyzeResult = await analyzeIncidentAction(analyzeCtx, {
+          incidentId: params.incidentId,
+          releaseContext: params.releaseContext
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Failed to analyze incident");
-        return { success: true, result: data };
+
+        if (!analyzeResult.ok) {
+          throw new Error(analyzeResult.error || analyzeResult.message);
+        }
+
+        return {
+          success: true,
+          result: {
+            incidentId: analyzeResult.data?.incidentId,
+            rootCause: analyzeResult.data?.rootCause,
+            fixProposal: analyzeResult.data?.fixProposal,
+            rollbackSteps: analyzeResult.data?.rollbackSteps,
+            changeSummary: analyzeResult.data?.changeSummary,
+            implicatedCommits: analyzeResult.data?.implicatedCommits,
+            confidence: analyzeResult.data?.confidence
+          }
+        };
       }
 
       case "resolve_incident": {
-        const response = await fetch(`${baseUrl}/api/incidents`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            id: params.incidentId,
-            action: "resolve",
-            note: "Resolved via AI Chat",
-            internalUserId: userId
-          })
+        // Build unified action context
+        const resolveCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!resolveCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        // Use unified resolveIncident action
+        const resolveResult = await resolveIncidentAction(resolveCtx, {
+          incidentId: params.incidentId,
+          note: params.note || "Resolved via AI Chat"
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || data.detail || "Failed to resolve incident");
-        return { success: true, result: data };
+
+        if (!resolveResult.ok) {
+          throw new Error(resolveResult.error || resolveResult.message);
+        }
+
+        return {
+          success: true,
+          result: {
+            id: resolveResult.data?.incidentId,
+            previousStatus: resolveResult.data?.previousStatus,
+            resolved: resolveResult.data?.resolved,
+            resolutionNote: params.note || "Resolved via AI Chat"
+          }
+        };
       }
 
       case "acknowledge_incident": {
-        const response = await fetch(`${baseUrl}/api/incidents`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-User-Id": userId
-          },
-          body: JSON.stringify({
-            id: params.incidentId,
-            action: "acknowledge",
-            internalUserId: userId
-          })
+        // Build unified action context
+        const ackCtx = await buildChatActionContext(supabase, userId, repoFullName);
+        if (!ackCtx) {
+          throw new Error("GitHub is not connected. Please connect your GitHub account in Settings.");
+        }
+
+        // Use unified acknowledgeIncident action
+        const ackResult = await acknowledgeIncidentAction(ackCtx, {
+          incidentId: params.incidentId,
+          note: params.note
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || data.detail || "Failed to acknowledge incident");
-        return { success: true, result: data };
+
+        if (!ackResult.ok) {
+          throw new Error(ackResult.error || ackResult.message);
+        }
+
+        return {
+          success: true,
+          result: {
+            id: ackResult.data?.incidentId,
+            title: params.incidentTitle,
+            previousStatus: ackResult.data?.previousStatus,
+            acknowledgedBy: ackResult.data?.acknowledgedBy
+          }
+        };
       }
 
       // View operations - fetch and return data

@@ -3,6 +3,15 @@ import { pendingActionForTrace, phaseForTraceStatus } from "@/lib/orchestrator/s
 import { compareSemver } from "@/lib/shipbrain/semver";
 import type { ReleaseTraceStatus, ReleaseTraceType, TraceEventType, TraceSource } from "@/lib/orchestrator/types";
 
+// Re-export LangChain orchestrator agent
+export {
+  createOrchestratorAgent,
+  executeOrchestratorRequest,
+  executeOrchestratorTool,
+  type OrchestratorContext,
+  type OrchestratorResult
+} from "./langchain-agent";
+
 type TraceInput = {
   userId?: string | null;
   repoFullName: string;

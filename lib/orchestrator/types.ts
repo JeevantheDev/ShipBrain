@@ -56,4 +56,4 @@ export type TraceEventType =
   | "rollback_deployed"
   | "rollback_failed";
 
-export type TraceSource = "github" | "cloudflare" | "manual" | "telegram" | "system";
+export type TraceSource = "github" | "cloudflare" | "manual" | "telegram" | "system" | "ui" | "chat" | "webhook";
