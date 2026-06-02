@@ -30,16 +30,43 @@ export async function POST(request: Request) {
   const db = isInternalCall ? getSupabaseAdminClient() : supabase;
 
   // Build action context
-  const ctx = await buildActionContext({
-    db,
-    userId: user.id,
-    source: isInternalCall ? "system" : "ui",
-    actor: user.email || user.id
-  });
+  let ctx;
+  try {
+    ctx = await buildActionContext({
+      db,
+      userId: user.id,
+      source: isInternalCall ? "system" : "ui",
+      actor: user.email || user.id
+    });
+  } catch (ctxError) {
+    console.error("[start-preview] buildActionContext threw:", ctxError);
+    return NextResponse.json(
+      { error: `Context build failed: ${ctxError instanceof Error ? ctxError.message : "Unknown error"}` },
+      { status: 500 }
+    );
+  }
 
   if (!ctx) {
+    // Try to get more info about why ctx is null
+    const adminDb = getSupabaseAdminClient();
+    const { data: debugProfile, error: debugError } = await adminDb
+      .from("profiles")
+      .select("id, email, github_access_token")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    console.error("[start-preview] ctx is null. userId:", user.id, "debugProfile:", debugProfile ? "found" : "not found", "token:", debugProfile?.github_access_token ? "exists" : "missing", "error:", debugError?.message);
+
     return NextResponse.json(
-      { error: "GitHub is not connected. Please connect your GitHub account in Settings." },
+      {
+        error: "GitHub is not connected. Please connect your GitHub account in Settings.",
+        debug: {
+          userId: user.id,
+          profileFound: !!debugProfile,
+          tokenExists: !!debugProfile?.github_access_token,
+          queryError: debugError?.message
+        }
+      },
       { status: 409 }
     );
   }

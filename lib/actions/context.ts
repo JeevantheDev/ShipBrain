@@ -24,13 +24,19 @@ export async function buildActionContext(params: {
   const adminDb = getSupabaseAdminClient();
 
   // Get user's GitHub token
-  const { data: profile } = await adminDb
+  const { data: profile, error: profileError } = await adminDb
     .from("profiles")
     .select("github_access_token, email")
     .eq("id", userId)
     .maybeSingle();
 
+  if (profileError) {
+    console.error("[buildActionContext] Profile lookup error:", profileError.message);
+    return null;
+  }
+
   if (!profile?.github_access_token) {
+    console.error("[buildActionContext] No GitHub token found for user:", userId, "profile:", profile ? "exists" : "null");
     return null;
   }
 
