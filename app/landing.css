@@ -86,9 +86,13 @@ body.landing-active {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: #161b22;
+  background: transparent;
+  transition: backdrop-filter 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.lp-top--scrolled {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  background: rgba(13, 17, 23, 0.7);
   border-bottom: 1px solid var(--border-muted);
 }
 .lp-top-naked{
@@ -346,23 +350,108 @@ body.landing-active {
 }
 
 /* ============ SECTION 03 — Approval gate states ============ */
-.gate-stack {
+.gate-cycle {
   margin-top: 64px;
   max-width: 560px;
   margin-left: auto;
   margin-right: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
+  padding: 20px;
+  background: #1c2128
 }
-.gate {
+
+/* ----- 3-stage step indicator ----- */
+.gate-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.gate-step {
+  position: relative;
   display: flex;
   align-items: center;
-  background: var(--bg);
-  border-radius: 4px;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  background: var(--surface);
   overflow: hidden;
+  transition: border-color 240ms ease, background 240ms ease, opacity 240ms ease;
+  opacity: 0.5;
 }
-/* state 1 — default */
+.gate-step .track {
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 2px;
+  width: 0%;
+  background: var(--accent);
+}
+.gate-step.active .track {
+  animation: step-fill 4.6s linear forwards;
+}
+.gate-step.done .track {
+  width: 100%;
+  background: var(--success);
+  animation: none;
+}
+@keyframes step-fill {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+.gate-step .num {
+  width: 22px; height: 22px;
+  flex: 0 0 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  display: grid; place-items: center;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  transition: border-color 240ms ease, color 240ms ease, background 240ms ease;
+}
+.gate-step .step-label {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.2;
+}
+.gate-step.active {
+  opacity: 1;
+  border-color: rgba(47, 129, 247, 0.4);
+  background: rgba(47, 129, 247, 0.05);
+}
+.gate-step.active .num {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+.gate-step.done { opacity: 1; }
+.gate-step.done .num {
+  border-color: rgba(63, 185, 80, 0.4);
+  color: var(--success);
+  background: rgba(63, 185, 80, 0.1);
+}
+
+/* ----- single live gate (phases crossfade) ----- */
+.gate-live {
+  position: relative;
+  height: 50px;
+}
+.gate-phase {
+  position: absolute;
+  inset: 0;
+  border-radius: 4px;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 260ms ease, transform 260ms ease;
+  pointer-events: none;
+}
+.gate-phase.show {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* phase: default */
 .gate-default {
   width: 100%;
   height: 48px;
@@ -376,17 +465,43 @@ body.landing-active {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 120ms ease;
+  gap: 8px;
+  overflow: hidden;
 }
-.gate-default:hover { background: var(--accent-hover); }
+.gate-default::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 40%;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.18) 50%,
+    transparent 100%);
+  transform: translateX(-150%) skewX(-18deg);
+  animation: sheen-flow 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes sheen-flow {
+  0%   { transform: translateX(-180%) skewX(-18deg); }
+  55%  { transform: translateX(320%) skewX(-18deg); }
+  100% { transform: translateX(320%) skewX(-18deg); }
+}
+.gate-default.click-pulse { animation: click-pulse 360ms ease; }
+@keyframes click-pulse {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(0.97); background: var(--accent-hover); }
+  100% { transform: scale(1); }
+}
 
-/* state 2 — reviewing */
+/* phase: reviewing */
 .gate-review {
+  display: flex;
   flex-direction: column;
   align-items: stretch;
   width: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
+  overflow: hidden;
 }
 .gate-review-row {
   display: flex;
@@ -434,26 +549,41 @@ body.landing-active {
   color: #fff;
 }
 .gate-btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.gate-btn.primary.flash { animation: confirm-flash 320ms ease; }
+@keyframes confirm-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(47,129,247,0.5); }
+  100% { box-shadow: 0 0 0 8px rgba(47,129,247,0); }
+}
 .gate-progress {
   height: 2px;
   background: var(--surface-2);
   position: relative;
+  overflow: hidden;
 }
-.gate-progress::after {
+.gate-progress .bar {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0%;
+  background: var(--accent);
+  overflow: hidden;
+}
+.gate-progress .bar::after {
   content: "";
   position: absolute;
-  inset: 0 40% 0 0;
-  background: var(--accent);
-  animation: gate-fill 3.5s cubic-bezier(.4,0,.2,1) infinite;
+  inset: 0;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.55) 50%,
+    transparent 100%);
+  transform: translateX(-100%);
+  animation: bar-flow 1.1s linear infinite;
 }
-@keyframes gate-fill {
-  0% { right: 100%; }
-  60% { right: 40%; }
-  80% { right: 40%; }
-  100% { right: 0%; }
+@keyframes bar-flow {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
 }
 
-/* state 3 — done */
+/* phase: done */
 .gate-done {
   width: 100%;
   height: 48px;
@@ -470,9 +600,16 @@ body.landing-active {
   gap: 10px;
   color: var(--text);
   font-size: 14px;
+  overflow: hidden;
+}
+.gate-done-left .done-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gate-check {
   width: 18px; height: 18px;
+  flex: 0 0 18px;
   border-radius: 50%;
   background: rgba(63, 185, 80, 0.12);
   border: 1px solid rgba(63, 185, 80, 0.3);
@@ -480,9 +617,15 @@ body.landing-active {
   display: grid;
   place-items: center;
 }
+.gate-check.pop { animation: check-pop 380ms cubic-bezier(.2,.9,.3,1.4); }
+@keyframes check-pop {
+  0%   { transform: scale(0.4); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
 .gate-done .link {
   color: var(--accent);
   font-size: 14px;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -499,6 +642,7 @@ body.landing-active {
   color: var(--text-muted);
 }
 .gate-caption .sep { color: #444c56; padding: 0 6px; }
+.gate-caption .now { color: var(--accent); }
 
 /* ============ SECTION 04 — Code block ============ */
 .codeblock {
