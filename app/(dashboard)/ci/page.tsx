@@ -127,6 +127,8 @@ export default function CiPage() {
   const [gateOpen, setGateOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryError, setRetryError] = useState("");
   const [deploymentBusy, setDeploymentBusy] = useState(false);
   const [deploymentMessage, setDeploymentMessage] = useState("");
   const [deploymentError, setDeploymentError] = useState("");
@@ -230,6 +232,27 @@ export default function CiPage() {
       }));
     } finally {
       setRefreshing(null);
+    }
+  }
+
+  async function handleRerun(runId: string, repo: string) {
+    setRetryBusy(true);
+    setRetryError("");
+    try {
+      const response = await fetch("/api/ci-runs/rerun", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId, repo })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? data.detail ?? "Failed to rerun workflow run.");
+      }
+      await loadRuns();
+    } catch (err: any) {
+      setRetryError(err.message || "Rerun failed.");
+    } finally {
+      setRetryBusy(false);
     }
   }
 
@@ -927,7 +950,24 @@ export default function CiPage() {
                       Release PR
                     </a>
                   )}
+                  {selected.conclusion && selected.conclusion !== "success" && (
+                    <button
+                      className="btn subtle warning"
+                      disabled={retryBusy}
+                      onClick={() => handleRerun(selected.id, selected.repo ?? "")}
+                      style={{ flex: 1, justifyContent: "center", gap: 6 }}
+                    >
+                      <RefreshCw size={12} className={retryBusy ? "spin" : ""} />
+                      {retryBusy ? "Retrying..." : "Rerun workflow"}
+                    </button>
+                  )}
                 </div>
+
+                {retryError && (
+                  <p className="form-error" style={{ margin: "8px 0 0", color: "var(--red)", fontSize: 12 }}>
+                    {retryError}
+                  </p>
+                )}
 
                 {selected.previewUrl || selected.previewStatus ? (
                   <div className="info-callout" style={{ marginTop: 14 }}>
