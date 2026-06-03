@@ -154,7 +154,17 @@ export function DashboardPrOverview() {
   const pendingPrs = useMemo(() => runs.filter((run) => run.status === "pending_pr").length, [runs]);
   const activeCiRuns = useMemo(() => runs.filter((run) => run.ciStatus && run.ciStatus !== "completed").length, [runs]);
   const conflictedPrs = useMemo(() => runs.filter((run) => run.hasMergeConflicts).length, [runs]);
-  const latestRelease = useMemo(() => runs.find((run) => run.releaseTag && run.releaseStatus !== "rolled_back"), [runs]);
+  // Find the latest deployed release by deployed_at timestamp (not just first in list)
+  const latestRelease = useMemo(() => {
+    const deployedReleases = runs.filter((run) => run.releaseTag && run.releaseStatus === "deployed");
+    if (deployedReleases.length === 0) return undefined;
+    // Sort by deployedAt descending to get the most recently deployed
+    return deployedReleases.sort((a, b) => {
+      const dateA = new Date(a.deployedAt || a.updatedAt || 0).getTime();
+      const dateB = new Date(b.deployedAt || b.updatedAt || 0).getTime();
+      return dateB - dateA;
+    })[0];
+  }, [runs]);
   const hasRollback = useMemo(() => runs.some((run) => run.releaseStatus === "rolled_back"), [runs]);
   const activeRuns = useMemo(() => runs.filter((run) => {
     const activeRelease = run.releaseStatus === "release_pr_open" || run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying";
