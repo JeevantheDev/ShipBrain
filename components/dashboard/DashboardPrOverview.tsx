@@ -31,6 +31,7 @@ type RecentPrRun = {
   mergeableState?: string;
   hasMergeConflicts?: boolean;
   updatedAt: string;
+  deployedAt?: string;
 };
 
 const storageKey = "shipbrain:recent-pr-runs";
