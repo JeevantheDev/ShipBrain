@@ -63,7 +63,8 @@ export async function listChatMessages(input: {
   threadId: string;
   limit?: number;
 }) {
-  const limit = input.limit ?? 20;
+  // Increased from 20 → 40 to support a 20-message history window (40 rows = 20 turns)
+  const limit = input.limit ?? 40;
   const { data, error } = await input.supabase
     .from("chat_messages")
     .select("id, role, content, metadata, created_at")
@@ -185,8 +186,8 @@ export async function saveThreadOnClose(input: {
       .eq("user_id", input.userId);
   }
 
-  // Enforce max 5 threads by deleting oldest ones
-  await enforceMaxThreads({ supabase: input.supabase, userId: input.userId, maxThreads: 5 });
+  // Enforce max 10 threads by deleting oldest ones
+  await enforceMaxThreads({ supabase: input.supabase, userId: input.userId, maxThreads: 10 });
 }
 
 export async function enforceMaxThreads(input: {
@@ -195,7 +196,7 @@ export async function enforceMaxThreads(input: {
   maxThreads?: number;
   channel?: "web" | "telegram";
 }) {
-  const maxThreads = input.maxThreads ?? 5;
+  const maxThreads = input.maxThreads ?? 10;
 
   let query = input.supabase
     .from("chat_threads")

@@ -419,36 +419,44 @@ export async function getRepoDeploymentContext(
 function buildContextSummary(ctx: DeploymentContext): string {
   const parts: string[] = [];
 
-  // Current production
+  // Current production — more descriptive
   if (ctx.currentProduction?.releaseTag) {
-    parts.push(`Current production: ${ctx.currentProduction.releaseTag} (deployed ${formatRelativeTime(ctx.currentProduction.deployedAt)})`);
+    const deployedWhen = formatRelativeTime(ctx.currentProduction.deployedAt);
+    const titleHint = ctx.currentProduction.title ? ` ("${ctx.currentProduction.title.slice(0, 40)}")` : "";
+    parts.push(`Production: ${ctx.currentProduction.releaseTag}${titleHint}, deployed ${deployedWhen}`);
   } else {
     parts.push("No production deployment yet.");
   }
 
-  // Current preview
+  // Current preview — include branch name
   if (ctx.currentPreview?.previewUrl) {
-    parts.push(`Preview: ${ctx.currentPreview.branch || "develop"} branch is live.`);
+    const branch = ctx.currentPreview.branch ?? "develop";
+    parts.push(`Preview: branch \`${branch}\` is live at ${ctx.currentPreview.previewUrl}`);
   }
 
-  // Recent rollbacks
+  // Recent rollbacks — describe source → target clearly
   if (ctx.recentRollbacks.length > 0) {
     const latest = ctx.recentRollbacks[0];
     parts.push(`Last rollback: ${latest.sourceTag} → ${latest.targetTag} (${latest.status}, ${formatRelativeTime(latest.initiatedAt)})`);
   }
 
-  // Branch comparison (develop vs main)
+  // Branch comparison — meaningful message
   if (ctx.branchComparison) {
-    if (ctx.branchComparison.developAhead > 0) {
-      parts.push(`Develop is ${ctx.branchComparison.developAhead} commits ahead of main`);
+    const { developAhead, developBehind } = ctx.branchComparison;
+    if (developAhead > 0 && developBehind > 0) {
+      parts.push(`Develop is ${developAhead} commits ahead and ${developBehind} commits behind main (diverged)`);
+    } else if (developAhead > 0) {
+      parts.push(`Develop is ${developAhead} commit${developAhead > 1 ? "s" : ""} ahead of main — ready for release`);
     } else {
       parts.push("Develop is in sync with main");
     }
   }
 
-  // Pending commits count
+  // Pending commits — list authors for at-a-glance context
   if (ctx.pendingCommits.length > 0) {
-    parts.push(`${ctx.pendingCommits.length} commits pending for release`);
+    const authors = [...new Set(ctx.pendingCommits.map(c => c.author).filter(Boolean))];
+    const authorHint = authors.length ? ` by ${authors.slice(0, 2).join(", ")}${authors.length > 2 ? " and others" : ""}` : "";
+    parts.push(`${ctx.pendingCommits.length} commit${ctx.pendingCommits.length > 1 ? "s" : ""} pending release${authorHint}`);
   }
 
   // Pending releases
@@ -462,25 +470,34 @@ function buildContextSummary(ctx: DeploymentContext): string {
     }
   }
 
-  // Production features count
+  // Production features — list titles not just count
   if (ctx.productionFeatures.length > 0) {
-    parts.push(`Features in production: ${ctx.productionFeatures.length}`);
+    const titles = ctx.productionFeatures
+      .slice(0, 2)
+      .map(f => f.title ? `"${f.title.slice(0, 30)}"` : `PR #${f.prNumber}`)
+      .join(", ");
+    const more = ctx.productionFeatures.length > 2 ? ` +${ctx.productionFeatures.length - 2} more` : "";
+    parts.push(`Features in production: ${titles}${more}`);
   }
 
-  // Recent activity
+  // Latest activity — cleaner event type phrasing
   if (ctx.recentActivity.length > 0) {
     const latestEvent = ctx.recentActivity[0];
-    parts.push(`Latest activity: ${latestEvent.eventType.replace(/_/g, " ")} (${formatRelativeTime(latestEvent.createdAt)})`);
+    const eventLabel = latestEvent.eventType.replace(/_/g, " ");
+    const actor = latestEvent.actor ? ` by ${latestEvent.actor}` : "";
+    parts.push(`Latest activity: ${eventLabel}${actor} (${formatRelativeTime(latestEvent.createdAt)})`);
   }
 
-  // Recent main commits hint
+  // Latest main commit — show short sha + message
   if (ctx.recentMainCommits.length > 0) {
     const latest = ctx.recentMainCommits[0];
-    parts.push(`Latest main commit: "${latest.message.slice(0, 40)}${latest.message.length > 40 ? "..." : ""}" (${formatRelativeTime(latest.date)})`);
+    const msg = latest.message.slice(0, 50) + (latest.message.length > 50 ? "…" : "");
+    parts.push(`Latest main commit: [${latest.shortSha}] "${msg}" (${formatRelativeTime(latest.date)})`);
   }
 
   return parts.join(" | ");
 }
+
 
 /**
  * Format a date as relative time

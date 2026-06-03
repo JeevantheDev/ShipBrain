@@ -84,9 +84,10 @@ The context includes a \`deploymentState\` object with FRESH, real-time data abo
 - \`pendingReleases\`: Releases waiting for deployment
 - \`summary\`: Human-readable summary of current state
 
-### Recent Commits (for incident analysis)
+### Recent Commits (live from GitHub)
 - \`recentMainCommits\`: Last 5 commits on main branch (sha, message, author, date)
 - \`recentDevelopCommits\`: Last 5 commits on develop branch
+- These are fetched live from GitHub API — if empty it means GitHub token was unavailable
 
 ### Branch Comparison (develop vs main)
 - \`branchComparison\`: Shows how far develop is ahead/behind main
@@ -101,15 +102,26 @@ The context includes a \`deploymentState\` object with FRESH, real-time data abo
 - What's pending for release (use pendingCommits and branchComparison)
 - Incident root cause analysis (correlate deployment timing with commits)
 
-This data is fetched fresh on every request and reflects the actual current state.`;
+This data is fetched fresh on every request and reflects the actual current state.
+
+## Persistent Memory
+If a \`memoryNotes\` block is provided in the context, it contains facts saved from past sessions.
+Use them to provide continuity across conversations — e.g. recurring incident patterns, team conventions, or preferences.
+
+## Notifications
+The context includes \`unreadNotificationCount\` and \`unreadNotifications\`.
+- If unreadNotificationCount > 0 and the user hasn't specifically asked about notifications, you may proactively surface the most important one at the end of your response.
+- Examples: "⚡ You have 2 unread deployment alerts — say 'show notifications' to see them."
+- Do NOT mention notifications if count is 0.`;
 
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function historyText(messages: StoredChatMessage[]): string {
   if (!messages.length) return "No previous messages in this thread.";
+  // #3: Raised from 12 → 20 for richer context in longer troubleshooting sessions
   return messages
-    .slice(-12)
+    .slice(-20)
     .map((m) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
     .join("\n\n");
 }
@@ -819,12 +831,20 @@ export async function streamShipBrainQuestion(input: {
   const model = getModel({ temperature: 0.2, streaming: true });
   const modelWithTools = model.bind({ tools: getLangChainToolSpecs() } as any);
 
+  // #8 & #9: Build a richer context preamble with memory notes and notification counts
+  const memoryBlock = context.memoryNotes ? context.memoryNotes.trim() : "";
+  const notifHint = (context.unreadNotificationCount ?? 0) > 0
+    ? `Unread notifications: ${context.unreadNotificationCount} (see unreadNotifications in context for details)`
+    : "";
+
   const messages = [
     new SystemMessage(systemPrompt),
     new HumanMessage(
       [
         `Current user: ${input.userEmail ?? input.userId}`,
         `Active repo: ${context.activeRepo ?? "none selected"}`,
+        ...(notifHint ? [notifHint] : []),
+        ...(memoryBlock ? [memoryBlock] : []),
         "ShipBrain context JSON:",
         JSON.stringify(context, null, 2),
         "",

@@ -118,12 +118,24 @@ Full logs:
 
   const chain = prompt.pipe(getModel({ temperature: 0 })).pipe(parser);
 
-  // Truncate logs if too long (keep first and last parts)
   let truncatedLogs = input.logs;
   if (truncatedLogs.length > 15000) {
-    const first = truncatedLogs.slice(0, 7000);
-    const last = truncatedLogs.slice(-7000);
-    truncatedLogs = first + "\n\n... [logs truncated for analysis] ...\n\n" + last;
+    // #7: Smarter truncation — preserve error-dense middle section instead of blind split
+    // Strategy: keep header (3K) + all error lines (up to 6K) + tail (4K)
+    const header = truncatedLogs.slice(0, 3000);
+    const tail = truncatedLogs.slice(-4000);
+
+    // Extract lines containing error signals from the middle section
+    const ERROR_PATTERN = /error|fail|exception|assert|cannot|undefined|null|stack|warn|fatal|exit/i;
+    const middleLines = truncatedLogs.slice(3000, -4000).split("\n");
+    const errorLines = middleLines.filter((line) => ERROR_PATTERN.test(line));
+    const errorSection = errorLines.join("\n").slice(0, 6000);
+
+    truncatedLogs = [
+      header,
+      errorSection ? `\n... [error-relevant lines extracted from middle] ...\n${errorSection}` : "",
+      `\n... [tail] ...\n${tail}`
+    ].join("\n");
   }
 
   const result = await chain.invoke({

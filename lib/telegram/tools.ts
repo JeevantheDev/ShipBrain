@@ -423,7 +423,27 @@ export async function createAiPlan(user: TelegramUser, rawTicket: string) {
   const repoFullName = await activeRepo(user.user_id);
   if (!repoFullName) return "No active repository found. Connect a repo in ShipBrain first.";
 
-  const plan = await decomposeSpec(rawSpec, repoFullName);
+  // #10: Auto-build history context from the DB so spec-decompose has repo context
+  let createAiPlanHistoryContext;
+  try {
+    const { data: recentSpecs } = await db
+      .from("specs")
+      .select("pr_number, title, branch_name, status, merged_at, release_tag")
+      .eq("repo_full_name", repoFullName)
+      .eq("user_id", user.user_id)
+      .in("status", ["merged", "draft_created", "approved"])
+      .order("updated_at", { ascending: false })
+      .limit(8);
+    if (recentSpecs?.length) {
+      createAiPlanHistoryContext = {
+        recentPrs: recentSpecs
+          .filter((s: any) => s.pr_number)
+          .map((s: any) => ({ number: s.pr_number, title: s.title ?? `PR #${s.pr_number}`, status: s.status, mergedAt: s.merged_at ?? undefined }))
+      };
+    }
+  } catch { /* best-effort */ }
+
+  const plan = await decomposeSpec(rawSpec, repoFullName, createAiPlanHistoryContext);
   const { data, error } = await db
     .from("specs")
     .insert({
@@ -485,7 +505,27 @@ export async function createTelegramDraftPr(user: TelegramUser, inputText: strin
   const repoFullName = spec?.repo_full_name ?? await activeRepo(user.user_id);
   if (!repoFullName) return "No active repository found. Connect a repo in ShipBrain first.";
   const { owner, repo } = splitRepo(repoFullName);
-  const plan = spec?.decomposed_tasks ? specPlanSchema.parse(spec.decomposed_tasks) : await decomposeSpec(rawSpec, repoFullName);
+  // #10: Auto-build history context for spec-decompose
+  let draftPrHistoryContext;
+  try {
+    const { data: histSpecs } = await db
+      .from("specs")
+      .select("pr_number, title, status, merged_at")
+      .eq("repo_full_name", repoFullName)
+      .eq("user_id", user.user_id)
+      .in("status", ["merged", "draft_created", "approved"])
+      .order("updated_at", { ascending: false })
+      .limit(8);
+    if (histSpecs?.length) {
+      draftPrHistoryContext = {
+        recentPrs: histSpecs
+          .filter((s: any) => s.pr_number)
+          .map((s: any) => ({ number: s.pr_number, title: s.title ?? `PR #${s.pr_number}`, status: s.status }))
+      };
+    }
+  } catch { /* best-effort */ }
+
+  const plan = spec?.decomposed_tasks ? specPlanSchema.parse(spec.decomposed_tasks) : await decomposeSpec(rawSpec, repoFullName, draftPrHistoryContext);
   const handoffOnly = /shipbrain-codegen:\s*handoff-only/i.test(rawSpec) || /shipbrain-codegen:\s*handoff-only/i.test(plan.prBody ?? "");
   const scaffold = await generateScaffold(handoffOnly ? { ...plan, prBody: `${plan.prBody}\n\nShipBrain-codegen: handoff-only` } : plan);
   const branch = spec?.branch_name || plan.suggestedBranch;

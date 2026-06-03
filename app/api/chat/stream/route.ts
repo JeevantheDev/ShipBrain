@@ -105,7 +105,7 @@ export async function POST(request: Request) {
           repoFullName: profile?.active_repo_full_name ?? null,
           threadId,
           message,
-          limit: 12,
+          limit: 20, // #3: match the raised history window
           pendingAction
         });
 
@@ -133,7 +133,11 @@ export async function POST(request: Request) {
             activeRepo: answer.context.activeRepo,
             historyCount: answer.history.length,
             streamed: true,
-            action: answer.action ?? null
+            action: answer.action ?? null,
+            // #6: Persist read tool result so follow-up turns can reference it
+            ...(answer.action?.type && answer.action?.result
+              ? { readToolName: answer.action.type, readToolResult: answer.action.result }
+              : {})
           }
         });
 
