@@ -216,20 +216,39 @@ export async function validateActionState(
       }
 
       case "deploy_production": {
-        if (!params.specId) {
-          return { valid: false, message: "No spec specified for production deployment." };
+        const isRedeploy = params.forceRedeploy === true;
+        if (!params.specId && !params.releaseTag) {
+          return {
+            valid: false,
+            message: isRedeploy
+              ? "No current production release tag is available to redeploy."
+              : "No spec or release tag specified for production deployment."
+          };
         }
-        const { data: spec } = await supabase
+        let query = supabase
           .from("specs")
           .select("id, pr_number, status, release_status, release_tag, deployed_at, deployment_url")
-          .eq("id", params.specId)
           .eq("user_id", userId)
-          .single();
+          .order("updated_at", { ascending: false })
+          .limit(1);
+        if (params.repoFullName) {
+          query = query.eq("repo_full_name", params.repoFullName);
+        }
+
+        if (params.specId) {
+          query = query.eq("id", params.specId);
+        } else {
+          query = query.eq("release_tag", params.releaseTag);
+        }
+
+        const { data: spec } = await query.maybeSingle();
 
         if (!spec) {
-          return { valid: false, message: "Spec not found." };
+          return { valid: false, message: params.releaseTag ? `No spec found for release tag \`${params.releaseTag}\`.` : "Spec not found." };
         }
-        if (spec.release_status === "deployed") {
+        params.specId = params.specId ?? spec.id;
+        params.releaseTag = params.releaseTag ?? spec.release_tag;
+        if (spec.release_status === "deployed" && !isRedeploy) {
           const deployedTime = spec.deployed_at
             ? new Date(spec.deployed_at).toLocaleString()
             : "earlier";
@@ -239,14 +258,14 @@ export async function validateActionState(
             currentState: { releaseStatus: spec.release_status, releaseTag: spec.release_tag }
           };
         }
-        if (spec.release_status === "deploying") {
+        if (spec.release_status === "deploying" && !isRedeploy) {
           return {
             valid: false,
             message: `🔄 **Production Deployment In Progress**\n\nPR #${spec.pr_number ?? "?"} is currently being deployed to production. Please wait for completion.`,
             currentState: { releaseStatus: spec.release_status }
           };
         }
-        return { valid: true, currentState: { status: spec.status, releaseStatus: spec.release_status } };
+        return { valid: true, currentState: { status: spec.status, releaseStatus: spec.release_status, isRedeploy } };
       }
 
       case "approve_hotfix": {
@@ -379,7 +398,7 @@ const ACTION_DEFINITIONS: Record<ActionType, {
     label: "Deploy to Production",
     description: "Create release tag and deploy to production",
     requiredParams: ["specId"],
-    optionalParams: [],
+    optionalParams: ["releaseTag", "forceRedeploy"],
     confirmRequired: true,
     riskLevel: "high"
   },
@@ -536,7 +555,9 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
     case "deploy_production": {
       // params.releaseTag is now always set by resolveWriteToolParams
       const releaseTag = params.releaseTag;
-      return `I'll deploy to production for spec \`${params.specId}\`.\n\n**Release Tag:** \`${releaseTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
+      const action = params.forceRedeploy === true ? "redeploy production" : "deploy to production";
+      const target = params.specId ? ` for spec \`${params.specId}\`` : "";
+      return `I'll ${action}${target}.\n\n**Release Tag:** \`${releaseTag}\`\n\nTo proceed with this tag, type **confirm**.\nTo use a custom tag, type: **use tag your-custom-tag**\nOr type **cancel** to abort.`;
     }
 
     case "approve_release":

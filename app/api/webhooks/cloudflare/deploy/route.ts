@@ -68,7 +68,7 @@ export async function POST(request: Request) {
 
   let query = db
     .from("specs")
-    .select("id")
+    .select("id, release_status")
     .eq("repo_full_name", repoFullName)
     .order("updated_at", { ascending: false })
     .limit(1);
@@ -117,6 +117,12 @@ export async function POST(request: Request) {
       await db.from("specs").update(specUpdate).eq("id", spec.id);
     } else {
       // Production deployment succeeded
+      // IMPORTANT: Don't overwrite specs that were rolled back
+      if (spec.release_status === "rolled_back") {
+        console.log(`Skipping update for rolled_back spec ${spec.id}`);
+        return NextResponse.json({ ok: true, message: "Spec is rolled_back, skipping update" });
+      }
+
       specUpdate.release_status = "deployed";
       specUpdate.deployed_at = new Date().toISOString();
       if (url) specUpdate.production_url = url;
@@ -142,6 +148,7 @@ export async function POST(request: Request) {
           .neq("id", spec.id);
 
         if (linkedSpecs?.length) {
+          // IMPORTANT: Don't overwrite specs that were rolled back
           await db
             .from("specs")
             .update({
@@ -151,7 +158,8 @@ export async function POST(request: Request) {
             })
             .eq("repo_full_name", releaseSpec.repo_full_name)
             .eq("release_pr_number", releaseSpec.release_pr_number)
-            .neq("id", spec.id);
+            .neq("id", spec.id)
+            .neq("release_status", "rolled_back");
 
           // Also update all linked traces to production_live
           for (const linkedSpec of linkedSpecs) {
@@ -178,11 +186,14 @@ export async function POST(request: Request) {
 
     if (isPreview) {
       specUpdate.preview_status = "failed";
+      await db.from("specs").update(specUpdate).eq("id", spec.id);
     } else {
-      specUpdate.release_status = "failed";
+      // IMPORTANT: Don't overwrite specs that were rolled back
+      if (spec.release_status !== "rolled_back") {
+        specUpdate.release_status = "failed";
+        await db.from("specs").update(specUpdate).eq("id", spec.id);
+      }
     }
-
-    await db.from("specs").update(specUpdate).eq("id", spec.id);
   }
 
   await db.from("cloudflare_webhook_events").update({

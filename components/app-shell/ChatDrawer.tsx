@@ -103,12 +103,14 @@ const quickPrompts: QuickPrompt[] = [
   { Icon: AlertTriangle,  category: "incident", label: "Active incidents",        prompt: "Show active incidents." },
 
   // ── PR & Spec ─────────────────────────────────────────────────────────
-  { Icon: FilePlus,       category: "pr",       label: "Create PR from spec",     prompt: "Create a draft PR from a sample ticket." },
+  { Icon: FilePlus,       category: "pr",       label: "Create Draft PR",         prompt: "Create Draft PR from a sample ticket." },
   { Icon: GitBranch,      category: "release",  label: "Draft release PR",        prompt: "Create a release draft PR from develop to main." },
 
   // ── Deploy ────────────────────────────────────────────────────────────
   { Icon: Rocket,         category: "deploy",   label: "Deploy to preview",       prompt: "Deploy my merged PR to preview." },
+  { Icon: RotateCcw,      category: "deploy",   label: "Redeploy preview",        prompt: "Redeploy preview." },
   { Icon: Globe,          category: "deploy",   label: "Deploy to production",    prompt: "Deploy to production." },
+  { Icon: RotateCcw,      category: "deploy",   label: "Redeploy release tag",    prompt: "Redeploy my current release tag." },
 
   // ── Release ───────────────────────────────────────────────────────────
   { Icon: RotateCcw,      category: "release",  label: "Rollback production",     prompt: "Rollback production to previous version." },

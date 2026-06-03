@@ -233,12 +233,12 @@ async function chatWithShipBrain(user: TelegramUser, text: string) {
     pendingAction
   });
 
-  // Store the action in metadata if there's a pending confirmation
+  // Store pending actions so Telegram follow-up messages can confirm or choose options.
   const messageMetadata: Record<string, any> = {
     channel: "telegram",
     activeRepo: answer.activeRepo
   };
-  if (answer.action?.status === "pending_confirmation") {
+  if (answer.action?.status === "pending_confirmation" || answer.action?.status === "needs_input") {
     messageMetadata.pendingAction = answer.action;
   }
 
@@ -1251,6 +1251,28 @@ async function findSpecForAction(user: TelegramUser, token?: string) {
   return match;
 }
 
+async function findCurrentProductionSpec(user: TelegramUser) {
+  const db = getSupabaseAdminClient();
+  const active = await activeRepo(user.user_id);
+  const repos = active ? [active] : await connectedRepos(user.user_id);
+  if (!repos.length) throw new Error("No connected repositories yet.");
+
+  const { data, error } = await db
+    .from("specs")
+    .select("*")
+    .eq("user_id", user.user_id)
+    .in("repo_full_name", repos)
+    .eq("release_status", "deployed")
+    .not("release_tag", "is", null)
+    .order("deployed_at", { ascending: false, nullsFirst: false })
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("No current production release tag is available to redeploy.");
+  return data;
+}
+
 async function defaultBranchForRepo(repoFullName: string) {
   const db = getSupabaseAdminClient();
   const { data } = await db.from("repos").select("default_branch").eq("full_name", repoFullName).maybeSingle();
@@ -1459,6 +1481,10 @@ async function createReleasePrFromSpec(user: TelegramUser, spec: any) {
 }
 
 export async function startAutoDeployment(user: TelegramUser, token?: string, options: { redeploy?: boolean } = {}) {
+  if (options.redeploy && !token) {
+    return startProductionDeployment(user, undefined, { redeploy: true });
+  }
+
   const spec = await findSpecForAction(user, token);
 
   if (options.redeploy) {
@@ -1497,7 +1523,9 @@ async function resolveReleaseSha(owner: string, repo: string, sha: string) {
 
 export async function startProductionDeployment(user: TelegramUser, token?: string, options: { redeploy?: boolean; releaseTag?: string } = {}) {
   const db = getSupabaseAdminClient();
-  const spec = await findSpecForAction(user, token);
+  const spec = options.redeploy && !token
+    ? await findCurrentProductionSpec(user)
+    : await findSpecForAction(user, token);
 
   // Preliminary validations for better Telegram UX
   if (options.redeploy) {

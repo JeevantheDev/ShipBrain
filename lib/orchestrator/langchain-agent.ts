@@ -148,17 +148,39 @@ function createOrchestratorTools(ctx: OrchestratorContext): DynamicStructuredToo
 
     new DynamicStructuredTool({
       name: "deploy_production",
-      description: "Create release tag and deploy to production",
+      description: "Create release tag and deploy to production, or redeploy an existing production release tag",
       schema: z.object({
         pr_number: z.string().optional().describe("PR number for the feature"),
         spec_id: z.string().optional().describe("ShipBrain spec UUID"),
-        release_tag: z.string().optional().describe("Explicit release tag")
+        release_tag: z.string().optional().describe("Explicit release tag"),
+        redeploy: z.boolean().optional().describe("Set true when the user asks to redeploy/refresh/re-trigger an existing production deployment")
       }),
-      func: async ({ spec_id, release_tag }) => {
+      func: async ({ spec_id, release_tag, redeploy }) => {
+        let specId = spec_id;
+        let releaseTag = release_tag;
+
+        if (redeploy === true && !specId && !releaseTag) {
+          const { data: currentRelease } = await actionCtx.db
+            .from("specs")
+            .select("id, release_tag")
+            .eq("user_id", actionCtx.userId)
+            .eq("repo_full_name", actionCtx.repoFullName)
+            .eq("release_status", "deployed")
+            .not("release_tag", "is", null)
+            .order("deployed_at", { ascending: false, nullsFirst: false })
+            .order("updated_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          specId = currentRelease?.id;
+          releaseTag = currentRelease?.release_tag;
+        }
+
         const result = await deployProduction(actionCtx, {
-          specId: spec_id,
-          releaseTag: release_tag,
-          repoFullName: actionCtx.repoFullName
+          specId,
+          releaseTag,
+          repoFullName: actionCtx.repoFullName,
+          forceRedeploy: redeploy === true
         });
         return JSON.stringify(formatActionResult("deploy_production", result));
       }
@@ -412,12 +434,29 @@ export async function executeOrchestratorTool(
         }));
 
       case "deploy_production":
+        if ((args.force === true || args.forceRedeploy === true || args.redeploy === true) && !args.spec_id && !args.release_tag) {
+          const { data: currentRelease } = await ctx.actionCtx.db
+            .from("specs")
+            .select("id, release_tag")
+            .eq("user_id", ctx.actionCtx.userId)
+            .eq("repo_full_name", ctx.actionCtx.repoFullName)
+            .eq("release_status", "deployed")
+            .not("release_tag", "is", null)
+            .order("deployed_at", { ascending: false, nullsFirst: false })
+            .order("updated_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          args.spec_id = currentRelease?.id;
+          args.release_tag = currentRelease?.release_tag;
+        }
+
         return formatActionResult(toolName, await deployProduction(ctx.actionCtx, {
           specId: args.spec_id,
           releaseTag: args.release_tag,
           releaseSha: args.release_sha,
           repoFullName: ctx.actionCtx.repoFullName,
-          forceRedeploy: args.force
+          forceRedeploy: args.force === true || args.forceRedeploy === true || args.redeploy === true
         }));
 
       case "create_release_pr":

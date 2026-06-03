@@ -164,9 +164,10 @@ const DEPLOY_PRODUCTION: ShipBrainTool = {
   name: "deploy_production",
   label: "Deploy to Production",
   description:
-    "Creates a release tag and triggers a production deployment. " +
-    "Use when the user says: deploy to production, deploy to prod, release to production, go live. " +
-    "Extract the PR number if mentioned.",
+    "Creates a release tag and triggers a production deployment, or redeploys an existing production release tag. " +
+    "Use when the user says: deploy to production, deploy to prod, release to production, go live, " +
+    "redeploy production, redeploy my current release tag, redeploy this release tag, refresh production, re-trigger prod. " +
+    "Extract the PR number or release tag if mentioned. Set redeploy=true when the user wants to redeploy an existing production deployment.",
   parameters: {
     type: "object",
     properties: {
@@ -175,6 +176,11 @@ const DEPLOY_PRODUCTION: ShipBrainTool = {
       release_tag: {
         type: "string",
         description: "An explicit release tag, e.g. 'release-v2025.05.30'. Auto-generated if not provided."
+      },
+      redeploy: {
+        type: "boolean",
+        description: "Set to true if the user wants to redeploy/refresh/re-trigger an existing production release tag. " +
+          "Use this when user says: redeploy production, redeploy current release tag, refresh production, re-trigger prod."
       }
     },
     required: []
@@ -447,6 +453,7 @@ export function resolveActionOptions(
 ): ActionOption[] | null {
   switch (toolName) {
     case "deploy_preview": {
+      if (args.redeploy === true || args.redeploy === "true") return null;
       const items = (context.pendingDeployments ?? context.recentPrs ?? []) as any[];
       const eligible = items.filter(
         (s) => s.status === "merged" && s.base_branch === "develop" && !s.preview_url && s.preview_status !== "deploying"
@@ -461,6 +468,7 @@ export function resolveActionOptions(
     }
 
     case "deploy_production": {
+      if (args.redeploy === true || args.redeploy === "true") return null;
       const items = (context.pendingDeployments ?? context.recentPrs ?? []) as any[];
       const eligible = items.filter(
         (s) =>

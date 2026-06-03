@@ -142,6 +142,51 @@ async function* textStream(content: string) {
   yield { content };
 }
 
+function isSpecToPrRecipeRequest(message: string): boolean {
+  return /\b(create|start|new|make)\b.*\b(draft\s*)?pr\b/i.test(message) ||
+    /\b(create|start|new|make)\b.*\bspec[-\s]?to[-\s]?pr\b/i.test(message);
+}
+
+function isProductionRedeployRequest(message: string): boolean {
+  return /\bre[-\s]?deploy\b/i.test(message) &&
+    /\b(prod|production|release\s+tag|current\s+release|current\s+tag)\b/i.test(message);
+}
+
+function isPreviewRedeployRequest(message: string): boolean {
+  return /\bre[-\s]?deploy\b/i.test(message) &&
+    /\b(preview|develop|dev|staging)\b/i.test(message);
+}
+
+function extractReleaseTag(message: string): string | null {
+  const match = message.match(/\b((?:release|hotfix)-v[0-9][A-Za-z0-9._-]*|v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?)\b/i);
+  return match?.[1] ?? null;
+}
+
+function buildRecipeSelectionAction(context: any): ChatAction {
+  const recipes = (context.specPrRecipes ?? []) as any[];
+  return {
+    type: "spec_to_pr",
+    status: recipes.length ? "needs_input" : "completed",
+    params: {
+      recipes,
+      repoFullName: context.activeRepo ?? null
+    }
+  };
+}
+
+function recipeSelectionMessage(context: any): string {
+  const recipes = (context.specPrRecipes ?? []) as any[];
+  if (!recipes.length) {
+    return "I don't see any sample tickets configured yet.";
+  }
+  const lines = recipes.slice(0, 8).map((recipe: any, index: number) => {
+    const sample = recipe.isSample ? " · sample" : "";
+    const branch = recipe.sourceBranch ? `${recipe.sourceBranch} -> ${recipe.baseBranch ?? "develop"}` : recipe.baseBranch ?? "develop";
+    return `${index + 1}. **${recipe.label}**${sample} — \`${branch}\``;
+  });
+  return ["Choose a sample ticket to create the Draft PR:", "", ...lines].join("\n");
+}
+
 function checkRepoOnboarding(context: any): string | null {
   const repos = Array.isArray(context.repos) ? context.repos : [];
   const activeRepo = context.activeRepo;
@@ -326,7 +371,16 @@ async function resolveWriteToolParams(
       const prNum = args.pr_number ?? args.prNumber;
       const specId = args.spec_id ?? args.specId;
       const isRedeploy = args.redeploy === true || args.redeploy === "true";
+      const requestedReleaseTag = String(args.release_tag ?? args.releaseTag ?? "").trim();
       const all = [...(context.pendingDeployments ?? []), ...(context.recentPrs ?? [])] as any[];
+      if (context.activeRepo) {
+        params.repoFullName = context.activeRepo;
+      }
+      const byNewest = (a: any, b: any) => {
+        const dateA = new Date(a.deployed_at || a.updated_at || 0).getTime();
+        const dateB = new Date(b.deployed_at || b.updated_at || 0).getTime();
+        return dateB - dateA;
+      };
 
       let found: any = null;
       if (specId) {
@@ -339,11 +393,7 @@ async function resolveWriteToolParams(
           // Sort by deployed_at or updated_at descending and find one with preview_url
           const deployedPreviews = all
             .filter((s) => s.base_branch === "develop" && s.preview_url && s.preview_status === "deployed")
-            .sort((a, b) => {
-              const dateA = new Date(a.deployed_at || a.updated_at || 0).getTime();
-              const dateB = new Date(b.deployed_at || b.updated_at || 0).getTime();
-              return dateB - dateA;
-            });
+            .sort(byNewest);
           found = deployedPreviews[0];
           if (found) {
             params.forceRedeploy = true;
@@ -356,11 +406,7 @@ async function resolveWriteToolParams(
           if (!found) {
             const deployedPreviews = all
               .filter((s) => s.base_branch === "develop" && s.preview_url && s.preview_status === "deployed")
-              .sort((a, b) => {
-                const dateA = new Date(a.deployed_at || a.updated_at || 0).getTime();
-                const dateB = new Date(b.deployed_at || b.updated_at || 0).getTime();
-                return dateB - dateA;
-              });
+              .sort(byNewest);
             found = deployedPreviews[0];
             if (found) {
               params.forceRedeploy = true;
@@ -368,7 +414,30 @@ async function resolveWriteToolParams(
           }
         }
       } else {
-        found = all.find((s) => s.release_status === "pending_deploy" || s.release_status === "ready_for_prod" || (s.status === "merged" && s.base_branch === "main"));
+        const currentProductionTag = context.deploymentState?.currentProductionTag;
+        const targetRedeployTag = requestedReleaseTag || (isRedeploy ? currentProductionTag : "");
+
+        if (targetRedeployTag) {
+          found = all
+            .filter((s) => s.release_tag === targetRedeployTag || s.releaseTag === targetRedeployTag)
+            .sort(byNewest)[0];
+          if (found) {
+            params.forceRedeploy = true;
+          }
+        }
+
+        if (!found && isRedeploy) {
+          found = all
+            .filter((s) => s.release_status === "deployed" && (s.release_tag || s.releaseTag))
+            .sort(byNewest)[0];
+          if (found) {
+            params.forceRedeploy = true;
+          }
+        }
+
+        if (!found && !isRedeploy) {
+          found = all.find((s) => s.release_status === "pending_deploy" || s.release_status === "ready_for_prod" || (s.status === "merged" && s.base_branch === "main"));
+        }
       }
 
       if (found) {
@@ -384,11 +453,13 @@ async function resolveWriteToolParams(
       if (toolName === "deploy_production") {
         // Use provided tag or generate a default one that will be shown in confirmation
         // This ensures the same tag is used when the user confirms
-        if (args.release_tag) {
-          params.releaseTag = args.release_tag;
+        if (requestedReleaseTag) {
+          params.releaseTag = requestedReleaseTag;
         } else if (found?.releaseTag || found?.release_tag) {
           params.releaseTag = found.releaseTag || found.release_tag;
-        } else {
+        } else if (isRedeploy && context.deploymentState?.currentProductionTag) {
+          params.releaseTag = context.deploymentState.currentProductionTag;
+        } else if (!isRedeploy) {
           try {
             const { getSupabaseAdminClient } = await import("@/lib/supabase/admin");
             const { getNextSemverReleaseTag } = await import("@/lib/shipbrain/semver");
@@ -402,6 +473,9 @@ async function resolveWriteToolParams(
           } catch {
             params.releaseTag = "v1.0.0";
           }
+        }
+        if (isRedeploy) {
+          params.forceRedeploy = true;
         }
       }
       break;
@@ -582,6 +656,27 @@ export async function answerShipBrainQuestion(input: {
 
   // Confirmation flow
   if (input.pendingAction?.status === "pending_confirmation") {
+    const confirmTagMatch = input.message.match(/^confirm\s+tag\s+(.+)$/i);
+    if (confirmTagMatch && (input.pendingAction.type === "deploy_production" || input.pendingAction.type === "approve_hotfix")) {
+      const customTag = confirmTagMatch[1].trim();
+      const result = await executeAction(
+        input.pendingAction.type as any,
+        { ...input.pendingAction.params, releaseTag: customTag },
+        input.supabase as any,
+        input.userId,
+        input.repoFullName ?? null
+      );
+      return {
+        ...base,
+        reply: result.success
+          ? formatActionResult(input.pendingAction.type as any, result.result)
+          : `❌ **Action Failed**\n\n${result.error}`,
+        action: result.success
+          ? { ...input.pendingAction, status: "completed", params: { ...input.pendingAction.params, releaseTag: customTag }, result: result.result }
+          : { ...input.pendingAction, status: "failed", params: { ...input.pendingAction.params, releaseTag: customTag }, error: result.error }
+      };
+    }
+
     // Handle "use tag X" for deploy_production or approve_hotfix
     const useTagMatch = input.message.match(/^use\s+tag\s+(.+)$/i);
     if (useTagMatch && (input.pendingAction.type === "deploy_production" || input.pendingAction.type === "approve_hotfix")) {
@@ -616,6 +711,120 @@ export async function answerShipBrainQuestion(input: {
     if (isCancellation(input.message)) {
       return { ...base, reply: "Action cancelled. What else can I help you with?", action: null };
     }
+  }
+
+  if (
+    input.pendingAction?.type === "spec_to_pr" &&
+    input.pendingAction.status === "needs_input"
+  ) {
+    const recipes = input.pendingAction.params?.recipes as Array<{ id: string; label: string; heading?: string; isSample?: boolean }> | undefined;
+    if (recipes?.length) {
+      let selectedRecipe: { id: string; label: string } | undefined;
+      if (recipes.length === 1 && isConfirmation(input.message)) {
+        selectedRecipe = recipes[0];
+      }
+      if (!selectedRecipe) {
+        const lower = input.message.toLowerCase();
+        selectedRecipe = recipes.find((r) => {
+          const terms = [r.id, r.label, r.heading].filter(Boolean).map((s) => String(s).toLowerCase());
+          return terms.some((t) => lower.includes(t));
+        });
+      }
+      if (!selectedRecipe && /first|sample|1st|one/.test(input.message.toLowerCase())) {
+        selectedRecipe = recipes.find((r) => r.isSample) || recipes[0];
+      }
+      if (selectedRecipe) {
+        const result = await executeAction(
+          "spec_to_pr",
+          { ...input.pendingAction.params, recipeId: selectedRecipe.id, repoFullName: input.repoFullName },
+          input.supabase as any,
+          input.userId,
+          input.repoFullName ?? null
+        );
+        return {
+          ...base,
+          reply: result.success
+            ? formatActionResult("spec_to_pr", result.result)
+            : `❌ **Failed to create Draft PR**\n\n${result.error}`,
+          action: result.success
+            ? { ...input.pendingAction, status: "completed", result: result.result }
+            : { ...input.pendingAction, status: "failed", error: result.error }
+        };
+      }
+    }
+  }
+
+  if (isSpecToPrRecipeRequest(input.message)) {
+    const action = buildRecipeSelectionAction(context);
+    return {
+      ...base,
+      reply: recipeSelectionMessage(context),
+      action
+    };
+  }
+
+  if (isPreviewRedeployRequest(input.message)) {
+    const resolvedParams = await resolveWriteToolParams("deploy_preview", { redeploy: true }, context);
+    const stateValidation = await validateActionState(
+      "deploy_preview" as any,
+      resolvedParams,
+      input.supabase as any,
+      input.userId
+    );
+
+    if (!stateValidation.valid) {
+      return {
+        ...base,
+        reply: stateValidation.message ?? "No deployed preview is available to redeploy.",
+        action: { type: "deploy_preview" as any, status: "completed", params: resolvedParams, result: stateValidation.currentState }
+      };
+    }
+
+    const confirmMsg = generateConfirmation("deploy_preview" as any, resolvedParams, context);
+    return {
+      ...base,
+      reply: confirmMsg,
+      action: {
+        type: "deploy_preview" as any,
+        status: "pending_confirmation",
+        params: resolvedParams,
+        confirmationMessage: confirmMsg
+      } as ChatAction
+    };
+  }
+
+  if (isProductionRedeployRequest(input.message)) {
+    const resolvedParams = await resolveWriteToolParams("deploy_production", {
+      redeploy: true,
+      release_tag: extractReleaseTag(input.message)
+    }, context);
+
+    const stateValidation = await validateActionState(
+      "deploy_production" as any,
+      resolvedParams,
+      input.supabase as any,
+      input.userId
+    );
+
+    if (!stateValidation.valid) {
+      return {
+        ...base,
+        reply: stateValidation.message ?? "No current production release tag is available to redeploy.",
+        action: { type: "deploy_production" as any, status: "completed", params: resolvedParams, result: stateValidation.currentState }
+      };
+    }
+
+    const confirmMsg = generateConfirmation("deploy_production" as any, resolvedParams, context);
+    return {
+      ...base,
+      reply: confirmMsg,
+      action: {
+        type: "deploy_production" as any,
+        status: "pending_confirmation",
+        params: resolvedParams,
+        confirmationMessage: confirmMsg
+      } as ChatAction
+    };
   }
 
   // Build model with tools
@@ -670,6 +879,15 @@ export async function answerShipBrainQuestion(input: {
   // Write tool → resolve params, validate state, check for options
   const tool = TOOL_BY_NAME[toolName];
   const resolvedParams = await resolveWriteToolParams(toolName, args, context);
+
+  if (toolName === "spec_to_pr" && !resolvedParams.rawSpec && !resolvedParams.recipeId) {
+    const action = buildRecipeSelectionAction(context);
+    return {
+      ...base,
+      reply: recipeSelectionMessage(context),
+      action
+    };
+  }
 
   // Validate current state before asking for confirmation (prevents stale responses)
   const stateValidation = await validateActionState(
@@ -747,6 +965,28 @@ export async function streamShipBrainQuestion(input: {
 
   // Confirmation flow
   if (input.pendingAction?.status === "pending_confirmation") {
+    const confirmTagMatch = input.message.match(/^confirm\s+tag\s+(.+)$/i);
+    if (confirmTagMatch && (input.pendingAction.type === "deploy_production" || input.pendingAction.type === "approve_hotfix")) {
+      const customTag = confirmTagMatch[1].trim();
+      const result = await executeAction(
+        input.pendingAction.type as any,
+        { ...input.pendingAction.params, releaseTag: customTag },
+        input.supabase as any,
+        input.userId,
+        input.repoFullName ?? null
+      );
+      const reply = result.success
+        ? formatActionResult(input.pendingAction.type as any, result.result)
+        : `❌ **Action Failed**\n\n${result.error}`;
+      return {
+        ...base,
+        action: result.success
+          ? { ...input.pendingAction, status: "completed", params: { ...input.pendingAction.params, releaseTag: customTag }, result: result.result }
+          : { ...input.pendingAction, status: "failed", params: { ...input.pendingAction.params, releaseTag: customTag }, error: result.error },
+        stream: textStream(reply)
+      };
+    }
+
     // Handle "use tag X" for deploy_production or approve_hotfix
     const useTagMatch = input.message.match(/^use\s+tag\s+(.+)$/i);
     if (useTagMatch && (input.pendingAction.type === "deploy_production" || input.pendingAction.type === "approve_hotfix")) {
@@ -827,6 +1067,73 @@ export async function streamShipBrainQuestion(input: {
     }
   }
 
+  if (isSpecToPrRecipeRequest(input.message)) {
+    const action = buildRecipeSelectionAction(context);
+    return {
+      ...base,
+      action,
+      stream: textStream(recipeSelectionMessage(context))
+    };
+  }
+
+  if (isPreviewRedeployRequest(input.message)) {
+    const resolvedParams = await resolveWriteToolParams("deploy_preview", { redeploy: true }, context);
+    const stateValidation = await validateActionState(
+      "deploy_preview" as any,
+      resolvedParams,
+      input.supabase as any,
+      input.userId
+    );
+
+    if (!stateValidation.valid) {
+      return {
+        ...base,
+        action: { type: "deploy_preview" as any, status: "completed", params: resolvedParams, result: stateValidation.currentState },
+        stream: textStream(stateValidation.message ?? "No deployed preview is available to redeploy.")
+      };
+    }
+
+    const confirmMsg = generateConfirmation("deploy_preview" as any, resolvedParams, context);
+    const action: ChatAction = {
+      type: "deploy_preview" as any,
+      status: "pending_confirmation",
+      params: resolvedParams,
+      confirmationMessage: confirmMsg
+    };
+    return { ...base, action, stream: textStream(confirmMsg) };
+  }
+
+  if (isProductionRedeployRequest(input.message)) {
+    const resolvedParams = await resolveWriteToolParams("deploy_production", {
+      redeploy: true,
+      release_tag: extractReleaseTag(input.message)
+    }, context);
+
+    const stateValidation = await validateActionState(
+      "deploy_production" as any,
+      resolvedParams,
+      input.supabase as any,
+      input.userId
+    );
+
+    if (!stateValidation.valid) {
+      return {
+        ...base,
+        action: { type: "deploy_production" as any, status: "completed", params: resolvedParams, result: stateValidation.currentState },
+        stream: textStream(stateValidation.message ?? "No current production release tag is available to redeploy.")
+      };
+    }
+
+    const confirmMsg = generateConfirmation("deploy_production" as any, resolvedParams, context);
+    const action: ChatAction = {
+      type: "deploy_production" as any,
+      status: "pending_confirmation",
+      params: resolvedParams,
+      confirmationMessage: confirmMsg
+    };
+    return { ...base, action, stream: textStream(confirmMsg) };
+  }
+
   // Build model with tools and stream
   const model = getModel({ temperature: 0.2, streaming: true });
   const modelWithTools = model.bind({ tools: getLangChainToolSpecs() } as any);
@@ -889,6 +1196,15 @@ export async function streamShipBrainQuestion(input: {
 
   // Write tool → resolve params, validate state, check for options
   const resolvedParams = await resolveWriteToolParams(toolName, args, context);
+
+  if (toolName === "spec_to_pr" && !resolvedParams.rawSpec && !resolvedParams.recipeId) {
+    const action = buildRecipeSelectionAction(context);
+    return {
+      ...base,
+      action,
+      stream: textStream(recipeSelectionMessage(context))
+    };
+  }
 
   // Validate current state before asking for confirmation (prevents stale responses)
   const stateValidation = await validateActionState(
