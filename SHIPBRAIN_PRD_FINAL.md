@@ -136,6 +136,7 @@ flowchart TB
         CF[Cloudflare Pages]
         TG[Telegram Bot]
         LLM[Microsoft Azure AI Foundry<br/>GPT-4.1-mini]
+        IQ[Foundry IQ Knowledge Base<br/>ShipBrain AI Action Handbook]
     end
 
     subgraph "Data Layer"
@@ -148,6 +149,8 @@ flowchart TB
     API <--> AI
     API <--> WH
     AI <--> LLM
+    AI -.-> IQ
+    IQ -. grounded context .-> LLM
     WH <--> GH
     WH <--> CF
     API <--> TG
@@ -165,6 +168,7 @@ flowchart TB
 | Backend | Next.js API Routes, Server Actions |
 | Database | Supabase (PostgreSQL + Realtime + Auth) |
 | **AI** | **Microsoft Azure AI Foundry** (GPT-4.1-mini) via LangChain |
+| **AI Grounding** | **Foundry IQ Knowledge Base** with uploaded ShipBrain AI Action Handbook (`prd.md`) |
 | GitHub | Octokit, GitHub Actions, Webhooks |
 | Deployment | Cloudflare Pages (Preview + Production) |
 | Notifications | Telegram Bot API (Real-time Webhooks) |
@@ -672,6 +676,7 @@ journey
 ### 8.1 AI Model Architecture
 
 ShipBrain uses **Microsoft Azure AI Foundry** with **GPT-4.1-mini** via **LangChain** for AI orchestration.
+The deployed model is grounded with a **Foundry IQ Knowledge Base** containing the uploaded **ShipBrain AI Action Handbook** (`prd.md`). This knowledge base is used for product behavior, quick prompt mapping, natural-language intent, unified action rules, and manual GitHub/repo-side responsibility guidance. Live operational state still comes from Supabase/runtime tools.
 
 ```mermaid
 flowchart TB
@@ -684,6 +689,7 @@ flowchart TB
         HIST[(Chat History<br/>Supabase chat_messages)]
         MEM[(Persistent Memory Notes<br/>Supabase ai_memory_notes)]
         CTX[(Live Context<br/>Repos, Deployments, Incidents)]
+        KB[(Foundry IQ Knowledge Base<br/>ShipBrain AI Action Handbook)]
     end
 
     subgraph "LangChain Layer"
@@ -706,10 +712,12 @@ flowchart TB
     SC --> HIST
     SC --> MEM
     SC --> CTX
+    SC -. retrieve behavior guidance .-> KB
     
     SC --> MF
     TOOLS --> CHAINS
     CHAINS --> MF
+    KB -. grounded handbook context .-> AF
     MF --> AF
 ```
 
@@ -718,6 +726,8 @@ flowchart TB
 - Tool calling architecture for agent-based interactions
 - Structured output parsing for spec decomposition and incident analysis
 - Streaming support for real-time chat responses
+- Foundry IQ retrieval grounds AI Chat/Telegram answers in the uploaded ShipBrain AI Action Handbook
+- Runtime/live-state answers are still resolved through Supabase-backed context and unified actions, not from the handbook alone
 
 **AI Capabilities:**
 | Feature | LangChain Chain |
