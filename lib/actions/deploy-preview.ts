@@ -117,12 +117,18 @@ export async function deployPreview(
       return failure("Preview deployment is already in progress.");
     }
 
-    if (spec.preview_url) {
-      return failure(`Preview is already deployed: ${spec.preview_url}`);
+    // Allow redeploy if forceRedeploy is set, otherwise block if already deployed
+    const isRedeploy = Boolean(spec.preview_url && input.forceRedeploy);
+    if (spec.preview_url && !input.forceRedeploy) {
+      return failure(`Preview is already deployed: ${spec.preview_url}. Use "redeploy preview" to force a new deployment.`);
     }
 
     const { owner, repo } = splitRepo(spec.repo_full_name);
     const dispatchedAfter = Date.now();
+
+    if (isRedeploy) {
+      logAction("deployPreview:redeploy", ctx, { specId: spec.id, previousUrl: spec.preview_url });
+    }
 
     // Get repo default branch
     const { data: repoRow } = await ctx.db
@@ -213,12 +219,12 @@ export async function deployPreview(
     // Create notification
     await createNotification(ctx.db, ctx.userId, {
       type: "preview_deploy_started",
-      title: "Preview Deployment Started",
-      body: `Deploying PR #${spec.pr_number} to preview environment`,
+      title: isRedeploy ? "Preview Redeployment Started" : "Preview Deployment Started",
+      body: `${isRedeploy ? "Redeploying" : "Deploying"} PR #${spec.pr_number} to preview environment`,
       href: deployment.workflowUrl,
       severity: "info",
       repoFullName: spec.repo_full_name,
-      metadata: { specId: spec.id, prNumber: spec.pr_number, branch: "develop", source: ctx.source }
+      metadata: { specId: spec.id, prNumber: spec.pr_number, branch: "develop", source: ctx.source, isRedeploy }
     });
 
     // Update release trace
@@ -249,13 +255,18 @@ export async function deployPreview(
       workflowRunId: workflowRun?.id
     });
 
+    const successMessage = isRedeploy
+      ? "Preview redeployment started. The preview will be updated after the workflow completes."
+      : "Preview deployment started. The preview URL will appear after the workflow completes.";
+
     return success(
-      "Preview deployment started. The preview URL will appear after the workflow completes.",
+      successMessage,
       {
         specId: spec.id,
         workflowUrl: deployment.workflowUrl,
-        previewUrl: null,
-        status: "deploying"
+        previewUrl: isRedeploy ? spec.preview_url : null,
+        status: "deploying",
+        isRedeploy
       },
       chainUpdates
     );

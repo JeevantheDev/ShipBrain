@@ -132,9 +132,11 @@ const DEPLOY_PREVIEW: ShipBrainTool = {
   name: "deploy_preview",
   label: "Deploy to Preview",
   description:
-    "Deploys a merged feature pull request to the develop/preview environment by triggering a GitHub Actions workflow. " +
-    "Use when the user says: deploy to preview, deploy to develop, deploy to staging, start preview deploy. " +
-    "Extract the PR number from the user message if mentioned (e.g. '#73', 'PR 73').",
+    "Deploys or redeploys to the develop/preview environment by triggering a GitHub Actions workflow. " +
+    "Use when the user says: deploy to preview, deploy to develop, deploy to staging, start preview deploy, " +
+    "redeploy preview, redeploy the preview env, refresh preview, re-trigger preview deployment. " +
+    "Extract the PR number from the user message if mentioned (e.g. '#73', 'PR 73'). " +
+    "Set redeploy=true if the user wants to redeploy an existing preview deployment.",
   parameters: {
     type: "object",
     properties: {
@@ -145,6 +147,11 @@ const DEPLOY_PREVIEW: ShipBrainTool = {
       spec_id: {
         type: "string",
         description: "The UUID of the ShipBrain spec. Use if the user provides a UUID directly."
+      },
+      redeploy: {
+        type: "boolean",
+        description: "Set to true if the user wants to redeploy/refresh an existing preview deployment. " +
+          "Use this when user says: redeploy, re-deploy, refresh preview, re-trigger preview."
       }
     },
     required: []

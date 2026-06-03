@@ -196,10 +196,12 @@ export async function validateActionState(
         if (!spec) {
           return { valid: false, message: "Spec not found." };
         }
-        if (spec.preview_status === "deployed" && spec.preview_url) {
+        // If forceRedeploy is set, allow redeploying even if already deployed
+        const isRedeploy = params.forceRedeploy === true;
+        if (spec.preview_status === "deployed" && spec.preview_url && !isRedeploy) {
           return {
             valid: false,
-            message: `✅ **Already Deployed to Preview**\n\nPR #${spec.pr_number ?? "?"} is already deployed to preview.\n\n**Preview URL:** ${spec.preview_url}`,
+            message: `✅ **Already Deployed to Preview**\n\nPR #${spec.pr_number ?? "?"} is already deployed to preview.\n\n**Preview URL:** ${spec.preview_url}\n\nTo redeploy, say "redeploy preview" or "refresh preview".`,
             currentState: { previewStatus: spec.preview_status, previewUrl: spec.preview_url }
           };
         }
@@ -210,7 +212,7 @@ export async function validateActionState(
             currentState: { previewStatus: spec.preview_status }
           };
         }
-        return { valid: true, currentState: { status: spec.status, previewStatus: spec.preview_status } };
+        return { valid: true, currentState: { status: spec.status, previewStatus: spec.preview_status, isRedeploy } };
       }
 
       case "deploy_production": {
@@ -524,8 +526,12 @@ export function generateConfirmation(action: ActionType, params: Record<string, 
       return `I'll create a Draft Release PR from **develop** to **main** branch${tagInfo}.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
     }
 
-    case "deploy_preview":
-      return `I'll deploy spec \`${params.specId}\` to the preview environment.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+    case "deploy_preview": {
+      const isRedeploy = params.forceRedeploy === true;
+      const action = isRedeploy ? "redeploy" : "deploy";
+      const prInfo = params.prNumber ? `PR #${params.prNumber}` : `spec \`${params.specId?.slice(0, 8)}\``;
+      return `I'll ${action} ${prInfo} to the preview environment.${riskWarning}\n\nWould you like me to proceed? Type **confirm** or **cancel**.`;
+    }
 
     case "deploy_production": {
       // params.releaseTag is now always set by resolveWriteToolParams

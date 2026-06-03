@@ -249,6 +249,8 @@ export interface DeployPreviewResult {
   workflowUrl: string | null;
   previewUrl: string | null;
   status: PreviewStatus;
+  /** True if this was a redeployment of existing preview */
+  isRedeploy?: boolean;
 }
 
 export interface DeployProductionResult {

@@ -313,6 +313,7 @@ async function resolveWriteToolParams(
     case "deploy_production": {
       const prNum = args.pr_number ?? args.prNumber;
       const specId = args.spec_id ?? args.specId;
+      const isRedeploy = args.redeploy === true || args.redeploy === "true";
       const all = [...(context.pendingDeployments ?? []), ...(context.recentPrs ?? [])] as any[];
 
       let found: any = null;
@@ -321,7 +322,39 @@ async function resolveWriteToolParams(
       } else if (prNum) {
         found = all.find((s) => String(s.pr_number) === String(prNum));
       } else if (toolName === "deploy_preview") {
-        found = all.find((s) => s.status === "merged" && s.base_branch === "develop" && !s.preview_url && s.preview_status !== "deploying");
+        if (isRedeploy) {
+          // For redeploy, find the most recently deployed preview spec
+          // Sort by deployed_at or updated_at descending and find one with preview_url
+          const deployedPreviews = all
+            .filter((s) => s.base_branch === "develop" && s.preview_url && s.preview_status === "deployed")
+            .sort((a, b) => {
+              const dateA = new Date(a.deployed_at || a.updated_at || 0).getTime();
+              const dateB = new Date(b.deployed_at || b.updated_at || 0).getTime();
+              return dateB - dateA;
+            });
+          found = deployedPreviews[0];
+          if (found) {
+            params.forceRedeploy = true;
+          }
+        } else {
+          // For initial deploy, find spec that hasn't been deployed to preview yet
+          found = all.find((s) => s.status === "merged" && s.base_branch === "develop" && !s.preview_url && s.preview_status !== "deploying");
+
+          // If no pending preview found, try to find the most recent preview for redeploy as fallback
+          if (!found) {
+            const deployedPreviews = all
+              .filter((s) => s.base_branch === "develop" && s.preview_url && s.preview_status === "deployed")
+              .sort((a, b) => {
+                const dateA = new Date(a.deployed_at || a.updated_at || 0).getTime();
+                const dateB = new Date(b.deployed_at || b.updated_at || 0).getTime();
+                return dateB - dateA;
+              });
+            found = deployedPreviews[0];
+            if (found) {
+              params.forceRedeploy = true;
+            }
+          }
+        }
       } else {
         found = all.find((s) => s.release_status === "pending_deploy" || s.release_status === "ready_for_prod" || (s.status === "merged" && s.base_branch === "main"));
       }
