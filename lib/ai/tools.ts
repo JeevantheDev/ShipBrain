@@ -120,7 +120,8 @@ const GET_RECENT_PRS: ShipBrainTool = {
   name: "get_recent_prs",
   label: "Get Recent PRs",
   description:
-    "Lists the user's recent open and draft pull requests. Use when the user asks to see PRs, open pull requests, or their current work.",
+    "Lists the user's recent open and draft pull requests. Use when the user asks to see PRs, open pull requests, or their current work. " +
+    "Do not use this for requests to merge a Draft PR; Draft PR merge is a manual GitHub-side step unless a dedicated merge action exists.",
   parameters: { type: "object", properties: {}, required: [] },
   isRead: true,
   riskLevel: "low"

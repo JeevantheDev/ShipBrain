@@ -56,6 +56,7 @@ You have access to a set of tools for BOTH reading data AND executing operations
 - get_incidents — open/active incidents
 - get_release_traces — release pipeline status
 - get_recent_prs — open and draft pull requests
+- For requests to merge a Draft PR, do not call get_recent_prs. Draft PR merges are manual GitHub-side steps unless an explicit authorized merge action exists.
 
 ### For operations (use write tools):
 - deploy_preview, deploy_production, approve_release, rollback
@@ -145,6 +146,76 @@ async function* textStream(content: string) {
 function isSpecToPrRecipeRequest(message: string): boolean {
   return /\b(create|start|new|make)\b.*\b(draft\s*)?pr\b/i.test(message) ||
     /\b(create|start|new|make)\b.*\bspec[-\s]?to[-\s]?pr\b/i.test(message);
+}
+
+function isDraftPrMergeRequest(message: string): boolean {
+  const lower = message.toLowerCase();
+  const asksToMerge = /\b(merge|merged|merging)\b/.test(lower);
+  const mentionsDraftPr = /\bdraft\s*(pr|pull\s+request)\b/.test(lower);
+  const mentionsPlainPr = /\b(pr|pull\s+request)\b/.test(lower);
+  const isSpecializedMerge = /\b(release|hotfix)\b/.test(lower);
+  return asksToMerge && (mentionsDraftPr || (mentionsPlainPr && !isSpecializedMerge));
+}
+
+function draftPrMergeGuidance(): string {
+  return [
+    "I can't merge a Draft PR directly from AI Chat in the current ShipBrain flow.",
+    "",
+    "Draft PR merge is a manual GitHub-side step:",
+    "1. Open the Draft PR on GitHub.",
+    "2. Review the generated code and push any needed implementation commits.",
+    "3. Mark it ready for review if your team requires that.",
+    "4. Merge it into `develop` on GitHub.",
+    "5. After GitHub/webhook syncs the merge, ask me to deploy preview."
+  ].join("\n");
+}
+
+function isSetupChecklistRequest(message: string): boolean {
+  const lower = message.toLowerCase();
+  const asksForChecklist = /\b(checklist|setup|verify|manual|configure|configuration)\b/.test(lower);
+  const mentionsSetupSurface = /\b(github|cloudflare|incident|integration|merge|handbook)\b/.test(lower);
+  return asksForChecklist && mentionsSetupSurface;
+}
+
+function extractRepoFullName(message: string): string | null {
+  const matches = [...message.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\b/g)]
+    .map((match) => match[1])
+    .filter((candidate) => !["merge/setup", "manual/setup"].includes(candidate.toLowerCase()));
+  return matches.at(-1) ?? null;
+}
+
+function setupChecklistGuidance(repoFullName: string | null): string {
+  const repo = repoFullName ?? "the connected repository";
+  return [
+    `**ShipBrain setup checklist for \`${repo}\`**`,
+    "",
+    "**GitHub**",
+    "- Repository is connected in ShipBrain Settings.",
+    "- GitHub token/app has access to read repo data, create branches, open Draft PRs, dispatch workflows, and receive webhook updates.",
+    "- Required branches exist: `develop` for preview work and `main` for production.",
+    "- GitHub Actions workflows exist for preview and production deploys.",
+    "- Required GitHub secrets are present for Cloudflare deploys and ShipBrain webhook/API calls.",
+    "",
+    "**Cloudflare**",
+    "- Preview and production projects/routes are configured for this repo.",
+    "- GitHub Actions can deploy to Cloudflare using configured account/project/token secrets.",
+    "- Preview URL and production URL callbacks can be recorded back into ShipBrain.",
+    "",
+    "**Incident Integration**",
+    "- Incident webhook or external monitor is configured manually for the connected repo/source.",
+    "- The integration posts incident events to ShipBrain with the expected secret/token.",
+    "- Incident payloads include repo, service, severity, summary, and enough context for hotfix analysis.",
+    "",
+    "**Manual Merge And Review**",
+    "- Review Draft PR code on GitHub before merging.",
+    "- Push any missing implementation commits to the Draft PR branch.",
+    "- Mark Draft PRs ready for review if your team requires it.",
+    "- Merge feature Draft PRs into `develop` manually.",
+    "- Review and merge release PRs from `develop` to `main` manually.",
+    "- Resolve merge conflicts on GitHub; ShipBrain should not pretend that step is complete.",
+    "",
+    "After those are verified, ShipBrain can create Draft PRs, deploy preview, create release PRs, deploy production, analyze incidents, create hotfixes, and track the audit trail."
+  ].join("\n");
 }
 
 function isProductionRedeployRequest(message: string): boolean {
@@ -642,6 +713,17 @@ export async function answerShipBrainQuestion(input: {
     limit: input.limit ?? 12
   });
 
+  if (isSetupChecklistRequest(input.message)) {
+    const repoFullName = extractRepoFullName(input.message) ?? input.repoFullName ?? context.activeRepo ?? null;
+    return {
+      activeRepo: context.activeRepo ?? null,
+      context,
+      historyCount: 0,
+      reply: setupChecklistGuidance(repoFullName),
+      action: null
+    };
+  }
+
   const history = input.threadId
     ? await listChatMessages({ supabase: input.supabase, userId: input.userId, threadId: input.threadId, limit: 12 })
     : [];
@@ -760,6 +842,14 @@ export async function answerShipBrainQuestion(input: {
       ...base,
       reply: recipeSelectionMessage(context),
       action
+    };
+  }
+
+  if (isDraftPrMergeRequest(input.message)) {
+    return {
+      ...base,
+      reply: draftPrMergeGuidance(),
+      action: null
     };
   }
 
@@ -947,6 +1037,16 @@ export async function streamShipBrainQuestion(input: {
     limit: input.limit ?? 12
   });
 
+  if (isSetupChecklistRequest(input.message)) {
+    const repoFullName = extractRepoFullName(input.message) ?? input.repoFullName ?? context.activeRepo ?? null;
+    return {
+      context,
+      history: [],
+      action: null,
+      stream: textStream(setupChecklistGuidance(repoFullName))
+    };
+  }
+
   const history = input.threadId
     ? await listChatMessages({ supabase: input.supabase, userId: input.userId, threadId: input.threadId, limit: 12 })
     : [];
@@ -1073,6 +1173,14 @@ export async function streamShipBrainQuestion(input: {
       ...base,
       action,
       stream: textStream(recipeSelectionMessage(context))
+    };
+  }
+
+  if (isDraftPrMergeRequest(input.message)) {
+    return {
+      ...base,
+      action: null,
+      stream: textStream(draftPrMergeGuidance())
     };
   }
 
