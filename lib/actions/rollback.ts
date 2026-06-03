@@ -226,21 +226,26 @@ export async function rollback(
     }
 
     // 4. Re-mark the target release as "deployed" so it shows as current
+    // IMPORTANT: Update deployed_at to NOW so it appears as the most recent production
+    const rollbackDeployedAt = new Date().toISOString();
     await ctx.db
       .from("specs")
       .update({
         release_status: "deployed",
-        updated_at: new Date().toISOString()
+        deployed_at: rollbackDeployedAt,
+        updated_at: rollbackDeployedAt
       })
       .eq("id", targetSpec.id);
 
     // 5. Also update any feature specs that were part of the target release back to deployed
+    // Update deployed_at so they appear as the most recently deployed
     if (targetSpec.release_pr_number) {
       await ctx.db
         .from("specs")
         .update({
           release_status: "deployed",
-          updated_at: new Date().toISOString()
+          deployed_at: rollbackDeployedAt,
+          updated_at: rollbackDeployedAt
         })
         .eq("repo_full_name", repoFullName)
         .eq("release_pr_number", targetSpec.release_pr_number);

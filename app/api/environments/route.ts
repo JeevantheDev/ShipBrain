@@ -25,12 +25,13 @@ export async function GET() {
     .limit(20);
 
   // Latest production per repo (deployed or deploying to main)
+  // Order by deployed_at to get the ACTUAL current production, not just most recently updated
   const { data: productions } = await supabase
     .from("specs")
     .select("id, repo_full_name, branch_name, base_branch, production_url, deployment_url, release_status, release_tag, release_sha, deployed_at, updated_at")
     .eq("user_id", user.id)
     .in("release_status", ["deployed", "deploying", "pending_deploy"])
-    .order("updated_at", { ascending: false })
+    .order("deployed_at", { ascending: false, nullsFirst: false })
     .limit(20);
 
   // Fetch repos to map repository name to production URL
