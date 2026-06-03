@@ -30,7 +30,7 @@ export default async function LandingPage() {
       {/* ============ TOP BAR ============ */}
       <header className="lp-top">
         <div className="container lp-top-inner">
-          <Link href="#" className="wordmark">
+          <Link href="/" className="wordmark">
             <div className="brand-mark">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <rect
@@ -221,16 +221,16 @@ export default async function LandingPage() {
             <article className="move-card">
               <span className="mono-label">move · 02</span>
               <h3 className="move-card-title">
-                Red CI, <em>explained</em>
+                CI <em>→</em> preview
               </h3>
               <p className="body">
-                When a build fails, ShipBrain reads the logs and tells you what
-                broke, in the same language you&apos;d use in Slack. Suggests a
-                fix. If CI passes, the deploy button unlocks — but still waits
-                for your confirm.
+                After the Draft PR is reviewed and merged, ShipBrain watches the
+                workflow, explains failed checks, and surfaces the next safe
+                preview action. A green build unlocks preview deployment, but
+                the click still belongs to you.
               </p>
               <div className="move-card-foot">
-                gated before deploy · 3-second undo window
+                CI verified · gated before preview deploy
               </div>
             </article>
 

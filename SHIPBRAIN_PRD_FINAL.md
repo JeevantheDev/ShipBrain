@@ -383,6 +383,7 @@ flowchart LR
 
     subgraph "AI Processing"
         G[LangChain Agent]
+        IQ[(Foundry IQ Knowledge Base<br/>ShipBrain AI Action Handbook)]
         H[Tool Calls]
     end
 
@@ -403,6 +404,7 @@ flowchart LR
     M1 --> G
     M2 --> G
     M3 --> G
+    IQ -. grounds product behavior,<br/>manual steps, NL mapping .-> G
     G --> H
     H --> I
     H --> J
@@ -496,6 +498,7 @@ flowchart TB
 
     subgraph "Azure AI Foundry"
         MODEL[GPT-4.1-mini]
+        IQ[(Foundry IQ Knowledge Base<br/>ShipBrain AI Action Handbook)]
     end
 
     WEB --> CHAT_API
@@ -504,6 +507,8 @@ flowchart TB
     TG_WH --> TGT
 
     SBC --> MODEL
+    SBC -. retrieves grounding .-> IQ
+    IQ -. handbook context .-> MODEL
     TGT --> SD
     TGT --> IA
     TGT --> PM
@@ -512,6 +517,7 @@ flowchart TB
     IA --> MODEL
     PM --> MODEL
     CS --> MODEL
+    TGT -. shared handbook behavior .-> IQ
 ```
 
 **Why Unified Architecture?**
