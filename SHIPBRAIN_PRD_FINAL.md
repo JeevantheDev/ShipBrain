@@ -372,6 +372,9 @@ flowchart LR
         D[Open Incidents]
         E[CI Status]
         F[Release Traces]
+        M1[(Chat History: 20 msgs)]
+        M2[(AI Memory Notes)]
+        M3[(GitHub Commits & Notifications)]
     end
 
     subgraph "AI Processing"
@@ -384,6 +387,7 @@ flowchart LR
         J[Trigger Deployments]
         K[Create PRs]
         L[Analyze Incidents]
+        M[Save/Update AI Notes]
     end
 
     A --> G
@@ -392,11 +396,15 @@ flowchart LR
     D --> G
     E --> G
     F --> G
+    M1 --> G
+    M2 --> G
+    M3 --> G
     G --> H
     H --> I
     H --> J
     H --> K
     H --> L
+    H --> M
 ```
 
 **Quick Prompts:**
@@ -672,6 +680,12 @@ flowchart TB
         TG[Telegram Bot]
     end
 
+    subgraph "Memory & Context Layer"
+        HIST[(Chat History<br/>Supabase chat_messages)]
+        MEM[(Persistent Memory Notes<br/>Supabase ai_memory_notes)]
+        CTX[(Live Context<br/>Repos, Deployments, Incidents)]
+    end
+
     subgraph "LangChain Layer"
         SC[ShipBrain Chat<br/>Tool Calling Agent]
         TOOLS[Telegram Tools<br/>Command Handlers]
@@ -688,6 +702,11 @@ flowchart TB
 
     CHAT --> SC
     TG --> TOOLS
+    
+    SC --> HIST
+    SC --> MEM
+    SC --> CTX
+    
     SC --> MF
     TOOLS --> CHAINS
     CHAINS --> MF

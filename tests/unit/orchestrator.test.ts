@@ -11,7 +11,10 @@ describe("release trace state machine", () => {
   });
 
   it("surfaces preview verification after develop merge", () => {
-    expect(pendingActionForTrace({ status: "merged_develop", draft_pr_number: 12 })).toBeNull();
+    expect(pendingActionForTrace({ status: "merged_develop", draft_pr_number: 12 })).toMatchObject({
+      type: "deploy_preview",
+      actor: "developer"
+    });
   });
 
   it("asks for a release PR once preview is live", () => {
