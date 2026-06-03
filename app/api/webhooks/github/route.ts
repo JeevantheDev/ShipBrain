@@ -208,13 +208,15 @@ export async function POST(request: Request) {
 
           const relPrNumber = fullSpec.release_pr_number || fullSpec.pr_number;
 
+          // IMPORTANT: Don't overwrite specs that were rolled back - preserve their status
           if (relPrNumber) {
             await supabase
               .from("specs")
               .update(deployedUpdate)
               .eq("repo_full_name", fullSpec.repo_full_name)
               .eq("release_pr_number", relPrNumber)
-              .neq("id", spec.id);
+              .neq("id", spec.id)
+              .neq("release_status", "rolled_back");
           }
 
           if (fullSpec.release_tag) {
@@ -223,10 +225,12 @@ export async function POST(request: Request) {
               .update(deployedUpdate)
               .eq("repo_full_name", fullSpec.repo_full_name)
               .eq("release_tag", fullSpec.release_tag)
-              .neq("id", spec.id);
+              .neq("id", spec.id)
+              .neq("release_status", "rolled_back");
           }
 
           // Also update all feature traces linked to this release to production_live
+          // IMPORTANT: Don't overwrite traces that were rolled back
           if (relPrNumber) {
             await supabase
               .from("release_traces")
@@ -245,7 +249,8 @@ export async function POST(request: Request) {
               })
               .eq("repo_full_name", fullSpec.repo_full_name)
               .eq("release_pr_number", relPrNumber)
-              .eq("type", "feature");
+              .eq("type", "feature")
+              .neq("status", "rolled_back");
           }
         }
       }
