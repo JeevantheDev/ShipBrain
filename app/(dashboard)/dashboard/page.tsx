@@ -28,7 +28,6 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="head-meta">
-          <span className="mono" style={{ fontSize: "12px", color: "var(--text-muted)" }}>ID: SB-CC-2026</span>
           <span className="pill" style={{ borderColor: "rgba(63,185,80,0.3)", color: "var(--green)", cursor: "default", height: "28px" }}>
             <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--green)", marginRight: 6 }}></span>
             approval: armed
