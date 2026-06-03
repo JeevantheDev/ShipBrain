@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHmac, createHash, timingSafeEqual } from "crypto";
 import { updateTraceBySpec } from "@/lib/orchestrator";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { updateRepoCurrentVersion } from "@/lib/shipbrain/repo-version";
 
 export const runtime = "nodejs";
 
@@ -68,7 +69,7 @@ export async function POST(request: Request) {
 
   let query = db
     .from("specs")
-    .select("id, release_status")
+    .select("id, release_status, release_tag, release_sha")
     .eq("repo_full_name", repoFullName)
     .order("updated_at", { ascending: false })
     .limit(1);
@@ -177,6 +178,17 @@ export async function POST(request: Request) {
 
           console.log(`[Cloudflare Deploy] Updated ${linkedSpecs.length} linked specs and traces for release PR #${releaseSpec.release_pr_number}`);
         }
+      }
+
+      // Update repo's current_version on successful production deployment
+      const releaseTag = body.releaseTag || body.release_tag || spec.release_tag;
+      if (releaseTag) {
+        await updateRepoCurrentVersion(db, {
+          repoFullName,
+          version: releaseTag,
+          sha: sha || spec.release_sha || null,
+          type: "release"
+        });
       }
     }
   } else if (failed) {

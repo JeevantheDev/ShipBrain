@@ -9,7 +9,8 @@ import {
   Layers, 
   BookOpen, 
   CheckCircle2, 
-  Rocket 
+  Rocket,
+  ShieldCheck
 } from "lucide-react";
 
 type ReleaseItem = {
@@ -79,7 +80,20 @@ export function AskAiWidget() {
   const latestRelease = releases[0];
   const hasReleases = releases.length > 0 && latestRelease?.releaseTag;
 
-  const cards: CardItem[] = hasReleases
+  const handbookCards: CardItem[] = [
+    {
+      label: "ShipBrain Action Guide",
+      prompt: `Using the ShipBrain AI Action Handbook, explain what ShipBrain can automate for ${activeRepoFullName} and what still needs manual approval or GitHub-side work.`,
+      icon: <BookOpen size={12} style={{ color: "var(--ai-purple)" }} />
+    },
+    {
+      label: "Setup & Manual Checklist",
+      prompt: `Using the ShipBrain AI Action Handbook, show the GitHub, Cloudflare, incident integration, and manual merge/setup checklist I should verify for ${activeRepoFullName}.`,
+      icon: <ShieldCheck size={12} style={{ color: "var(--green)" }} />
+    }
+  ];
+
+  const contextCards: CardItem[] = hasReleases
     ? [
         {
           label: "Generate Release Handbook",
@@ -114,6 +128,7 @@ export function AskAiWidget() {
           icon: <Layers size={12} style={{ color: "var(--text-muted)" }} />
         }
       ];
+  const cards = [...handbookCards, ...contextCards];
 
   const handleCardClick = (prompt: string) => {
     window.dispatchEvent(

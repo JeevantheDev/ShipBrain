@@ -520,6 +520,7 @@ function formatRelativeTime(dateStr: string | null): string {
 
 /**
  * Get deployment context for all user's repos (for Telegram/AI overview)
+ * Uses repos.current_version as the canonical source of truth for production version
  */
 export async function getAllReposDeploymentContext(
   db: SupabaseClient,
@@ -529,12 +530,15 @@ export async function getAllReposDeploymentContext(
   repoFullName: string;
   summary: string;
   currentTag: string | null;
+  currentTagType: string | null;
+  currentTagDeployedAt: string | null;
   pendingCommitsCount: number;
   developAhead: number;
 }>> {
+  // Fetch repos with current_version info (the canonical source)
   const { data: repos } = await db
     .from("repos")
-    .select("full_name")
+    .select("full_name, current_version, current_version_type, current_version_deployed_at")
     .eq("user_id", userId);
 
   if (!repos?.length) return [];
@@ -543,6 +547,8 @@ export async function getAllReposDeploymentContext(
     repoFullName: string;
     summary: string;
     currentTag: string | null;
+    currentTagType: string | null;
+    currentTagDeployedAt: string | null;
     pendingCommitsCount: number;
     developAhead: number;
   }> = [];
@@ -554,7 +560,10 @@ export async function getAllReposDeploymentContext(
     summaries.push({
       repoFullName: repo.full_name,
       summary: ctx.summary,
-      currentTag: ctx.currentProduction?.releaseTag || null,
+      // Use repos.current_version as the canonical source (updated only on successful deployments/rollbacks)
+      currentTag: repo.current_version || ctx.currentProduction?.releaseTag || null,
+      currentTagType: repo.current_version_type || null,
+      currentTagDeployedAt: repo.current_version_deployed_at || ctx.currentProduction?.deployedAt || null,
       pendingCommitsCount: ctx.pendingCommits.length,
       developAhead: ctx.branchComparison?.developAhead || 0
     });

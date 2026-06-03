@@ -3,6 +3,7 @@ import { updateTraceByIncident, updateTraceBySpec, completeRollback } from "@/li
 import { createReverseSyncPR } from "@/lib/github/pr";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { repoFromBearer } from "@/lib/shipbrain/api-auth";
+import { updateRepoCurrentVersion } from "@/lib/shipbrain/repo-version";
 
 export const runtime = "nodejs";
 
@@ -90,6 +91,16 @@ export async function POST(request: Request) {
       actor: "github-actions",
       details: body
     }).catch(() => null);
+
+    // Update repo's current_version on successful production deployment
+    if (nextStatus === "deployed" && tag) {
+      await updateRepoCurrentVersion(supabase, {
+        repoFullName,
+        version: tag,
+        sha: sha || null,
+        type: "release"
+      });
+    }
   }
 
   if (isHotfix && tag) {
@@ -167,6 +178,16 @@ export async function POST(request: Request) {
         actor: "github-actions",
         details: body
       }).catch(() => null);
+
+      // Update repo's current_version on successful hotfix deployment
+      if (releaseStatus === "deployed" && tag) {
+        await updateRepoCurrentVersion(supabase, {
+          repoFullName,
+          version: tag,
+          sha: sha || null,
+          type: "hotfix"
+        });
+      }
     }
   }
 

@@ -5,6 +5,14 @@ import { ArrowRight, Trash2, GitPullRequest } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CloseDraftPrModal } from "@/components/pr-sync/CloseDraftPrModal";
 
+type RepoVersion = {
+  currentVersion: string | null;
+  currentVersionSha: string | null;
+  currentVersionDeployedAt: string | null;
+  currentVersionType: "release" | "hotfix" | "rollback" | null;
+  repoName: string;
+};
+
 type RecentPrRun = {
   id: string;
   repo: string;
@@ -39,6 +47,7 @@ const selectedStorageKey = "shipbrain:selected-pr-run";
 
 export function DashboardPrOverview() {
   const [runs, setRuns] = useState<RecentPrRun[]>([]);
+  const [repoVersion, setRepoVersion] = useState<RepoVersion | null>(null);
   const [setupWarning, setSetupWarning] = useState("");
   const [loading, setLoading] = useState(true);
   const [closeRun, setCloseRun] = useState<RecentPrRun | null>(null);
@@ -47,9 +56,14 @@ export function DashboardPrOverview() {
 
   useEffect(() => {
     void loadRuns();
-    const interval = window.setInterval(() => void loadRuns(), 30000);
+    void loadRepoVersion();
+    const interval = window.setInterval(() => {
+      void loadRuns();
+      void loadRepoVersion();
+    }, 30000);
     const handleRefetch = () => {
       void loadRuns();
+      void loadRepoVersion();
     };
     window.addEventListener("shipbrain-refetch", handleRefetch);
     return () => {
@@ -57,6 +71,26 @@ export function DashboardPrOverview() {
       window.removeEventListener("shipbrain-refetch", handleRefetch);
     };
   }, []);
+
+  async function loadRepoVersion() {
+    try {
+      const response = await fetch("/api/repos/current-version", { cache: "no-store" });
+      if (response.ok) {
+        const data = await response.json();
+        if (data) {
+          setRepoVersion({
+            currentVersion: data.currentVersion ?? null,
+            currentVersionSha: data.currentVersionSha ?? null,
+            currentVersionDeployedAt: data.currentVersionDeployedAt ?? null,
+            currentVersionType: data.currentVersionType ?? null,
+            repoName: data.repoName ?? ""
+          });
+        }
+      }
+    } catch {
+      // Silently fail - version is optional metadata
+    }
+  }
 
   async function loadRuns() {
     try {
@@ -155,18 +189,13 @@ export function DashboardPrOverview() {
   const pendingPrs = useMemo(() => runs.filter((run) => run.status === "pending_pr").length, [runs]);
   const activeCiRuns = useMemo(() => runs.filter((run) => run.ciStatus && run.ciStatus !== "completed").length, [runs]);
   const conflictedPrs = useMemo(() => runs.filter((run) => run.hasMergeConflicts).length, [runs]);
-  // Find the latest deployed release by deployed_at timestamp (not just first in list)
-  const latestRelease = useMemo(() => {
-    const deployedReleases = runs.filter((run) => run.releaseTag && run.releaseStatus === "deployed");
-    if (deployedReleases.length === 0) return undefined;
-    // Sort by deployedAt descending to get the most recently deployed
-    return deployedReleases.sort((a, b) => {
-      const dateA = new Date(a.deployedAt || a.updatedAt || 0).getTime();
-      const dateB = new Date(b.deployedAt || b.updatedAt || 0).getTime();
-      return dateB - dateA;
-    })[0];
-  }, [runs]);
-  const hasRollback = useMemo(() => runs.some((run) => run.releaseStatus === "rolled_back"), [runs]);
+
+  // Use repo's current_version as the canonical source for production version
+  // This is updated ONLY on successful deployments (release, hotfix, rollback) - no complex date logic
+  const currentVersion = repoVersion?.currentVersion ?? null;
+  const currentVersionType = repoVersion?.currentVersionType ?? null;
+  const isRollback = currentVersionType === "rollback";
+  const isHotfix = currentVersionType === "hotfix";
   const activeRuns = useMemo(() => runs.filter((run) => {
     const activeRelease = run.releaseStatus === "release_pr_open" || run.releaseStatus === "pending_deploy" || run.releaseStatus === "deploying";
     return run.status !== "closed" && (run.status !== "merged" || activeRelease);
@@ -253,21 +282,29 @@ export function DashboardPrOverview() {
         <div className="metric">
           <div className="metric-label">
             <span>Current Version</span>
-            {hasRollback ? (
-              <span className="status-pill rolled_back" title="A release rollback was executed">
-                <span className="dot"></span>rolledback
+            {isRollback ? (
+              <span className="status-pill rolled_back" title="Production was rolled back">
+                <span className="dot"></span>rollback
               </span>
-            ) : (
+            ) : isHotfix ? (
+              <span className="status-pill warning" title="Hotfix deployment">
+                <span className="dot"></span>hotfix
+              </span>
+            ) : currentVersion ? (
               <span className="status-pill passed">
                 <span className="dot"></span>stable
+              </span>
+            ) : (
+              <span className="status-pill">
+                <span className="dot"></span>none
               </span>
             )}
           </div>
           <div className="metric-row">
-            <span className="metric-version">{latestRelease?.releaseTag ?? "NA"}</span>
+            <span className="metric-version">{currentVersion ?? "NA"}</span>
           </div>
           <div className="metric-foot">
-            <span className="metric-aside tag">{runs[0]?.repo.split("/")[1] ?? "main"}</span>
+            <span className="metric-aside tag">{repoVersion?.repoName || (runs[0]?.repo.split("/")[1] ?? "main")}</span>
             <div className="spark">
               <span style={{ height: 4 }}></span>
               <span style={{ height: 8 }}></span>

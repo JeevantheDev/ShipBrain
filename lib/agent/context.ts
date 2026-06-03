@@ -23,7 +23,7 @@ export async function getShipBrainAgentContext({
 
   const reposQuery = supabase
     .from("repos")
-    .select("id, full_name, setup_status, setup_pr_url, setup_pr_number, setup_metadata, connected_at, created_at")
+    .select("id, full_name, setup_status, setup_pr_url, setup_pr_number, setup_metadata, connected_at, created_at, current_version, current_version_sha, current_version_deployed_at, current_version_type")
     .eq("user_id", userId)
     .order("connected_at", { ascending: false, nullsFirst: false })
     .limit(limit);
@@ -129,8 +129,18 @@ export async function getShipBrainAgentContext({
   const recentPrs = specs.data ?? [];
   const enrichedRepoRows = repoRows.map((repo: any) => ({
     ...repo,
-    active: repoFilter ? repo.full_name === repoFilter : false
+    active: repoFilter ? repo.full_name === repoFilter : false,
+    // Include current production version info for AI context
+    currentVersion: repo.current_version ?? null,
+    currentVersionSha: repo.current_version_sha ?? null,
+    currentVersionDeployedAt: repo.current_version_deployed_at ?? null,
+    currentVersionType: repo.current_version_type ?? null
   }));
+
+  // Get the active repo data for version context
+  const activeRepoData = repoFilter
+    ? repoRows.find((repo: any) => repo.full_name === repoFilter)
+    : repoRows[0] ?? null;
 
   // Filter for truly pending deployments:
   // - Must be in a deployable status
@@ -184,9 +194,11 @@ export async function getShipBrainAgentContext({
     memoryNotes: formatMemoryNotesForPrompt(memoryNotes),
     // Fresh deployment context with current state + GitHub commits (#1)
     deploymentState: deploymentContext ? {
-      currentProductionTag: deploymentContext.currentProduction?.releaseTag ?? null,
-      currentProductionSha: deploymentContext.currentProduction?.releaseSha ?? null,
-      currentProductionDeployedAt: deploymentContext.currentProduction?.deployedAt ?? null,
+      // Use repo's current_version as the canonical source (simpler, more reliable)
+      currentProductionTag: activeRepoData?.current_version ?? deploymentContext.currentProduction?.releaseTag ?? null,
+      currentProductionSha: activeRepoData?.current_version_sha ?? deploymentContext.currentProduction?.releaseSha ?? null,
+      currentProductionDeployedAt: activeRepoData?.current_version_deployed_at ?? deploymentContext.currentProduction?.deployedAt ?? null,
+      currentVersionType: activeRepoData?.current_version_type ?? null,
       currentPreviewBranch: deploymentContext.currentPreview?.branch ?? null,
       currentPreviewUrl: deploymentContext.currentPreview?.previewUrl ?? null,
       recentRollbacks: deploymentContext.recentRollbacks,

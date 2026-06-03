@@ -1,6 +1,7 @@
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { pendingActionForTrace, phaseForTraceStatus } from "@/lib/orchestrator/state-machine";
 import { compareSemver } from "@/lib/shipbrain/semver";
+import { updateRepoCurrentVersion } from "@/lib/shipbrain/repo-version";
 import type { ReleaseTraceStatus, ReleaseTraceType, TraceEventType, TraceSource } from "@/lib/orchestrator/types";
 
 // Re-export LangChain orchestrator agent
@@ -563,6 +564,14 @@ export async function completeRollback(input: {
         }
       }
     }
+
+    // Update repo's current_version on successful rollback
+    await updateRepoCurrentVersion(db, {
+      repoFullName: rollback.repo_full_name,
+      version: rollback.target_release_tag,
+      sha: rollback.target_release_sha || null,
+      type: "rollback"
+    });
   }
 
   // Find and update the trace

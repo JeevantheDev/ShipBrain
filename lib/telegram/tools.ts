@@ -1061,10 +1061,11 @@ export async function getTraceStatus(user: TelegramUser) {
         ...repoContexts.slice(0, 3).map((ctx) => {
           const repoName = ctx.repoFullName.split("/")[1];
           const tag = ctx.currentTag ? `\`${ctx.currentTag}\`` : "not deployed";
+          const typeHint = ctx.currentTagType && ctx.currentTagType !== "release" ? ` [${ctx.currentTagType}]` : "";
           const pending = ctx.developAhead > 0
             ? ` (${ctx.developAhead} commits pending)`
             : "";
-          return `• ${repoName}: ${tag}${pending}`;
+          return `• ${repoName}: ${tag}${typeHint}${pending}`;
         }),
         ""
       ]
