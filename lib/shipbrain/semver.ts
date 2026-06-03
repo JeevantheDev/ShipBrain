@@ -10,7 +10,9 @@ export interface SemverParts {
 
 export function parseSemver(tag: string): SemverParts | null {
   if (!tag) return null;
-  const match = tag.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([\w.]+))?$/);
+  // Support standard semver (v1.0.0) and prefixed versions (hotfix-v1.0.3, release-v1.0.2)
+  // The prefix is optional and can be: hotfix-, release-, feature-, etc.
+  const match = tag.trim().match(/^(?:[\w-]+-)?v?(\d+)\.(\d+)\.(\d+)(?:-([\w.]+))?$/);
   if (!match) return null;
   return {
     major: parseInt(match[1], 10),
