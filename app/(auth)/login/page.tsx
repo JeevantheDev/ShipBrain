@@ -1,8 +1,14 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { AuthForm } from "@/components/auth/AuthForm";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import "../../landing.css";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Sign In | ShipBrain",
+  description: "Sign in to ShipBrain to connect your GitHub repositories and manage your production pipeline with AI."
+};
 
 export default async function LoginPage() {
   const supabase = getSupabaseServerClient();

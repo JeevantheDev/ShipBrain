@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { DashboardPrOverview } from "@/components/dashboard/DashboardPrOverview";
 import { EnvironmentsWidget } from "@/components/dashboard/EnvironmentsWidget";
@@ -5,6 +6,11 @@ import { EnvVarsWidget } from "@/components/dashboard/EnvVarsWidget";
 import { PendingDeployQueue } from "@/components/dashboard/PendingDeployQueue";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { AskAiWidget } from "@/components/dashboard/AskAiWidget";
+
+export const metadata: Metadata = {
+  title: "Dashboard | ShipBrain",
+  description: "Manage repository onboarding, spec plans, environments, and production deployments."
+};
 
 export default function DashboardPage() {
   return (

@@ -3,7 +3,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ShipBrain",
-  description: "AI-powered production command center"
+  description: "AI-powered production command center",
+  icons: "/icon.svg"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

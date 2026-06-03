@@ -1,8 +1,29 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TraceActions } from "@/components/releases/TraceActions";
 import { TraceTimeline } from "@/components/releases/TraceTimeline";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+
+export async function generateMetadata({ params }: { params: { id: string } }): Promise<Metadata> {
+  const supabase = getSupabaseServerClient();
+  const { data: trace } = await supabase
+    .from("release_traces")
+    .select("title, type")
+    .eq("id", params.id)
+    .maybeSingle();
+
+  if (!trace) {
+    return {
+      title: "Release Trace Detail | ShipBrain"
+    };
+  }
+
+  return {
+    title: `${trace.title} (${trace.type}) | ShipBrain`,
+    description: `Track details and events timeline for release trace: ${trace.title}.`
+  };
+}
 
 export const dynamic = "force-dynamic";
 

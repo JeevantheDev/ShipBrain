@@ -1,5 +1,11 @@
+import type { Metadata } from "next";
 import { ReleaseTraceBoard } from "@/components/releases/ReleaseTraceBoard";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+
+export const metadata: Metadata = {
+  title: "Release Trace Board | ShipBrain",
+  description: "Track and trace release progressions, deployment gates, pull requests, and incidents in a unified pipeline."
+};
 
 export const dynamic = "force-dynamic";
 

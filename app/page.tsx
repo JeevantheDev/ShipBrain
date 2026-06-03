@@ -1,8 +1,14 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { LandingBody } from "@/components/landing/LandingBody";
 import "./landing.css";
+
+export const metadata: Metadata = {
+  title: "ShipBrain | AI-powered production command center",
+  description: "Ship software at AI speed, with humans still in charge. ShipBrain turns engineering tasks into reviewed PRs, explains failing CI, and triages production incidents."
+};
 
 export const dynamic = "force-dynamic";
 
