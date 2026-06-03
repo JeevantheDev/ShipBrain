@@ -101,7 +101,7 @@ export async function getShipBrainAgentContext({
 
   const failed = [specs, ciRuns, incidents, traces, notifications].find((result) => result.error);
   if (failed?.error) throw new Error(failed.error.message);
-  const recipeRows = recipes.error ? DEFAULT_SPEC_PR_RECIPES : (recipes.data ?? DEFAULT_SPEC_PR_RECIPES);
+  const recipeRows = recipes.error || !recipes.data?.length ? DEFAULT_SPEC_PR_RECIPES : recipes.data;
 
   // ── #1: Get fresh deployment context with GitHub commit data enabled
   // Using a 5-second timeout to avoid blocking the AI response on slow GitHub API calls.

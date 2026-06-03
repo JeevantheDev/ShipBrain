@@ -11,7 +11,8 @@ function toClientMessage(row: any) {
     id: row.id,
     role: row.role,
     content: row.content,
-    createdAt: row.created_at
+    createdAt: row.created_at,
+    responseSource: row.metadata?.responseSource ?? null
   };
 }
 
@@ -96,7 +97,8 @@ export async function POST(request: Request) {
     threadId: thread.id,
     message,
     limit: 12,
-    pendingAction: body.pendingAction ?? null
+    pendingAction: body.pendingAction ?? null,
+    quickPromptId: typeof body.quickPromptId === "string" ? body.quickPromptId : null
   });
 
   const assistantMessage = await appendChatMessage({
@@ -107,7 +109,8 @@ export async function POST(request: Request) {
     content: answer.reply,
     metadata: {
       activeRepo: answer.activeRepo,
-      historyCount: answer.historyCount
+      historyCount: answer.historyCount,
+      responseSource: answer.responseSource
     }
   });
 

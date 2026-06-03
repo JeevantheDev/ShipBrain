@@ -106,14 +106,16 @@ export async function POST(request: Request) {
           threadId,
           message,
           limit: 20, // #3: match the raised history window
-          pendingAction
+          pendingAction,
+          quickPromptId: typeof body.quickPromptId === "string" ? body.quickPromptId : null
         });
 
         // Send context and action state
         controller.enqueue(encoder.encode(event("context", {
           activeRepo: answer.context.activeRepo,
           historyCount: answer.history.length,
-          action: answer.action ?? null
+          action: answer.action ?? null,
+          responseSource: answer.responseSource
         })));
 
         for await (const chunk of answer.stream) {
@@ -133,6 +135,7 @@ export async function POST(request: Request) {
             activeRepo: answer.context.activeRepo,
             historyCount: answer.history.length,
             streamed: true,
+            responseSource: answer.responseSource,
             action: answer.action ?? null,
             // #6: Persist read tool result so follow-up turns can reference it
             ...(answer.action?.type && answer.action?.result
@@ -147,9 +150,11 @@ export async function POST(request: Request) {
             id: assistantMessage.id,
             role: assistantMessage.role,
             content: assistantMessage.content,
-            createdAt: assistantMessage.created_at
+            createdAt: assistantMessage.created_at,
+            responseSource: answer.responseSource
           },
-          action: answer.action ?? null
+          action: answer.action ?? null,
+          responseSource: answer.responseSource
         })));
       } catch (error) {
         controller.enqueue(encoder.encode(event("error", {

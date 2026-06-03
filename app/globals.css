@@ -5001,12 +5001,31 @@ p {
 }
 
 .chat-role {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 6px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.chat-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid rgba(47, 129, 247, 0.24);
+  border-radius: 999px;
+  background: rgba(47, 129, 247, 0.08);
+  color: var(--brand);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .chat-bubble p {
@@ -6320,4 +6339,3 @@ p {
   opacity: 1;
   transform: translate(0, 0);
 }
-

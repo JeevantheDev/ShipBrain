@@ -39,6 +39,7 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  responseSource?: string | null;
 };
 
 type ChatThread = {
@@ -87,6 +88,7 @@ type ChatDrawerProps = {
 };
 
 type QuickPrompt = {
+  id: string;
   label: string;
   prompt: string;
   Icon: React.ComponentType<{ size?: number | string }>;
@@ -95,31 +97,31 @@ type QuickPrompt = {
 
 const quickPrompts: QuickPrompt[] = [
   // ── Info / Read ──────────────────────────────────────────────────────
-  { Icon: Clock,          category: "info",     label: "What's pending?",         prompt: "What's pending deployment?" },
-  { Icon: GitPullRequest, category: "pr",       label: "My recent PRs",           prompt: "Show my recent PRs." },
-  { Icon: Activity,       category: "info",     label: "CI status",               prompt: "Show CI status." },
-  { Icon: Layers,         category: "release",  label: "Release pipeline",        prompt: "Show release trace status." },
-  { Icon: BookOpen,       category: "release",  label: "Release handbook",        prompt: "Prepare a release handbook based on the recent production release." },
-  { Icon: AlertTriangle,  category: "incident", label: "Active incidents",        prompt: "Show active incidents." },
+  { id: "pending_deployments", Icon: Clock,          category: "info",     label: "What's pending?",         prompt: "What's pending deployment?" },
+  { id: "recent_prs",          Icon: GitPullRequest, category: "pr",       label: "My recent PRs",           prompt: "Show my recent PRs." },
+  { id: "ci_status",           Icon: Activity,       category: "info",     label: "CI status",               prompt: "Show CI status." },
+  { id: "release_pipeline",    Icon: Layers,         category: "release",  label: "Release pipeline",        prompt: "Show release trace status." },
+  { id: "release_handbook",    Icon: BookOpen,       category: "release",  label: "Release handbook",        prompt: "Prepare a release handbook based on the recent production release." },
+  { id: "active_incidents",    Icon: AlertTriangle,  category: "incident", label: "Active incidents",        prompt: "Show active incidents." },
 
   // ── PR & Spec ─────────────────────────────────────────────────────────
-  { Icon: FilePlus,       category: "pr",       label: "Create Draft PR",         prompt: "Create Draft PR from a sample ticket." },
-  { Icon: GitBranch,      category: "release",  label: "Draft release PR",        prompt: "Create a release draft PR from develop to main." },
+  { id: "create_draft_pr",     Icon: FilePlus,       category: "pr",       label: "Create Draft PR",         prompt: "Create Draft PR from a sample ticket." },
+  { id: "create_release_pr",   Icon: GitBranch,      category: "release",  label: "Draft release PR",        prompt: "Create a release draft PR from develop to main." },
 
   // ── Deploy ────────────────────────────────────────────────────────────
-  { Icon: Rocket,         category: "deploy",   label: "Deploy to preview",       prompt: "Deploy my merged PR to preview." },
-  { Icon: RotateCcw,      category: "deploy",   label: "Redeploy preview",        prompt: "Redeploy preview." },
-  { Icon: Globe,          category: "deploy",   label: "Deploy to production",    prompt: "Deploy to production." },
-  { Icon: RotateCcw,      category: "deploy",   label: "Redeploy release tag",    prompt: "Redeploy my current release tag." },
+  { id: "deploy_preview",      Icon: Rocket,         category: "deploy",   label: "Deploy to preview",       prompt: "Deploy my merged PR to preview." },
+  { id: "redeploy_preview",    Icon: RotateCcw,      category: "deploy",   label: "Redeploy preview",        prompt: "Redeploy preview." },
+  { id: "deploy_production",   Icon: Globe,          category: "deploy",   label: "Deploy to production",    prompt: "Deploy to production." },
+  { id: "redeploy_release_tag", Icon: RotateCcw,      category: "deploy",   label: "Redeploy release tag",    prompt: "Redeploy my current release tag." },
 
   // ── Release ───────────────────────────────────────────────────────────
-  { Icon: RotateCcw,      category: "release",  label: "Rollback production",     prompt: "Rollback production to previous version." },
+  { id: "rollback_production", Icon: RotateCcw,      category: "release",  label: "Rollback production",     prompt: "Rollback production to previous version." },
 
   // ── Incidents ─────────────────────────────────────────────────────────
-  { Icon: Bug,            category: "incident", label: "Create hotfix",           prompt: "Create a hotfix for the active incident." },
-  { Icon: GitMerge,       category: "incident", label: "Approve hotfix",          prompt: "Approve and deploy the hotfix." },
-  { Icon: Search,         category: "incident", label: "Analyze incident",        prompt: "Analyze the active incident." },
-  { Icon: ShieldCheck,    category: "incident", label: "Resolve incident",        prompt: "Resolve the active incident." },
+  { id: "create_hotfix",       Icon: Bug,            category: "incident", label: "Create hotfix",           prompt: "Create a hotfix for the active incident." },
+  { id: "approve_hotfix",      Icon: GitMerge,       category: "incident", label: "Approve hotfix",          prompt: "Approve and deploy the hotfix." },
+  { id: "analyze_incident",    Icon: Search,         category: "incident", label: "Analyze incident",        prompt: "Analyze the active incident." },
+  { id: "resolve_incident",    Icon: ShieldCheck,    category: "incident", label: "Resolve incident",        prompt: "Resolve the active incident." },
 ];
 
 const welcomeMessage: ChatMessage = {
@@ -403,7 +405,7 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, open]);
 
-  const sendMessage = useCallback(async (nextInput?: string) => {
+  const sendMessage = useCallback(async (nextInput?: string, options?: { quickPromptId?: string }) => {
     const text = (nextInput ?? input).trim();
     if (!text || loading) return;
 
@@ -421,6 +423,7 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
         body: JSON.stringify({
           message: text,
           threadId,
+          quickPromptId: options?.quickPromptId ?? null,
           pendingAction: pendingAction?.status === "pending_confirmation" || pendingAction?.status === "needs_input" ? pendingAction : null
         })
       });
@@ -450,6 +453,11 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
             if (data.action) {
               setPendingAction(data.action);
             }
+            if (data.responseSource) {
+              setMessages((items) => items.map((item) =>
+                item.id === assistantId ? { ...item, responseSource: data.responseSource } : item
+              ));
+            }
           } else if (type === "delta") {
             const maskedDelta = maskSensitiveInfo(data.delta ?? "");
             setMessages((items) => items.map((item) =>
@@ -461,7 +469,12 @@ export function ChatDrawer({ open, onClose }: ChatDrawerProps) {
               const maskedContent = maskSensitiveInfo(data.assistantMessage.content ?? "");
               setMessages((items) => items.map((item) =>
                 item.id === assistantId
-                  ? { id: data.assistantMessage.id, role: "assistant", content: maskedContent || item.content }
+                  ? {
+                      id: data.assistantMessage.id,
+                      role: "assistant",
+                      content: maskedContent || item.content,
+                      responseSource: data.assistantMessage.responseSource ?? data.responseSource ?? item.responseSource ?? null
+                    }
                   : item
               ));
             }
@@ -759,7 +772,15 @@ Please try again or check the console for more details.`;
                 </div>
                 <div className="chat-bubble">
                   {!isTyping && (
-                    <div className="chat-role">{message.role === "assistant" ? "ShipBrain AI" : "You"}</div>
+                    <div className="chat-role">
+                      <span>{message.role === "assistant" ? "ShipBrain AI" : "You"}</span>
+                      {message.role === "assistant" && message.responseSource === "foundry_iq" && (
+                        <span className="chat-source-badge" title="Grounded by the deployed Foundry IQ knowledge source">
+                          <BookOpen size={11} />
+                          Foundry IQ
+                        </span>
+                      )}
+                    </div>
                   )}
                   {isTyping ? (
                     <TypingIndicator />
@@ -941,12 +962,12 @@ Please try again or check the console for more details.`;
             </button>
             {suggestionsExpanded && (
               <div className="chat-suggestions">
-                {quickPrompts.map(({ label, prompt, Icon, category }) => (
+                {quickPrompts.map(({ id, label, prompt, Icon, category }) => (
                   <button
                     type="button"
                     key={prompt}
                     className={`chat-suggestion-btn cat-${category}`}
-                    onClick={() => void sendMessage(prompt)}
+                    onClick={() => void sendMessage(prompt, { quickPromptId: id })}
                     disabled={loading}
                     title={prompt}
                   >

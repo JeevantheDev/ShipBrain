@@ -35,6 +35,8 @@ type SupabaseLike = {
   from: (table: string) => any;
 };
 
+export type ChatResponseSource = "foundry_iq" | "runtime_action" | "runtime_tool" | "runtime_guardrail" | "runtime_handbook";
+
 // ─── System Prompt ────────────────────────────────────────────────────────────
 
 const systemPrompt = `You are ShipBrain AI, a senior production engineering assistant embedded inside a deployment dashboard.
@@ -143,7 +145,8 @@ async function* textStream(content: string) {
   yield { content };
 }
 
-function isSpecToPrRecipeRequest(message: string): boolean {
+function isSpecToPrRecipeRequest(message: string, quickPromptId?: string | null): boolean {
+  if (quickPromptId === "create_draft_pr") return true;
   return /\b(create|start|new|make)\b.*\b(draft\s*)?pr\b/i.test(message) ||
     /\b(create|start|new|make)\b.*\bspec[-\s]?to[-\s]?pr\b/i.test(message);
 }
@@ -699,12 +702,14 @@ export async function answerShipBrainQuestion(input: {
   message: string;
   limit?: number;
   pendingAction?: ChatAction | null;
+  quickPromptId?: string | null;
 }): Promise<{
   reply: string;
   activeRepo: string | null;
   context: any;
   historyCount: number;
   action: ChatAction | null;
+  responseSource: ChatResponseSource;
 }> {
   const context = await getShipBrainAgentContext({
     supabase: input.supabase,
@@ -720,7 +725,8 @@ export async function answerShipBrainQuestion(input: {
       context,
       historyCount: 0,
       reply: setupChecklistGuidance(repoFullName),
-      action: null
+      action: null,
+      responseSource: "runtime_handbook"
     };
   }
 
@@ -728,7 +734,12 @@ export async function answerShipBrainQuestion(input: {
     ? await listChatMessages({ supabase: input.supabase, userId: input.userId, threadId: input.threadId, limit: 12 })
     : [];
 
-  const base = { activeRepo: context.activeRepo ?? null, context, historyCount: history.length };
+  const base = {
+    activeRepo: context.activeRepo ?? null,
+    context,
+    historyCount: history.length,
+    responseSource: "runtime_action" as ChatResponseSource
+  };
 
   // Onboarding gate
   const onboardingMsg = checkRepoOnboarding(context);
@@ -836,7 +847,7 @@ export async function answerShipBrainQuestion(input: {
     }
   }
 
-  if (isSpecToPrRecipeRequest(input.message)) {
+  if (isSpecToPrRecipeRequest(input.message, input.quickPromptId)) {
     const action = buildRecipeSelectionAction(context);
     return {
       ...base,
@@ -945,7 +956,7 @@ export async function answerShipBrainQuestion(input: {
   // No tool call — plain text reply
   if (!toolCalls.length) {
     const reply = typeof response.content === "string" ? response.content : JSON.stringify(response.content);
-    return { ...base, reply, action: null };
+    return { ...base, reply, action: null, responseSource: "foundry_iq" };
   }
 
   // Parse the first tool call
@@ -962,7 +973,8 @@ export async function answerShipBrainQuestion(input: {
     return {
       ...base,
       reply: result,
-      action: { type: toolName as any, status: "completed", params: args, result }
+      action: { type: toolName as any, status: "completed", params: args, result },
+      responseSource: "runtime_tool"
     };
   }
 
@@ -975,7 +987,8 @@ export async function answerShipBrainQuestion(input: {
     return {
       ...base,
       reply: recipeSelectionMessage(context),
-      action
+      action,
+      responseSource: "runtime_action"
     };
   }
 
@@ -1024,11 +1037,13 @@ export async function streamShipBrainQuestion(input: {
   message: string;
   limit?: number;
   pendingAction?: ChatAction | null;
+  quickPromptId?: string | null;
 }): Promise<{
   context: any;
   history: StoredChatMessage[];
   action: ChatAction | null;
   stream: AsyncIterable<any>;
+  responseSource: ChatResponseSource;
 }> {
   const context = await getShipBrainAgentContext({
     supabase: input.supabase,
@@ -1043,7 +1058,8 @@ export async function streamShipBrainQuestion(input: {
       context,
       history: [],
       action: null,
-      stream: textStream(setupChecklistGuidance(repoFullName))
+      stream: textStream(setupChecklistGuidance(repoFullName)),
+      responseSource: "runtime_handbook"
     };
   }
 
@@ -1051,7 +1067,7 @@ export async function streamShipBrainQuestion(input: {
     ? await listChatMessages({ supabase: input.supabase, userId: input.userId, threadId: input.threadId, limit: 12 })
     : [];
 
-  const base = { context, history };
+  const base = { context, history, responseSource: "runtime_action" as ChatResponseSource };
 
   // Onboarding gate
   const lowerMessage = input.message.toLowerCase();
@@ -1167,7 +1183,7 @@ export async function streamShipBrainQuestion(input: {
     }
   }
 
-  if (isSpecToPrRecipeRequest(input.message)) {
+  if (isSpecToPrRecipeRequest(input.message, input.quickPromptId)) {
     const action = buildRecipeSelectionAction(context);
     return {
       ...base,
@@ -1281,7 +1297,7 @@ export async function streamShipBrainQuestion(input: {
   if (!toolCalls.length) {
     // No tool call — stream the response
     const stream = await modelWithTools.stream(messages);
-    return { ...base, action: null, stream };
+    return { ...base, action: null, stream, responseSource: "foundry_iq" };
   }
 
   // Parse tool call
@@ -1298,7 +1314,8 @@ export async function streamShipBrainQuestion(input: {
     return {
       ...base,
       action: { type: toolName as any, status: "completed", params: args, result },
-      stream: textStream(result)
+      stream: textStream(result),
+      responseSource: "runtime_tool"
     };
   }
 

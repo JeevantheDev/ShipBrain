@@ -69,4 +69,34 @@ describe("ShipBrain chat routing", () => {
     expect(result.reply).toContain("**Manual Merge And Review**");
     expect(getModel).not.toHaveBeenCalled();
   });
+
+  it("uses typed quick prompt ids to start the Draft PR recipe chooser", async () => {
+    vi.mocked(getShipBrainAgentContext).mockResolvedValueOnce({
+      activeRepo: "acme/shop",
+      repos: [{ full_name: "acme/shop" }],
+      specPrRecipes: [
+        {
+          id: "test-color-change",
+          label: "Heading color change",
+          prefix: "test",
+          baseBranch: "develop",
+          isSample: true
+        }
+      ]
+    } as any);
+
+    const result = await answerShipBrainQuestion({
+      supabase: { from: vi.fn() },
+      userId: "user-1",
+      repoFullName: "acme/shop",
+      message: "Start the selected quick prompt.",
+      quickPromptId: "create_draft_pr"
+    });
+
+    expect(result.action?.type).toBe("spec_to_pr");
+    expect(result.action?.status).toBe("needs_input");
+    expect(result.reply).toContain("Choose a sample ticket");
+    expect(result.reply).toContain("Heading color change");
+    expect(getModel).not.toHaveBeenCalled();
+  });
 });
