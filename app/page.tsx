@@ -241,7 +241,7 @@ export default async function LandingPage() {
             <article className="move-card">
               <span className="mono-label">move · 03</span>
               <h3 className="move-card-title">
-                Incidents, <em>analyzed</em>
+                Incidents, analyzed
               </h3>
               <p className="body">
                 A webhook fires or you paste an alert. ShipBrain proposes a root
@@ -256,7 +256,7 @@ export default async function LandingPage() {
             <article className="move-card">
               <span className="mono-label">move · 04</span>
               <h3 className="move-card-title">
-                Post-mortems, <em>drafted</em>
+                Post-mortems, drafted
               </h3>
               <p className="body">
                 When an incident resolves, the post-mortem is already written —
@@ -527,10 +527,7 @@ export default async function LandingPage() {
           </div>
 
           <div className="footer-line">
-            © 2026 · shipbrain · built in a weekend with{" "}
-            <em className="serif">
-              too much coffee and a healthy fear of autonomy
-            </em>
+            © 2026 · shipbrain · buit by Jeeven Jyoti Dash and Amit Kumar Rout
           </div>
         </div>
       </section>
