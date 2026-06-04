@@ -22,7 +22,7 @@ export default async function LoginPage() {
     <main className="landing-page-wrapper" style={{ position: "relative" }}>
       <header>
         <div className="container lp-top-inner-naked">
-          <Link href="#" className="wordmark">
+          <Link href="/" className="wordmark">
             <div className="brand-mark">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <rect

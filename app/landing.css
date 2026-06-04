@@ -210,7 +210,14 @@ body.landing-active {
   padding-bottom: 80px;
   position: relative;
 }
-.hero-inner { max-width: 1100px; width: 100%; }
+.hero-inner {
+  max-width: 1200px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 60px;
+}
+.hero-text { flex: 1; min-width: 0; }
 .hero .eyebrow {
   display: block;
   margin-bottom: 36px;
@@ -680,6 +687,29 @@ body.landing-active {
 .codeblock .key { color: var(--text); }
 .codeblock .val { color: var(--accent); }
 
+/*===============Telegram===========*/
+.telegram-split {
+  display: flex;
+  gap: 120px;
+}
+.telegram-text {
+  flex: 1;
+  min-width: 0;
+}
+.telegram-text .section-head {
+  margin-bottom: 32px;
+}
+
+.phone-row {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 32px;
+  margin-top: 48px;
+}
+
+
+
 /* ============ SECTION 05 — Demo player ============ */
 .player {
   margin-top: 56px;
@@ -890,6 +920,10 @@ body.landing-active {
 }
 
 /* ============ Responsive ============ */
+@media (max-width: 960px) {
+  .hero-inner { flex-direction: column; align-items: flex-start; gap: 48px; }
+}
+
 @media (max-width: 880px) {
   .landing-page-wrapper .container { padding: 0 24px; }
   .landing-page-wrapper .section { padding: 90px 0; }
