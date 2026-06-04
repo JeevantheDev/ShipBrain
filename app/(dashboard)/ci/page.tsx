@@ -400,18 +400,23 @@ export default function CiPage() {
     return null;
   }
 
-  function getRunCategory(run: CiRun): "CI" | "Notify" | "Release" {
+  function getRunCategory(run: CiRun): "CI" | "Notify" | "Release" | null {
     const name = (run.workflowName ?? run.title ?? "").toLowerCase();
+
+    // Hide production/release/deploy workflows on develop branch without a release tag
+    // These are not valid production deploys and should not appear anywhere
+    if ((name.includes("production") || name.includes("release") || name.includes("deploy")) &&
+        !name.includes("preview") &&
+        run.branch === "develop" &&
+        !run.releaseTag) {
+      return null; // Hide completely
+    }
+
     if (name.includes("notify")) {
       return "Notify";
     }
     if (name.includes("production") || name.includes("release") || name.includes("deploy")) {
       if (name.includes("preview")) {
-        return "CI";
-      }
-      // Hide from Release tab if it's a develop branch without a valid release tag
-      // Production deploys should be on main branch with a proper release tag
-      if (run.branch === "develop" && !run.releaseTag) {
         return "CI";
       }
       return "Release";
@@ -427,7 +432,10 @@ export default function CiPage() {
     return runs.some(run => getRunCategory(run) === category && run.conclusion && run.conclusion !== "success");
   }
 
-  const filteredRuns = runs.filter(run => getRunCategory(run) === activeTab);
+  const filteredRuns = runs.filter(run => {
+    const category = getRunCategory(run);
+    return category !== null && category === activeTab;
+  });
   const totalPagesForTab = Math.ceil(filteredRuns.length / tabPageSize);
   const currentPageForTab = Math.max(1, Math.min(tabPages[activeTab], totalPagesForTab));
   const paginatedRuns = filteredRuns.slice((currentPageForTab - 1) * tabPageSize, currentPageForTab * tabPageSize);
