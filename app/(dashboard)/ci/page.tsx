@@ -409,6 +409,11 @@ export default function CiPage() {
       if (name.includes("preview")) {
         return "CI";
       }
+      // Hide from Release tab if it's a develop branch without a valid release tag
+      // Production deploys should be on main branch with a proper release tag
+      if (run.branch === "develop" && !run.releaseTag) {
+        return "CI";
+      }
       return "Release";
     }
     return "CI";
