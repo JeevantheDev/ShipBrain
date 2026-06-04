@@ -119,21 +119,33 @@ export async function deleteMemoryNote(
   }
 }
 
+/** Category to single-letter code mapping for compact format */
+const CATEGORY_CODE: Record<MemoryNote["category"], string> = {
+  incident: "I",
+  release: "R",
+  convention: "C",
+  preference: "P",
+  general: "G"
+};
+
 /**
  * Format memory notes as a compact block to inject into the AI system prompt.
+ * Uses abbreviated format to reduce token usage by ~30%:
+ *   [I:repo] key=value  (incident, repo-scoped)
+ *   [C] key=value       (convention, global)
+ *
  * Returns an empty string if there are no notes.
  */
 export function formatMemoryNotesForPrompt(notes: MemoryNote[]): string {
   if (!notes.length) return "";
 
   const lines = notes.map((n) => {
-    const scope = n.repo_full_name ? ` [${n.repo_full_name}]` : "";
-    return `• [${n.category}${scope}] ${n.key}: ${n.value}`;
+    const code = CATEGORY_CODE[n.category] ?? "G";
+    // Only include repo name (not full path) for scoped notes
+    const repo = n.repo_full_name?.split("/")[1];
+    const scope = repo ? `:${repo}` : "";
+    return `[${code}${scope}] ${n.key}=${n.value}`;
   });
 
-  return [
-    "## Persistent Memory (saved from past sessions)",
-    ...lines,
-    ""
-  ].join("\n");
+  return ["## Memory", ...lines, ""].join("\n");
 }

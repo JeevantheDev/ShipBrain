@@ -107,9 +107,11 @@ The context includes a \`deploymentState\` object with FRESH, real-time data abo
 
 This data is fetched fresh on every request and reflects the actual current state.
 
-## Persistent Memory
-If a \`memoryNotes\` block is provided in the context, it contains facts saved from past sessions.
-Use them to provide continuity across conversations — e.g. recurring incident patterns, team conventions, or preferences.
+## Memory
+If a \`## Memory\` block is provided, it contains facts saved from past sessions in compact format:
+- Format: \`[X:repo] key=value\` where X is category code (I=incident, R=release, C=convention, P=preference, G=general)
+- If no repo suffix, it's a global note; otherwise scoped to that repo
+- Use these for continuity — recurring patterns, team conventions, user preferences
 
 ## Notifications
 The context includes \`unreadNotificationCount\` and \`unreadNotifications\`.
