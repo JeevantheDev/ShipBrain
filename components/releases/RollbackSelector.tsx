@@ -44,14 +44,18 @@ export function RollbackSelector({ repoFullName, currentTag, traceId, onRollback
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`/api/releases/history?repo=${encodeURIComponent(repoFullName)}&limit=20`);
+      // Include rolled back releases so users can rollback to previously rolled back versions
+      const response = await fetch(`/api/releases/history?repo=${encodeURIComponent(repoFullName)}&limit=20&include_rolled_back=true`);
       const data = await response.json();
       if (!response.ok) {
         setError(data.error ?? "Failed to load releases");
         return;
       }
-      // Filter out the current tag
-      const filtered = (data as Release[]).filter((r) => r.releaseTag !== currentTag);
+      // Filter out releases marked as current (isCurrent flag from API)
+      // Also filter by currentTag prop as a fallback
+      const filtered = (data as (Release & { isCurrent?: boolean })[]).filter(
+        (r) => !r.isCurrent && r.releaseTag !== currentTag
+      );
       setReleases(filtered);
     } catch {
       setError("Failed to load releases");
@@ -120,6 +124,7 @@ export function RollbackSelector({ repoFullName, currentTag, traceId, onRollback
           {releases.map((release) => (
             <option key={release.releaseTag} value={release.releaseTag}>
               {release.releaseTag} - {release.title.slice(0, 40)} ({dateLabel(release.deployedAt)})
+              {release.status === "rolled_back" ? " [previously rolled back]" : ""}
             </option>
           ))}
         </select>

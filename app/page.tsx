@@ -9,7 +9,7 @@ import Image from "next/image";
 
 export const metadata: Metadata = {
   title: "ShipBrain | AI-powered production command center",
-  description: "Ship software at AI speed, with humans still in charge. ShipBrain turns engineering tasks into reviewed PRs, explains failing CI, and triages production incidents."
+  description: "Ship software at AI speed, with humans still in charge. ShipBrain turns engineering tasks into Draft PRs, tracks CI status, gates deployments, and triages production incidents."
 };
 
 export const dynamic = "force-dynamic";
@@ -136,9 +136,9 @@ export default async function LandingPage() {
             with humans still in charge.
           </h1>
           <p className="hero-sub">
-            ShipBrain turns an engineering task into a reviewed pull request,
-            explains failing CI clearly, and drafts the post-mortem before the
-            incident is closed — but never acts without you pressing confirm.
+            ShipBrain turns a plain-language ticket into a Draft PR, watches CI,
+            guides preview and production deploys, and helps with incidents —
+            while every meaningful action waits for your approval.
           </p>
           <div className="cta-row">
             <Link href="/login" className="btn-cta">
@@ -225,9 +225,9 @@ export default async function LandingPage() {
               </h3>
               <p className="body">
                 After the Draft PR is reviewed and merged, ShipBrain watches the
-                workflow, explains failed checks, and surfaces the next safe
-                preview action. A green build unlocks preview deployment, but
-                the click still belongs to you.
+                workflow status and surfaces the next safe preview action. A
+                green build unlocks preview deployment, but the click still
+                belongs to you.
               </p>
               <div className="move-card-foot">
                 CI verified · gated before preview deploy
@@ -395,8 +395,8 @@ export default async function LandingPage() {
 
           <div className="narrow">
             <p className="body-p">
-              Before ShipBrain, releases lived in flat lists — CI failures
-              buried between shipped features, no urgency, no visibility.
+              Before ShipBrain, releases lived in flat lists — CI status,
+              preview deploys, and production approvals scattered across tools.
               ShipBrain replaces the list with a trace board: every release
               moves through columns, every blocked release surfaces immediately,
               and every phase transition requires a human confirm.
@@ -421,8 +421,8 @@ export default async function LandingPage() {
 
           <div className="narrow">
             <p className="body-p">
-              Watch ShipBrain take a real engineering task, open a PR, hit a CI
-              failure, explain the issue, suggest a fix, pass CI, deploy,
+              Watch ShipBrain take a real engineering task, open a Draft PR,
+              track CI status, deploy preview after approval, promote a release,
               trigger a simulated incident, identify the root cause, and draft
               the post-mortem.
             </p>

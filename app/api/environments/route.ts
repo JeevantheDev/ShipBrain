@@ -24,27 +24,30 @@ export async function GET() {
     .order("updated_at", { ascending: false })
     .limit(20);
 
-  // Latest production per repo (deployed or deploying to main)
-  // Order by deployed_at to get the ACTUAL current production, not just most recently updated
-  const { data: productions } = await supabase
-    .from("specs")
-    .select("id, repo_full_name, branch_name, base_branch, production_url, deployment_url, release_status, release_tag, release_sha, deployed_at, updated_at")
-    .eq("user_id", user.id)
-    .in("release_status", ["deployed", "deploying", "pending_deploy"])
-    .order("deployed_at", { ascending: false, nullsFirst: false })
-    .limit(20);
-
-  // Fetch repos to map repository name to production URL
+  // Fetch repos with canonical current_version (single source of truth)
   const { data: repos } = await supabase
     .from("repos")
-    .select("full_name, setup_metadata")
+    .select("full_name, setup_metadata, current_version, current_version_sha, current_version_deployed_at, current_version_type")
     .eq("user_id", user.id);
 
+  // Build maps from repos data
   const repoMap: Record<string, string> = {};
+  const repoVersionMap: Record<string, { version: string; sha: string; deployedAt: string; type: string } | null> = {};
+
   for (const r of repos ?? []) {
     const metadata = r.setup_metadata as any;
     if (metadata?.cloudflareProjectUrl) {
       repoMap[r.full_name] = metadata.cloudflareProjectUrl;
+    }
+    if (r.current_version) {
+      repoVersionMap[r.full_name] = {
+        version: r.current_version,
+        sha: r.current_version_sha,
+        deployedAt: r.current_version_deployed_at,
+        type: r.current_version_type
+      };
+    } else {
+      repoVersionMap[r.full_name] = null;
     }
   }
 
@@ -56,13 +59,23 @@ export async function GET() {
     return true;
   });
 
-  // Deduplicate: keep only the latest production per repo
-  const seenProdRepos = new Set<string>();
-  const latestProductions = (productions ?? []).filter((spec) => {
-    if (seenProdRepos.has(spec.repo_full_name)) return false;
-    seenProdRepos.add(spec.repo_full_name);
-    return true;
-  });
+  // Build production environments from repos canonical version
+  const prodEnvironments = (repos ?? [])
+    .filter((r) => repoVersionMap[r.full_name] || repoMap[r.full_name])
+    .map((r) => {
+      const versionInfo = repoVersionMap[r.full_name];
+      return {
+        id: `prod-${r.full_name}`,
+        repo: r.full_name,
+        type: "production" as const,
+        url: repoMap[r.full_name] ?? "#",
+        branch: "main",
+        releaseTag: versionInfo?.version ?? null,
+        commitSha: versionInfo?.sha ? versionInfo.sha.slice(0, 7) : null,
+        status: versionInfo ? "deployed" : "not_deployed",
+        updatedAt: versionInfo?.deployedAt ?? null
+      };
+    });
 
   const environments = [
     ...latestPreviews.map((spec) => ({
@@ -75,18 +88,12 @@ export async function GET() {
       status: spec.preview_status,
       updatedAt: spec.updated_at
     })),
-    ...latestProductions.filter((spec) => spec.production_url || spec.deployment_url || spec.release_status).map((spec) => ({
-      id: `prod-${spec.repo_full_name}`,
-      repo: spec.repo_full_name,
-      type: "production" as const,
-      url: spec.production_url ?? repoMap[spec.repo_full_name] ?? spec.deployment_url ?? "#",
-      branch: spec.base_branch === "main" ? "main" : "main",
-      releaseTag: spec.release_tag ?? null,
-      commitSha: spec.release_sha ? (spec.release_sha as string).slice(0, 7) : null,
-      status: spec.release_status,
-      updatedAt: spec.deployed_at ?? spec.updated_at
-    }))
-  ].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    ...prodEnvironments
+  ].sort((a, b) => {
+    const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return bTime - aTime;
+  });
 
   return NextResponse.json(environments);
 }

@@ -8,6 +8,7 @@
 
 import { dispatchCloudflareProductionDeploy } from "@/lib/github/deployments";
 import { updateTraceBySpec } from "@/lib/orchestrator";
+import { getRepoCurrentVersion } from "@/lib/shipbrain/repo-version";
 import {
   ActionContext,
   ActionResult,
@@ -55,13 +56,14 @@ export async function rollback(
 
     const { owner, repo } = splitRepo(repoFullName);
 
-    // Find the target release spec
+    // Find the target release spec - allow both deployed and rolled_back specs
+    // (you might want to roll back to a previously rolled back version)
     const { data: targetSpec } = await ctx.db
       .from("specs")
       .select("*")
       .eq("repo_full_name", repoFullName)
       .eq("release_tag", targetReleaseTag)
-      .eq("release_status", "deployed")
+      .in("release_status", ["deployed", "rolled_back"])
       .order("deployed_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -70,17 +72,19 @@ export async function rollback(
       return failure(`Release ${targetReleaseTag} not found or was never deployed.`);
     }
 
-    // Find current production release
-    const { data: currentSpecs } = await ctx.db
-      .from("specs")
-      .select("*")
-      .eq("repo_full_name", repoFullName)
-      .eq("release_status", "deployed")
-      .order("deployed_at", { ascending: false })
-      .limit(1);
+    // Use canonical repos.current_version as the source of truth
+    const currentVersionData = await getRepoCurrentVersion(ctx.db, repoFullName);
+    const currentReleaseTag = currentVersionData?.version ?? null;
 
-    const currentSpec = currentSpecs?.[0];
-    const currentReleaseTag = currentSpec?.release_tag;
+    // Find the current production spec for metadata (optional - may not exist)
+    const { data: currentSpec } = currentReleaseTag
+      ? await ctx.db
+          .from("specs")
+          .select("*")
+          .eq("repo_full_name", repoFullName)
+          .eq("release_tag", currentReleaseTag)
+          .maybeSingle()
+      : { data: null };
 
     if (currentReleaseTag === targetReleaseTag) {
       return failure(`${targetReleaseTag} is already the current production release.`);
@@ -371,29 +375,41 @@ export async function rollback(
 
 /**
  * Get available releases for rollback
+ * Returns all releases that can be rolled back to (deployed or previously rolled back)
+ * Excludes the current production version (from repos.current_version)
  */
 export async function getAvailableReleases(
   ctx: ActionContext,
   repoFullName: string
-): Promise<ActionResult<Array<{ releaseTag: string; deployedAt: string; specId: string; title: string }>>> {
+): Promise<ActionResult<Array<{ releaseTag: string; deployedAt: string; specId: string; title: string; status: string }>>> {
   logAction("getAvailableReleases", ctx, { repoFullName });
 
   try {
+    // Get canonical current version to exclude it from results
+    const currentVersionData = await getRepoCurrentVersion(ctx.db, repoFullName);
+    const currentReleaseTag = currentVersionData?.version ?? null;
+
+    // Get all specs with valid release tags - include both deployed and rolled_back
+    // so users can roll back to previously rolled back versions
     const { data: specs } = await ctx.db
       .from("specs")
-      .select("id, release_tag, deployed_at, decomposed_tasks")
+      .select("id, release_tag, deployed_at, decomposed_tasks, release_status")
       .eq("repo_full_name", repoFullName)
-      .eq("release_status", "deployed")
+      .in("release_status", ["deployed", "rolled_back"])
       .not("release_tag", "is", null)
       .order("deployed_at", { ascending: false })
       .limit(20);
 
-    const releases = (specs || []).map(s => ({
-      releaseTag: s.release_tag,
-      deployedAt: s.deployed_at,
-      specId: s.id,
-      title: (s.decomposed_tasks as any)?.prTitle || `Release ${s.release_tag}`
-    }));
+    const releases = (specs || [])
+      // Exclude current production version
+      .filter(s => s.release_tag !== currentReleaseTag)
+      .map(s => ({
+        releaseTag: s.release_tag,
+        deployedAt: s.deployed_at,
+        specId: s.id,
+        title: (s.decomposed_tasks as any)?.prTitle || `Release ${s.release_tag}`,
+        status: s.release_status
+      }));
 
     return success("Available releases retrieved.", releases);
 

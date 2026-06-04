@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getRepoCurrentVersion } from "@/lib/shipbrain/repo-version";
 
 export const runtime = "nodejs";
 
@@ -14,12 +15,21 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const repo = searchParams.get("repo");
   const limit = Math.min(parseInt(searchParams.get("limit") ?? "20", 10), 50);
+  const includeRolledBack = searchParams.get("include_rolled_back") === "true";
 
+  // Get current production version to mark it in results
+  let currentReleaseTag: string | null = null;
+  if (repo) {
+    const currentVersionData = await getRepoCurrentVersion(supabase, repo);
+    currentReleaseTag = currentVersionData?.version ?? null;
+  }
+
+  // Include both deployed and rolled_back specs for rollback dropdown
   let query = supabase
     .from("specs")
     .select("id, repo_full_name, raw_spec, release_tag, release_sha, release_status, deployed_at, production_url, decomposed_tasks, updated_at")
     .eq("user_id", user.id)
-    .eq("release_status", "deployed")
+    .in("release_status", includeRolledBack ? ["deployed", "rolled_back"] : ["deployed"])
     .not("release_tag", "is", null)
     .order("deployed_at", { ascending: false, nullsFirst: false })
     .limit(limit);
@@ -44,7 +54,8 @@ export async function GET(request: NextRequest) {
       deployedAt: spec.deployed_at,
       productionUrl: spec.production_url,
       title: tasks?.prTitle ?? spec.raw_spec?.slice(0, 80) ?? spec.release_tag,
-      status: spec.release_status
+      status: spec.release_status,
+      isCurrent: spec.release_tag === currentReleaseTag
     };
   });
 
