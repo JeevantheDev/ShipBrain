@@ -12,6 +12,7 @@
 
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { getModel } from "@/lib/ai/model";
+import { callWithFoundryKnowledgeBase } from "@/lib/ai/foundry-kb";
 import { getShipBrainAgentContext } from "@/lib/agent/context";
 import { listChatMessages, type StoredChatMessage } from "@/lib/ai/chat-store";
 import {
@@ -1293,10 +1294,14 @@ export async function streamShipBrainQuestion(input: {
   const toolCalls = (probeResponse as any).tool_calls ?? (probeResponse as any).additional_kwargs?.tool_calls ?? [];
 
   if (!toolCalls.length) {
-    // Reuse probe response directly — no second LLM call needed
-    const content = typeof probeResponse.content === "string"
-      ? probeResponse.content
-      : JSON.stringify(probeResponse.content);
+    // Try Foundry IQ knowledge base first; fall back to probe response text
+    const kbMessages = messages.map((m) => ({
+      role: (m._getType?.() === "system" ? "system" : m._getType?.() === "human" ? "user" : "assistant") as "system" | "user" | "assistant",
+      content: typeof m.content === "string" ? m.content : JSON.stringify(m.content)
+    }));
+    const kbAnswer = await callWithFoundryKnowledgeBase(kbMessages).catch(() => null);
+    const content = kbAnswer
+      ?? (typeof probeResponse.content === "string" ? probeResponse.content : JSON.stringify(probeResponse.content));
     return { ...base, action: null, stream: textStream(content), responseSource: "foundry_iq" };
   }
 
