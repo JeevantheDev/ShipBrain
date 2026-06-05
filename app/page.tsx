@@ -3,13 +3,17 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { LandingBody } from "@/components/landing/LandingBody";
-import releaseMng from "@/public/release-mng.svg"
+import { ChatMockup } from "@/components/landing/ChatMockup";
+import releaseMng from "@/public/release-mng.svg";
+import telegramChat from "@/public/telegramchat.jpg"
+import demo from "@/public/demo.gif"
 import "./landing.css";
 import Image from "next/image";
 
 export const metadata: Metadata = {
   title: "ShipBrain | AI-powered production command center",
-  description: "Ship software at AI speed, with humans still in charge. ShipBrain turns engineering tasks into Draft PRs, tracks CI status, gates deployments, and triages production incidents."
+  description:
+    "Ship software at AI speed, with humans still in charge. ShipBrain turns engineering tasks into reviewed PRs, explains failing CI, and triages production incidents.",
 };
 
 export const dynamic = "force-dynamic";
@@ -127,33 +131,33 @@ export default async function LandingPage() {
       {/* ============ HERO ============ */}
       <section className="section hero">
         <div className="container hero-inner">
-          {/* <span className="mono-label eyebrow">{"// hackathon · 2026"}</span> */}
-          <br />
-          <br />
-          <h1 className="hero-h">
-            Ship software at AI&nbsp;speed,
-            <br />
-            with humans still in charge.
-          </h1>
-          <p className="hero-sub">
-            ShipBrain turns a plain-language ticket into a Draft PR, watches CI,
-            guides preview and production deploys, and helps with incidents —
-            while every meaningful action waits for your approval.
-          </p>
-          <div className="cta-row">
-            <Link href="/login" className="btn-cta">
-              Get Started →
-            </Link>
-            <a href="#demo" className="btn-cta ghost">
-              See the demo
-            </a>
-            {/* <a href="https://github.com/JeevantheDev/ShipBrain" className="text-link" target="_blank" rel="noopener noreferrer">GitHub <span className="arr">↗</span></a> */}
+          <div className="hero-text">
+            <h1 className="hero-h">
+              Ship software at AI&nbsp;speed,
+              <br />
+              with humans still in charge.
+            </h1>
+            <p className="hero-sub">
+              ShipBrain turns an engineering task into a reviewed pull request,
+              explains failing CI clearly, and drafts the post-mortem before the
+              incident is closed — but never acts without you pressing confirm.
+            </p>
+            <div className="cta-row">
+              <Link href="/login" className="btn-cta">
+                Get Started →
+              </Link>
+              <a href="#demo" className="btn-cta ghost">
+                See the demo
+              </a>
+            </div>
+            <div className="hero-caption">
+              <span className="mono-label">scroll to see the four moves</span>
+              <span className="v-bar"></span>
+              <span className="mono-label">↓</span>
+            </div>
           </div>
-          <div className="hero-caption">
-            <span className="mono-label">scroll to see the four moves</span>
-            <span className="v-bar"></span>
-            <span className="mono-label">↓</span>
-          </div>
+          {/* <ChatMockup /> */}
+          <Image src={demo} alt="demo" width={400} height={650}/>
         </div>
       </section>
 
@@ -237,7 +241,7 @@ export default async function LandingPage() {
             <article className="move-card">
               <span className="mono-label">move · 03</span>
               <h3 className="move-card-title">
-                Incidents, <em>analyzed</em>
+                Incidents, analyzed
               </h3>
               <p className="body">
                 A webhook fires or you paste an alert. ShipBrain proposes a root
@@ -252,7 +256,7 @@ export default async function LandingPage() {
             <article className="move-card">
               <span className="mono-label">move · 04</span>
               <h3 className="move-card-title">
-                Post-mortems, <em>drafted</em>
+                Post-mortems, drafted
               </h3>
               <p className="body">
                 When an incident resolves, the post-mortem is already written —
@@ -403,11 +407,38 @@ export default async function LandingPage() {
             </p>
           </div>
           <Image
-             src={releaseMng}
+            src={releaseMng}
             alt="ShipBrain Release Trace Board — before and after comparison"
             // style="width:100%;border-radius:4px;display:block;"
             style={{ width: "100%", borderRadius: "4px", display: "block" }}
           />
+        </div>
+      </section>
+
+      <section className="section" id="telegram">
+        <div className="container">
+          <div className="telegram-split">
+            <div className="telegram-text">
+              <header className="section-head">
+                <span className="mono-label">06 / telegram</span>
+                <h2 className="section-h">Approve from your pocket.</h2>
+              </header>
+              <p className="body-p">
+                Not every deploy waits for you to be at your desk. The ShipBrain
+                bot brings the same approval gates to Telegram — check what&apos;s
+                pending, trigger a deploy, or confirm a production release with an
+                inline button, all from your phone. Every action runs through the
+                same gate and lands in the same audit log as the web console.
+              </p>
+            </div>
+            <div className="telegram-phone">
+                <Image
+                  src={telegramChat}
+                  alt="ShipBrain Telegram bot — approving a deploy"
+                  style={{ height:"80vh", width:"20vw" }}
+                />
+            </div>
+          </div>
         </div>
       </section>
 
@@ -496,10 +527,7 @@ export default async function LandingPage() {
           </div>
 
           <div className="footer-line">
-            © 2026 · shipbrain · built in a weekend with{" "}
-            <em className="serif">
-              too much coffee and a healthy fear of autonomy
-            </em>
+            © 2026 · shipbrain · buit by Jeeven Jyoti Dash and Amit Kumar Rout
           </div>
         </div>
       </section>
