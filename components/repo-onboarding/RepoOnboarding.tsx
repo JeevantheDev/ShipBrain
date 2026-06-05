@@ -33,6 +33,9 @@ type SetupEvent = { label: string; status: "running" | "done" | "error"; detail?
 
 const activeRepoEvent = "shipbrain:active-repo";
 
+// Only show this repo in the onboarding dropdown (for demo purposes)
+const ALLOWED_REPOS = ["JeevantheDev/shipbrain_sandbox"];
+
 export function RepoOnboarding() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [query, setQuery] = useState("");
@@ -73,7 +76,10 @@ export function RepoOnboarding() {
     [repos, selectedRepos]
   );
   const activeRepo = repos.find((repo) => repo.full_name === selectedRepo) ?? null;
-  const filteredRepos = repos.filter((repo) => repo.full_name.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+  const filteredRepos = repos
+    .filter((repo) => ALLOWED_REPOS.includes(repo.full_name))
+    .filter((repo) => repo.full_name.toLowerCase().includes(query.toLowerCase()))
+    .slice(0, 8);
   const needsCustomBranches = scan?.branches.scenario === "custom_required";
   const customBranchesReady = !needsCustomBranches || Boolean(customProdBranch.trim());
   const canSubmit = Boolean(activeRepo && scan && customBranchesReady && !setupBusy);
