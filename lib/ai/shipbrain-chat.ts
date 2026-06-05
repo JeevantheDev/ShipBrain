@@ -1260,10 +1260,6 @@ export async function streamShipBrainQuestion(input: {
     return { ...base, action, stream: textStream(confirmMsg) };
   }
 
-  // Build model with tools and stream
-  const model = getModel({ temperature: 0.2, streaming: true });
-  const modelWithTools = model.bind({ tools: getLangChainToolSpecs() } as any);
-
   // #8 & #9: Build a richer context preamble with memory notes and notification counts
   const memoryBlock = context.memoryNotes ? context.memoryNotes.trim() : "";
   const notifHint = (context.unreadNotificationCount ?? 0) > 0
@@ -1290,16 +1286,18 @@ export async function streamShipBrainQuestion(input: {
     )
   ];
 
-  // Invoke non-streaming first to check for tool calls
+  // Single non-streaming call to detect tool calls, reusing response text to avoid a second LLM round-trip
   const probeModel = getModel({ temperature: 0.2, streaming: false });
   const probeWithTools = probeModel.bind({ tools: getLangChainToolSpecs() } as any);
   const probeResponse = await probeWithTools.invoke(messages) as AIMessage;
   const toolCalls = (probeResponse as any).tool_calls ?? (probeResponse as any).additional_kwargs?.tool_calls ?? [];
 
   if (!toolCalls.length) {
-    // No tool call — stream the response
-    const stream = await modelWithTools.stream(messages);
-    return { ...base, action: null, stream, responseSource: "foundry_iq" };
+    // Reuse probe response directly — no second LLM call needed
+    const content = typeof probeResponse.content === "string"
+      ? probeResponse.content
+      : JSON.stringify(probeResponse.content);
+    return { ...base, action: null, stream: textStream(content), responseSource: "foundry_iq" };
   }
 
   // Parse tool call

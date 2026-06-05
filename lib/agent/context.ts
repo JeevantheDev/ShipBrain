@@ -115,9 +115,9 @@ export async function getShipBrainAgentContext({
         { includeGitHubData: true } // #1: Enable GitHub commits
       );
 
-      // Race against a 5-second timeout — commits are best-effort
+      // Race against a 2-second timeout — commits are best-effort
       const timeoutPromise = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), 5000)
+        setTimeout(() => resolve(null), 2000)
       );
 
       deploymentContext = await Promise.race([deploymentContextPromise, timeoutPromise]);
