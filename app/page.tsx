@@ -517,13 +517,6 @@ export default async function LandingPage() {
                 github.com/JeevantheDev/ShipBrain
               </a>
             </div>
-            <div className="contact-row">
-              <span className="label">demo</span>
-              <span className="sep-dot">·</span>
-              <Link href="/login" className="val">
-                shipbrain.pages.dev
-              </Link>
-            </div>
           </div>
 
           <div className="footer-line">
