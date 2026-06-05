@@ -148,9 +148,29 @@ export default function CiPage() {
     Notify: 1,
     Release: 1
   });
+  const [activeRepo, setActiveRepo] = useState<string | null>(null);
   const tabPageSize = 10;
   const selectedHasRejectionAudit = selected ? audits.some((audit) => audit.action === "deploy_rejected") : false;
   const previewRepo = repos.find((repo) => !repo.vercel_preview_env_confirmed && !repo.setup_metadata?.skipVercel);
+
+  // Load active repo on mount
+  useEffect(() => {
+    async function loadActiveRepo() {
+      try {
+        const response = await fetch("/api/repos?active=true", { cache: "no-store" });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.activeRepoFullName) {
+            setActiveRepo(data.activeRepoFullName);
+          }
+        }
+      } catch {
+        // Ignore errors, will load all runs if no active repo
+      }
+    }
+    void loadActiveRepo();
+  }, []);
+
   useEffect(() => {
     void loadRuns();
     void loadRepos();
@@ -169,13 +189,17 @@ export default function CiPage() {
       window.clearInterval(interval);
       window.removeEventListener("shipbrain-refetch", handleRefetch);
     };
-  }, []);
+  }, [activeRepo]);
 
   async function loadRuns() {
     try {
-      const query = requestedRunId
+      let query = requestedRunId
         ? `run=${encodeURIComponent(requestedRunId)}`
         : `page=1&limit=100`;
+      // Filter by active repo if set
+      if (activeRepo && !requestedRunId) {
+        query += `&repo=${encodeURIComponent(activeRepo)}`;
+      }
       const response = await fetch(`/api/ci-runs?${query}`, { cache: "no-store" });
       const json = await response.json();
       if (!response.ok) throw new Error(json.detail ?? json.error ?? "Unable to load CI runs");
