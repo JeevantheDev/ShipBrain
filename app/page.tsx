@@ -241,30 +241,30 @@ export default async function LandingPage() {
             <article className="move-card">
               <span className="mono-label">move · 03</span>
               <h3 className="move-card-title">
-                Incidents, analyzed
+                Release <em>→</em> trace
               </h3>
               <p className="body">
-                A webhook fires or you paste an alert. ShipBrain proposes a root
-                cause with a confidence score and a fix you can apply. Nothing
-                runs until you confirm — and you can cancel mid-countdown.
+                Track every feature from draft to production on a visual board.
+                See what&apos;s in preview, what&apos;s pending release, and roll back
+                with one click if something breaks. Full audit trail included.
               </p>
               <div className="move-card-foot">
-                gated before fix applies · rollback steps included
+                kanban-style board · rollback support · audit events
               </div>
             </article>
 
             <article className="move-card">
               <span className="mono-label">move · 04</span>
               <h3 className="move-card-title">
-                Post-mortems, drafted
+                Incidents <em>→</em> post-mortem
               </h3>
               <p className="body">
-                When an incident resolves, the post-mortem is already written —
-                timeline, impact, root cause, action items. You edit and file.
-                Stops the &ldquo;we&apos;ll write it tomorrow&rdquo; doom loop.
+                A webhook fires or you paste an alert. ShipBrain proposes a root
+                cause with a confidence score. When resolved, the post-mortem is
+                already drafted — timeline, impact, action items. You edit and file.
               </p>
               <div className="move-card-foot">
-                editable markdown · copy or download
+                gated before fix · rollback included · editable markdown
               </div>
             </article>
           </div>
