@@ -33,8 +33,9 @@ type SetupEvent = { label: string; status: "running" | "done" | "error"; detail?
 
 const activeRepoEvent = "shipbrain:active-repo";
 
-// Only show this repo in the onboarding dropdown (for demo purposes)
-const ALLOWED_REPOS = ["JeevantheDev/shipbrain_sandbox"];
+// Only show this repo in the onboarding dropdown for specific demo user
+const DEMO_USER_EMAIL = "jeevan@gmail.com";
+const DEMO_ALLOWED_REPOS = ["JeevantheDev/shipbrain_sandbox"];
 
 export function RepoOnboarding() {
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -76,8 +77,9 @@ export function RepoOnboarding() {
     [repos, selectedRepos]
   );
   const activeRepo = repos.find((repo) => repo.full_name === selectedRepo) ?? null;
+  const isDemoUser = userEmail === DEMO_USER_EMAIL;
   const filteredRepos = repos
-    .filter((repo) => ALLOWED_REPOS.includes(repo.full_name))
+    .filter((repo) => !isDemoUser || DEMO_ALLOWED_REPOS.includes(repo.full_name))
     .filter((repo) => repo.full_name.toLowerCase().includes(query.toLowerCase()))
     .slice(0, 8);
   const needsCustomBranches = scan?.branches.scenario === "custom_required";
