@@ -501,8 +501,8 @@ export default async function LandingPage() {
             <div className="contact-row">
               <span className="label">email</span>
               <span className="sep-dot">·</span>
-              <a href="mailto:jeevanjyotipy@gmail.com" className="val">
-                jeevanjyotipy@gmail.com
+              <a href="mailto:dashjeevanjyoti@gmail.com" className="val">
+                dashjeevanjyoti@gmail.com
               </a>
             </div>
             <div className="contact-row">
