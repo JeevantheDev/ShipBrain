@@ -264,6 +264,22 @@ export async function GET(request: Request) {
   await reconcileProductionDeployments(admin, user.id);
   await reconcileOpenPrWorkflowRuns(admin, user.id);
 
+  // Get user's repos to filter CI runs (ci_runs doesn't have user_id directly)
+  const { data: userRepos } = await supabase
+    .from("repos")
+    .select("full_name")
+    .eq("user_id", user.id);
+
+  const userRepoNames = (userRepos ?? []).map((r: any) => r.full_name).filter(Boolean);
+
+  // If user has no repos, return empty
+  if (!userRepoNames.length) {
+    return NextResponse.json({
+      runs: [],
+      pagination: { page: 1, limit, total: 0, totalPages: 0 }
+    });
+  }
+
   if (requestedRunId) {
     const numericRunId = Number(requestedRunId);
     if (!Number.isFinite(numericRunId)) {
@@ -274,6 +290,7 @@ export async function GET(request: Request) {
       .from("ci_runs")
       .select("id, github_run_id, spec_id, pr_number, repo_full_name, workflow_name, title, html_url, head_sha, event, branch, status, conclusion, environment, preview_url, branch_alias, created_at, updated_at, specs(status, incident_id, decomposed_tasks, branch_name, base_branch, pr_number, pr_url, deployment_status, release_tag, release_status, deployment_url, preview_url, preview_status, preview_branch_alias, release_pr_number, release_pr_url, release_pr_status, incidents(id, title, status, hotfix_pr_number, hotfix_pr_url))")
       .eq("github_run_id", numericRunId)
+      .in("repo_full_name", userRepoNames)
       .maybeSingle();
 
     if (error) {
@@ -291,10 +308,11 @@ export async function GET(request: Request) {
     });
   }
 
-  // Get total count (filtered by repo if specified)
+  // Get total count (filtered by user's repos, and optionally by specific repo)
   let countQuery = supabase
     .from("ci_runs")
-    .select("id", { count: "exact", head: true });
+    .select("id", { count: "exact", head: true })
+    .in("repo_full_name", userRepoNames);
   if (repoFilter) {
     countQuery = countQuery.eq("repo_full_name", repoFilter);
   }
@@ -303,6 +321,7 @@ export async function GET(request: Request) {
   let dataQuery = supabase
     .from("ci_runs")
     .select("id, github_run_id, spec_id, pr_number, repo_full_name, workflow_name, title, html_url, head_sha, event, branch, status, conclusion, environment, preview_url, branch_alias, created_at, updated_at, specs(status, incident_id, decomposed_tasks, branch_name, base_branch, pr_number, pr_url, deployment_status, release_tag, release_status, deployment_url, preview_url, preview_status, preview_branch_alias, release_pr_number, release_pr_url, release_pr_status, incidents(id, title, status, hotfix_pr_number, hotfix_pr_url))")
+    .in("repo_full_name", userRepoNames)
     .order("updated_at", { ascending: false })
     .range(offset, offset + limit - 1);
   if (repoFilter) {
