@@ -21,6 +21,9 @@ export async function callWithFoundryKnowledgeBase(
     `${projectEndpoint}/openai/deployments/${deployment}/chat/completions` +
     `?api-version=2025-01-01-preview`;
 
+  console.log(`[foundry-kb] calling → ${url}`);
+  console.log(`[foundry-kb] knowledge base: ${knowledgeBase} | search endpoint: ${openAiEndpoint}`);
+
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -51,14 +54,21 @@ export async function callWithFoundryKnowledgeBase(
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => "");
-      console.warn("[foundry-kb] data_sources call failed:", res.status, errBody);
+      console.warn("[foundry-kb] ❌ failed:", res.status, errBody);
       return null;
     }
 
     const json = await res.json();
+    const citations = json.choices?.[0]?.message?.context?.citations ?? [];
+    console.log(`[foundry-kb] ✅ grounded — ${citations.length} citation(s) from knowledge base`);
+    if (citations.length > 0) {
+      citations.forEach((c: any, i: number) => {
+        console.log(`  [${i + 1}] ${c.title ?? c.filepath ?? "untitled"}`);
+      });
+    }
     return (json.choices?.[0]?.message?.content as string) ?? null;
   } catch (err) {
-    console.warn("[foundry-kb] data_sources call error:", err);
+    console.warn("[foundry-kb] ❌ error:", err);
     return null;
   }
 }

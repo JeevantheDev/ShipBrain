@@ -407,7 +407,10 @@ export async function POST(request: Request) {
 
           // Trigger initial deployments - await to ensure it completes
           try {
-            const origin = new URL(request.url).origin;
+            let origin = new URL(request.url).origin;
+            if (/^https:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(origin)) {
+              origin = origin.replace(/^https:/i, "http:");
+            }
             console.log(`[Initial Deploy] Triggering for ${repoFullName} at ${origin}/api/deployments/initial`);
 
             const initialDeployResponse = await fetch(`${origin}/api/deployments/initial`, {

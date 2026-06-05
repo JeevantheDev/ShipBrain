@@ -609,7 +609,11 @@ function getInternalApiBaseUrl(): string {
     if (candidate?.trim()) {
       const url = candidate.trim();
       // Ensure URL has protocol
-      const withProtocol = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+      let withProtocol = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+      // Normalize local URLs to use HTTP instead of HTTPS to avoid local SSL handshake errors
+      if (/^https:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(withProtocol)) {
+        withProtocol = withProtocol.replace(/^https:/i, "http:");
+      }
       return withProtocol.replace(/\/$/, "");
     }
   }
