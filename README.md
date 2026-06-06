@@ -678,49 +678,63 @@ sequenceDiagram
 ### Feature Delivery Journey
 
 ```mermaid
-journey
-    title Feature Delivery Journey
-    section Planning
-      Paste ticket into ShipBrain: 5: Engineer
-      Review AI task decomposition: 4: Engineer
-      Edit tasks if needed: 3: Engineer
-    section Development
-      Approve Draft PR creation: 5: Engineer
-      Work on PR locally: 3: Engineer
-      Push changes, CI runs: 4: Engineer
-    section Preview
-      Merge PR to develop: 5: Engineer
-      Preview auto-deploys: 5: System
-      QA validates preview: 4: QA
-    section Production
-      Create release PR: 5: Engineer
-      Manager approves deployment: 5: Manager
-      Production deploys: 5: System
-      Monitor for issues: 3: Engineer
+flowchart LR
+    subgraph Planning
+        A([📋 Paste ticket]) --> B([🤖 AI decomposes tasks])
+        B --> C([✏️ Engineer reviews & edits])
+    end
+    subgraph Development
+        C --> D([✅ Approve Draft PR])
+        D --> E([💻 Work on PR locally])
+        E --> F([🔄 Push — CI runs])
+    end
+    subgraph Preview
+        F --> G([🔀 Merge PR to develop])
+        G --> H([🚀 Preview auto-deploys])
+        H --> I([🔍 QA validates preview])
+    end
+    subgraph Production
+        I --> J([📦 Create release PR])
+        J --> K([✅ Manager approves])
+        K --> L([🌐 Production deploys])
+        L --> M([📊 Monitor for issues])
+    end
+
+    style Planning fill:#1e3a5f,color:#fff,stroke:#1e3a5f
+    style Development fill:#1a3a2a,color:#fff,stroke:#1a3a2a
+    style Preview fill:#3a2a00,color:#fff,stroke:#3a2a00
+    style Production fill:#3a1a5f,color:#fff,stroke:#3a1a5f
 ```
 
 ### Incident Response Journey
 
 ```mermaid
-journey
-    title Incident Response Journey
-    section Detection
-      Alert fires from monitoring: 2: System
-      ShipBrain ingests alert: 5: System
-      Team notified via Telegram: 5: System
-    section Analysis
-      AI analyzes root cause: 5: System
-      Fix proposal generated: 5: System
-      Engineer reviews analysis: 4: Engineer
-    section Resolution
-      Create hotfix branch: 5: Engineer
-      Approve hotfix deployment: 5: Manager
-      Hotfix deploys to production: 5: System
-      Reverse sync to develop: 5: System
-    section Post-Incident
-      Post-mortem auto-generated: 5: System
-      Team reviews post-mortem: 4: Team
-      Action items tracked: 4: Manager
+flowchart LR
+    subgraph Detection
+        A([🚨 Alert fires]) --> B([📥 ShipBrain ingests])
+        B --> C([📱 Telegram notified])
+    end
+    subgraph Analysis
+        C --> D([🤖 AI root-cause analysis])
+        D --> E([💡 Fix proposal generated])
+        E --> F([👀 Engineer reviews])
+    end
+    subgraph Resolution
+        F --> G([🔧 Create hotfix branch])
+        G --> H([✅ Manager approves])
+        H --> I([🚀 Hotfix deploys])
+        I --> J([🔁 Reverse sync → develop])
+    end
+    subgraph Post-Incident
+        J --> K([📄 Post-mortem generated])
+        K --> L([👥 Team reviews])
+        L --> M([✅ Incident resolved])
+    end
+
+    style Detection fill:#5f1a1a,color:#fff,stroke:#5f1a1a
+    style Analysis fill:#1e3a5f,color:#fff,stroke:#1e3a5f
+    style Resolution fill:#1a3a2a,color:#fff,stroke:#1a3a2a
+    style Post-Incident fill:#2a2a2a,color:#fff,stroke:#2a2a2a
 ```
 
 ---
