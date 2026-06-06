@@ -727,71 +727,145 @@ journey
 
 ## Database Schema
 
+> 17 tables across 38 migrations. All tables have Row-Level Security enabled.
+
 ```mermaid
 erDiagram
-    PROFILES ||--o{ REPOS : owns
-    PROFILES ||--o{ SPECS : creates
-    PROFILES ||--o{ INCIDENTS : reports
-    PROFILES ||--o{ CHAT_THREADS : has
+    %% ── Core ───────────────────────────────────────────────────────────────
+    PROFILES ||--o{ REPOS : "owns"
+    PROFILES ||--o{ SPECS : "creates"
+    PROFILES ||--o{ INCIDENTS : "reports"
+    PROFILES ||--o{ RELEASE_TRACES : "owns"
+    PROFILES ||--o{ CI_RUNS : "owns"
+    PROFILES ||--o{ APPROVAL_EVENTS : "makes"
+    PROFILES ||--o{ NOTIFICATIONS : "receives"
+    PROFILES ||--o{ CHAT_THREADS : "has"
+    PROFILES ||--o{ CHAT_MESSAGES : "writes"
+    PROFILES ||--o{ AI_MEMORY_NOTES : "stores"
+    PROFILES ||--o{ ROLLBACK_HISTORY : "initiates"
+    PROFILES ||--o| TELEGRAM_USERS : "links"
 
-    REPOS ||--o{ SPECS : contains
-    REPOS ||--o{ CI_RUNS : has
-    REPOS ||--o{ RELEASE_TRACES : tracks
+    REPOS ||--o{ SPECS : "contains"
+    REPOS ||--o{ CI_RUNS : "has"
+    REPOS ||--o{ RELEASE_TRACES : "tracks"
 
-    SPECS ||--o{ RELEASE_TRACES : generates
-    SPECS ||--o| INCIDENTS : linked_to
+    %% ── Release ────────────────────────────────────────────────────────────
+    SPECS ||--o{ RELEASE_TRACES : "generates"
+    SPECS |o--o{ ROLLBACK_HISTORY : "referenced by"
 
-    RELEASE_TRACES ||--o{ TRACE_EVENTS : has
-    RELEASE_TRACES ||--o{ APPROVAL_EVENTS : requires
+    RELEASE_TRACES ||--o{ TRACE_EVENTS : "has"
+    RELEASE_TRACES ||--o{ APPROVAL_EVENTS : "requires"
+    RELEASE_TRACES |o--o{ ROLLBACK_HISTORY : "rolled back via"
+    RELEASE_TRACES }o--o| INCIDENTS : "hotfix for"
 
-    INCIDENTS ||--o{ RELEASE_TRACES : triggers_hotfix
+    %% ── Chat ───────────────────────────────────────────────────────────────
+    CHAT_THREADS ||--o{ CHAT_MESSAGES : "contains"
 
+    %% ── Telegram ───────────────────────────────────────────────────────────
+    TELEGRAM_USERS ||--o{ TELEGRAM_NOTIFICATION_DELIVERIES : "receives"
+    NOTIFICATIONS ||--o{ TELEGRAM_NOTIFICATION_DELIVERIES : "delivered via"
+
+    %% ── Table definitions ──────────────────────────────────────────────────
     PROFILES {
         uuid id PK
         text github_login
         text github_access_token
         text avatar_url
-        timestamp created_at
+        text active_repo_full_name
+        timestamptz created_at
     }
 
     REPOS {
         uuid id PK
         uuid user_id FK
-        int github_repo_id
+        bigint github_repo_id
         text full_name
         text default_branch
         text setup_status
+        int setup_pr_number
+        text setup_pr_url
+        text setup_branch
         text shipbrain_api_key_hash
+        text shipbrain_api_key_last4
         jsonb setup_metadata
+        text current_version
+        text current_version_sha
+        timestamptz current_version_deployed_at
+        text current_version_type
+        boolean telegram_notifications_enabled
+        timestamptz connected_at
     }
 
     SPECS {
         uuid id PK
         uuid user_id FK
+        uuid repo_id FK
         text repo_full_name
-        text title
-        text original_content
-        jsonb tasks
-        text status
+        text raw_spec
+        jsonb decomposed_tasks
+        jsonb scaffold_code
         int pr_number
         text pr_url
-        text release_tag
+        text branch_name
+        text base_branch
+        text status
         text release_status
+        text release_tag
+        text preview_status
+        text preview_url
+        text production_url
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    CI_RUNS {
+        uuid id PK
+        uuid user_id FK
+        uuid repo_id FK
+        text repo_full_name
+        bigint github_run_id
+        text workflow_name
+        text title
+        text branch
+        text status
+        text conclusion
+        text html_url
+        text ai_explanation
+        text ai_fix_suggestion
+        jsonb metadata
+        timestamptz created_at
+        timestamptz updated_at
     }
 
     RELEASE_TRACES {
         uuid id PK
         uuid user_id FK
         uuid spec_id FK
+        uuid incident_id FK
         text repo_full_name
-        text trace_type
+        text type
+        text title
+        text description
         text status
-        text pr_number
-        text release_tag
+        text current_phase
+        jsonb pending_action
+        text source_branch
+        text target_branch
+        int draft_pr_number
+        text draft_pr_url
+        int release_pr_number
+        text release_pr_url
         jsonb preview_deployment
         jsonb production_deployment
-        text pending_action
-        timestamp created_at
+        int reverse_sync_pr_number
+        text reverse_sync_pr_url
+        text reverse_sync_status
+        boolean is_rollback
+        text rollback_source_tag
+        text rollback_target_tag
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz completed_at
     }
 
     TRACE_EVENTS {
@@ -799,42 +873,150 @@ erDiagram
         uuid trace_id FK
         text event_type
         text actor
-        jsonb payload
-        timestamp created_at
+        text actor_type
+        jsonb details
+        text source
+        timestamptz created_at
+    }
+
+    APPROVAL_EVENTS {
+        uuid id PK
+        text entity_type
+        text entity_id
+        text action
+        uuid actor_id FK
+        text note
+        jsonb metadata
+        timestamptz created_at
     }
 
     INCIDENTS {
         uuid id PK
         uuid user_id FK
         text repo_full_name
-        text severity
+        text alert_source
         text status
+        text severity
+        text service
+        text environment
         text title
-        text description
-        jsonb ai_analysis
-        jsonb postmortem
-        uuid hotfix_trace_id FK
+        text raw_logs
+        text root_cause
+        text ai_fix_proposal
+        text postmortem_draft
+        text release_version
+        int hotfix_pr_number
+        text hotfix_pr_url
+        text external_id
+        timestamptz created_at
+        timestamptz updated_at
     }
 
-    CI_RUNS {
+    ROLLBACK_HISTORY {
+        uuid id PK
+        uuid user_id FK
+        uuid trace_id FK
+        uuid spec_id FK
+        text repo_full_name
+        text source_release_tag
+        text target_release_tag
+        text target_release_sha
+        text status
+        text initiated_by
+        text workflow_url
+        text error_message
+        jsonb metadata
+        timestamptz initiated_at
+        timestamptz completed_at
+    }
+
+    NOTIFICATIONS {
         uuid id PK
         uuid user_id FK
         text repo_full_name
-        bigint run_id
-        text status
-        text conclusion
-        text head_branch
-        jsonb ai_analysis
+        text type
+        text title
+        text body
+        text href
+        text severity
+        jsonb metadata
+        text dedupe_key
+        timestamptz read_at
+        timestamptz created_at
     }
 
-    APPROVAL_EVENTS {
+    CHAT_THREADS {
         uuid id PK
-        uuid trace_id FK
         uuid user_id FK
-        text action
-        text decision
-        text notes
-        timestamp created_at
+        text repo_full_name
+        text channel
+        text external_thread_key
+        text title
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    CHAT_MESSAGES {
+        uuid id PK
+        uuid thread_id FK
+        uuid user_id FK
+        text role
+        text content
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    AI_MEMORY_NOTES {
+        uuid id PK
+        uuid user_id FK
+        text repo_full_name
+        text key
+        text value
+        text category
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    SPEC_PR_RECIPES {
+        text id PK
+        text label
+        text prefix
+        text base_branch
+        text source_branch
+        text ticket
+        boolean is_sample
+        boolean active
+        int sort_order
+        timestamptz created_at
+    }
+
+    TELEGRAM_USERS {
+        uuid id PK
+        uuid user_id FK
+        bigint telegram_chat_id
+        text telegram_username
+        boolean verified
+        text verification_code
+        timestamptz created_at
+    }
+
+    TELEGRAM_NOTIFICATION_DELIVERIES {
+        uuid id PK
+        uuid notification_id FK
+        uuid telegram_user_id FK
+        text status
+        int attempts
+        text last_error
+        timestamptz sent_at
+        timestamptz created_at
+    }
+
+    TELEGRAM_WEBHOOK_UPDATES {
+        bigint update_id PK
+        bigint telegram_chat_id
+        text status
+        text error_fingerprint
+        timestamptz created_at
     }
 ```
 
