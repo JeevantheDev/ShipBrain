@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 interface LandingBodyProps {
   children: React.ReactNode;
 }
 
 export function LandingBody({ children }: LandingBodyProps) {
-  const router = useRouter();
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -178,21 +176,13 @@ AI_MODEL=gpt-4.1`;
     });
   };
 
-  const handlePlayDemo = () => {
-    // Redirect to login/dashboard when attempting to play the interactive demo
-    router.push("/login");
-  };
-
   return (
     <div className="landing-page-wrapper">
-      {/* Expose copy and demo handlers to descendants via normal HTML events or selectors */}
-      <div 
+      <div
         onClick={(e) => {
           const target = e.target as HTMLElement;
           if (target.classList.contains("copy-btn")) {
             handleCopy();
-          } else if (target.closest(".player")) {
-            handlePlayDemo();
           }
         }}
       >
