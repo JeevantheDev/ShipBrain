@@ -116,6 +116,8 @@ async function main() {
     "SHIPBRAIN_INCIDENT_HOTFIX.md",
     "shipbrain/",
     "tickets/",
+    "shipbrain.json",
+    "vercel.json",
   ];
 
   for (const pattern of filesToRemove) {

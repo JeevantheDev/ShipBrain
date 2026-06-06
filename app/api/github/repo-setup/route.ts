@@ -280,6 +280,38 @@ async function runSetup({
         console.warn(`Could not commit workflow files to ${devBranch}:`, err.message);
       }
     }
+
+    // Step 3: Commit shipbrain.json to main — project config file for this repo
+    await emit?.({ type: "step", label: "Creating shipbrain.json", status: "running" });
+    try {
+      const shipbrainConfig = {
+        version: "1",
+        repo: repoFullName,
+        branches: {
+          production: prodBranch,
+          development: devBranch || "develop"
+        },
+        build: {
+          command: buildCommand,
+          outputDir: buildOutputDir
+        },
+        cloudflare: {
+          projectName: cloudflareProjectName,
+          projectUrl: cloudflareProjectUrl
+        }
+      };
+      await commitWorkflowsToDefaultBranch({
+        repoFullName,
+        base: prodBranch,
+        files: { "shipbrain.json": JSON.stringify(shipbrainConfig, null, 2) },
+        token
+      });
+      await emit?.({ type: "step", label: "Creating shipbrain.json", status: "done" });
+    } catch (err: any) {
+      // Non-fatal
+      await emit?.({ type: "step", label: "Creating shipbrain.json", status: "error", detail: err.message });
+      console.warn("Could not commit shipbrain.json:", err.message);
+    }
   } else {
     // This should not happen with forceOverwrite: true, but handle it as an error
     throw new Error("No workflow files were generated. Please try again or contact support.");
