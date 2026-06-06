@@ -243,9 +243,10 @@ export function workflowFiles(input: WorkflowInput) {
     files[".github/workflows/shipbrain-ci.yml"] = shipbrainCiWorkflowMinimal(input);
   }
 
-  // Include preview workflow if Cloudflare is enabled and develop branch exists
-  // Skip if preview workflow already exists (unless force overwrite)
-  if (input.includeCloudflare && input.devBranch && (force || !input.previewExists)) {
+  // Always include preview workflow when Cloudflare is enabled.
+  // devBranch is optional — the template defaults to "develop" when null.
+  // Skip only if the workflow already exists (unless force overwrite).
+  if (input.includeCloudflare && (force || !input.previewExists)) {
     files[".github/workflows/shipbrain-preview.yml"] = shipbrainPreviewWorkflow(input);
   }
 
