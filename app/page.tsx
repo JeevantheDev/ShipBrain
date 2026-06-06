@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { LandingBody } from "@/components/landing/LandingBody";
 import { ChatMockup } from "@/components/landing/ChatMockup";
+import { SupademoNavButton, SupademoCTAButton, SupademoPlayer } from "@/components/landing/SupademoButton";
 import releaseMng from "@/public/release-mng.svg";
 import telegramChat from "@/public/telegramchat.jpg"
 import demo from "@/public/demo.gif"
@@ -120,10 +121,7 @@ export default async function LandingPage() {
             >
               Sign In
             </Link>
-            <a href="#demo" className="demo-btn">
-              <span className="tri"></span>
-              watch the demo
-            </a>
+            <SupademoNavButton />
           </div>
         </div>
       </header>
@@ -146,9 +144,7 @@ export default async function LandingPage() {
               <Link href="/login" className="btn-cta">
                 Get Started →
               </Link>
-              <a href="#demo" className="btn-cta ghost">
-                See the demo
-              </a>
+              <SupademoCTAButton />
             </div>
             <div className="hero-caption">
               <span className="mono-label">scroll to see the four moves</span>
@@ -463,23 +459,7 @@ export default async function LandingPage() {
             </p>
           </div>
 
-          <div
-            className="player"
-            role="button"
-            tabIndex={0}
-            aria-label="Play 2-minute demo"
-          >
-            <div className="player-bg" aria-hidden="true"></div>
-            <div className="player-center">
-              <div className="play-circle" aria-hidden="true">
-                <span className="play-tri"></span>
-              </div>
-              <span className="player-label">Play the 2-minute demo</span>
-            </div>
-            <span className="player-foot">
-              runs in your browser <span className="dot">·</span> no signup
-            </span>
-          </div>
+          <SupademoPlayer />
         </div>
       </section>
 
