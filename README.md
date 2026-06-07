@@ -1237,7 +1237,10 @@ make reset-db            # Reset app data only (keeps auth users)
 
 ## Team
 
-**Jeevan Jyoti Dash** · **Amit Kumar Rout**
+| Contributor | Role |
+|---|---|
+| **Jeevan Jyoti Dash** | Led end-to-end product engineering — from problem statement to production. Owned the full backend architecture, all AI integrations (Azure AI Foundry, LangChain chains, RAG knowledge base, Telegram bot), the deployment pipeline, incident system, and release orchestration. Drove every layer of the stack from database schema through API routes to the core AI agent. |
+| **Amit Kumar Rout** | Aligned UI/UX with the product spec and documentation, handled edge cases across the interface, and pushed the agentic approach further — ensuring the human-in-the-loop gates and approval flows felt intentional and consistent throughout the product. |
 
 Built on Azure AI Foundry · GPT-4.1-mini · June 2026
 
